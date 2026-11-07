@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+reader_test_root="$(cd "$(dirname "$0")/.." && pwd)"
+reader_test_build="$reader_test_root/build/tests"
+mkdir -p "$reader_test_build/ModuleCache"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFile.swift" "$reader_test_root/Tests/FileCoreTests.swift" -o "$reader_test_build/FileCoreTests"
+"$reader_test_build/FileCoreTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Tests/TextFeatureTests.swift" -o "$reader_test_build/TextFeatureTests"
+"$reader_test_build/TextFeatureTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Sources/TextEditing.swift" "$reader_test_root/Sources/Appearance.swift" "$reader_test_root/Tests/LineIndexTests.swift" -o "$reader_test_build/LineIndexTests"
+"$reader_test_build/LineIndexTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextSearch.swift" "$reader_test_root/Tests/TextSearchTests.swift" -o "$reader_test_build/TextSearchTests"
+"$reader_test_build/TextSearchTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextEditing.swift" "$reader_test_root/Tests/TextEditingTests.swift" -o "$reader_test_build/TextEditingTests"
+"$reader_test_build/TextEditingTests"

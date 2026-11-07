@@ -1,0 +1,9 @@
+.DS_Store
+开发空间/build/
+开发空间/artifacts/
+交付产品/
+*.dmg
+*.zip
+*.log
+.env
+.env.*

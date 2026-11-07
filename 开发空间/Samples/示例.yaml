@@ -1,0 +1,16 @@
+# YAML 配置示例：注释与引号也是文件的一部分。
+application:
+  name: "轻阅"
+  version: "0.1.0"
+  local: true
+
+reading:
+  font_size: 16
+  wrap: true
+  theme: dark
+
+formats:
+  - txt
+  - json
+  - yaml
+  - markdown
