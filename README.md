@@ -4,7 +4,7 @@
 
 A lightweight text reader and editor, starting with macOS.
 
-当前版本 **0.1.0**。macOS 客户端使用 Swift、AppKit 与系统文本组件，完全本机读写，无账号、后台服务或第三方运行时。
+当前版本 **0.1.0**。下载：[macOS Intel 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)。macOS 客户端使用 Swift、AppKit 与系统文本组件，完全本机读写，无账号、后台服务或第三方运行时。
 
 ## 当前功能
 
