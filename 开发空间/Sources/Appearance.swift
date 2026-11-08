@@ -43,7 +43,7 @@ final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
-final class ActionButton: NSButton {
+class ActionButton: NSButton {
     override var isEnabled: Bool { didSet { needsDisplay = true } }
     override var title: String { didSet { setAccessibilityLabel(title); needsDisplay = true } }
     var actionHandler: (() -> Void)?
@@ -96,6 +96,49 @@ final class ActionButton: NSButton {
             let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 3), xRadius: 6, yRadius: 6)
             ring.lineWidth = 2; ring.stroke()
         }
+    }
+}
+
+private let qingyueTabPasteboardType = NSPasteboard.PasteboardType("local.xiaoyu.LightReader.tab")
+
+final class DraggableTabButton: ActionButton, NSDraggingSource {
+    var tabID: UUID?
+    override func mouseDown(with event: NSEvent) {
+        guard let window = window, let id = tabID else { super.mouseDown(with: event); return }
+        let start = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp {
+                if bounds.contains(convert(next.locationInWindow, from: nil)) { performClick(nil) }
+                return
+            }
+            let point = next.locationInWindow
+            if hypot(point.x - start.x, point.y - start.y) >= 5 {
+                let paste = NSPasteboardItem(); paste.setString(id.uuidString, forType: qingyueTabPasteboardType)
+                let item = NSDraggingItem(pasteboardWriter: paste)
+                let image = NSImage(size: bounds.size)
+                image.lockFocus(); attributedTitle.draw(in: NSRect(origin: .zero, size: bounds.size)); image.unlockFocus()
+                item.setDraggingFrame(bounds, contents: image)
+                beginDraggingSession(with: [item], event: next, source: self)
+                return
+            }
+        }
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
+}
+
+final class TabStripView: NSStackView {
+    var reorder: ((UUID, Int) -> Void)?
+    override init(frame frameRect: NSRect) { super.init(frame: frameRect); registerForDraggedTypes([qingyueTabPasteboardType]) }
+    required init?(coder: NSCoder) { super.init(coder: coder); registerForDraggedTypes([qingyueTabPasteboardType]) }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.string(forType: qingyueTabPasteboardType) == nil ? [] : .move
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let value = sender.draggingPasteboard.string(forType: qingyueTabPasteboardType), let id = UUID(uuidString: value) else { return false }
+        let x = convert(sender.draggingLocation, from: nil).x
+        let insertion = arrangedSubviews.firstIndex(where: { x < $0.frame.midX }) ?? arrangedSubviews.count
+        reorder?(id, insertion); return true
     }
 }
 

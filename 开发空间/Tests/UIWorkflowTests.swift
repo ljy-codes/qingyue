@@ -26,7 +26,8 @@ struct UIWorkflowTests {
         UserDefaults.standard.setVolatileDomain([
             "recent": [String](), "positions": [String: [Double]](),
             "fontSize": 14.0, "dark": true, "followSystemAppearance": false,
-            "readingWidth": 680.0, "wrapping": true, "lineNumbers": true
+            "readingWidth": 680.0, "wrapping": true, "lineNumbers": true,
+            "restoreSession": true, "recoveryEnabled": true, "excludedDraftPaths": [String]()
         ], forName: UserDefaults.argumentDomain)
 
         let fm = FileManager.default
@@ -72,6 +73,7 @@ struct UIWorkflowTests {
         reader.showWindow(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         defer { window.orderOut(nil) }
+        try wait("initial asynchronous workspace restore") { hasEditableSource(in: window) }
 
         reader.openURLs([markdownURL])
         try wait("open Markdown fixture") { window.representedURL?.lastPathComponent == markdownURL.lastPathComponent }
@@ -200,7 +202,145 @@ struct UIWorkflowTests {
         try expect(Data(contentsOf: eofURL) == Data(eofText.utf8), "EOF navigation never adds a newline to the source file")
         try expect(support.path.hasPrefix(directory.path), "all recovery state uses the isolated support directory")
 
+        try testSessionAndSaveAll(in: directory, app: app)
         print("UIWorkflowTests: \(checks) checks passed")
+    }
+
+    /// Exercises the public commands against actual text views and real temporary
+    /// files. No save panel, save/discard alert or real user recovery data is used.
+    private static func testSessionAndSaveAll(in directory: URL, app: NSApplication) throws {
+        let support = directory.appendingPathComponent("session-save-all-support", isDirectory: true)
+        let firstURL = directory.appendingPathComponent("session-first.md")
+        let secondURL = directory.appendingPathComponent("session-second.txt")
+        let sourceLines = ["# 会话与保存", "", "原始内容", ""] +
+            (0..<45).flatMap { ["第 \($0) 段，中文与 Emoji 😀。", ""] } +
+            ["## 保留位置", "", "恢复后继续处理这一段。", ""] +
+            (45..<65).flatMap { ["第 \($0) 段，正文。", ""] }
+        let firstSource = sourceLines.joined(separator: "\n")
+        let secondSource = "第二份文档 😀\n"
+        let firstBytes = Data([0xEF, 0xBB, 0xBF]) + Data(firstSource.replacingOccurrences(of: "\n", with: "\r\n").utf8)
+        try firstBytes.write(to: firstURL)
+        try Data(secondSource.utf8).write(to: secondURL)
+        let reader = ReaderWindow(supportDirectory: support)
+        let window = try require(reader.window, "save-all reader window exists")
+        reader.showWindow(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.orderOut(nil) }
+        try wait("save-all workspace ready") { hasEditableSource(in: window) }
+        reader.openURLs([firstURL])
+        try wait("first save-all fixture opens") { window.representedURL?.path == firstURL.path }
+        let firstEditor = try editor(in: window)
+        window.makeFirstResponder(firstEditor)
+        firstEditor.breakUndoCoalescing()
+        firstEditor.insertText("追加A", replacementRange: NSRange(location: firstEditor.string.utf16.count, length: 0))
+        firstEditor.breakUndoCoalescing()
+        try expect(window.isDocumentEdited && firstEditor.string == firstSource + "追加A", "actual editor insertion marks the first saved file dirty")
+
+        reader.openURLs([secondURL])
+        try wait("second save-all fixture opens") { window.representedURL?.path == secondURL.path }
+        let secondEditor = try editor(in: window)
+        window.makeFirstResponder(secondEditor)
+        secondEditor.breakUndoCoalescing()
+        secondEditor.insertText("追加B", replacementRange: NSRange(location: secondEditor.string.utf16.count, length: 0))
+        secondEditor.breakUndoCoalescing()
+        try expect(window.isDocumentEdited && secondEditor.string == secondSource + "追加B", "actual editor insertion marks the second saved file dirty")
+        reader.saveAllDocuments(nil)
+        try expect(window.representedURL?.path == secondURL.path, "save all restores the originally active document")
+        let savedFirst = Data([0xEF, 0xBB, 0xBF]) + Data((firstSource + "追加A").replacingOccurrences(of: "\n", with: "\r\n").utf8)
+        try expect(try Data(contentsOf: firstURL) == savedFirst, "save all writes the first file while preserving UTF-8 BOM and CRLF")
+        try expect(try Data(contentsOf: secondURL) == Data((secondSource + "追加B").utf8), "save all writes the second file without changing its LF encoding")
+        try expect(!window.isDocumentEdited, "active document is clean after save all")
+
+        // A shared NSTextView must still route undo to the selected document's
+        // own UndoManager after the Save All command temporarily visited each tab.
+        reader.undoEdit(nil)
+        try expect(try editor(in: window).string == secondSource, "second document undo remains independent after save all")
+        reader.redoEdit(nil)
+        try expect(try editor(in: window).string == secondSource + "追加B", "second document redo restores its own edit")
+        reader.previousTab(nil)
+        reader.undoEdit(nil)
+        try expect(try editor(in: window).string == firstSource, "first document undo remains independent after save all")
+        reader.redoEdit(nil)
+        try expect(try editor(in: window).string == firstSource + "追加A", "first document redo restores its own edit")
+        try expect(!window.isDocumentEdited, "redo back to saved content returns the first document to clean state")
+
+        // Exercise both reorder commands while retaining the active document.
+        reader.moveCurrentTabRight(nil)
+        try expect(window.representedURL?.path == firstURL.path, "moving right preserves the active file")
+        let numbered = NSMenuItem()
+        numbered.tag = 0
+        reader.selectNumberedTab(numbered)
+        try expect(window.representedURL?.path == secondURL.path, "moving the first tab right changes visible tab order")
+        numbered.tag = 1
+        reader.selectNumberedTab(numbered)
+        reader.moveCurrentTabLeft(nil)
+        try expect(window.representedURL?.path == firstURL.path, "moving left preserves the active file")
+        numbered.tag = 0
+        reader.selectNumberedTab(numbered)
+        try expect(window.representedURL?.path == firstURL.path, "moving left restores the first position")
+        reader.moveCurrentTabRight(nil) // Persist the deliberately reversed order.
+        reader.toggleReading(nil)
+        let preview = try readingView(in: window)
+        let heading = NSMenuItem(title: "保留位置", action: nil, keyEquivalent: "")
+        heading.representedObject = (firstSource as NSString).range(of: "## 保留位置").location
+        try expect(app.sendAction(NSSelectorFromString("jumpHeading:"), to: reader, from: heading), "session reading anchor uses the real outline action")
+        try expect(preview.visibleRect.minY > 0, "session fixture has a nonzero reading position")
+        try expect(reader.confirmQuit(), "clean files can quit without a modal save prompt")
+        let sessionURL = support.appendingPathComponent("Session.json")
+        let session = try JSONDecoder().decode(WorkspaceSession.self, from: Data(contentsOf: sessionURL))
+        try expect(session.entries.compactMap(\.path) == [secondURL.path, firstURL.path], "quit persists the reordered session")
+        let firstEntry = try require(session.entries.first(where: { $0.path == firstURL.path }), "session contains the first path")
+        try expect(session.activeID == firstEntry.id && firstEntry.isReading, "quit persists the active document and its reading mode")
+        try expect(firstEntry.sourceAnchor > 0, "quit persists a content anchor rather than only a pixel offset")
+        let draftDirectory = support.appendingPathComponent("Drafts", isDirectory: true)
+        let drafts = (try? FileManager.default.contentsOfDirectory(at: draftDirectory, includingPropertiesForKeys: nil)) ?? []
+        try expect(drafts.filter { $0.pathExtension == "json" }.isEmpty, "clean saved files do not leave old source snapshots in recovery")
+        window.orderOut(nil)
+
+        // A clean session stores references and state, not a stale copy of source.
+        // Change same-length wording so the persisted content anchor stays useful.
+        let updatedFirst = (firstSource + "追加A").replacingOccurrences(of: "原始内容", with: "磁盘更新")
+        let updatedBytes = Data([0xEF, 0xBB, 0xBF]) + Data(updatedFirst.replacingOccurrences(of: "\n", with: "\r\n").utf8)
+        try updatedBytes.write(to: firstURL)
+        let restored = ReaderWindow(supportDirectory: support)
+        let restoredWindow = try require(restored.window, "restored session window exists")
+        restored.showWindow(nil)
+        restoredWindow.contentView?.layoutSubtreeIfNeeded()
+        defer { restoredWindow.orderOut(nil) }
+        try wait("ordered active reading session restores") {
+            restoredWindow.representedURL?.path == firstURL.path && (try? readingView(in: restoredWindow)) != nil
+        }
+        let restoredPreview = try readingView(in: restoredWindow)
+        try expect(restoredPreview.string.contains("磁盘更新") && !restoredPreview.string.contains("原始内容"), "saved session reloads the current disk content")
+        let model = ReadingDocument.build(text: updatedFirst, kind: .markdown, palette: ReaderTheme(dark: true).palette,
+                                          fontSize: 15, readingFontName: "PingFang SC", lineSpacing: 6)
+        let restoredPoint = model.displayRange(forSourceOffset: firstEntry.sourceAnchor).location
+        try expect(restoredPreview.selectedRange().location == restoredPoint, "restored reading position maps from the saved source anchor")
+        try expect(restoredPreview.visibleRect.minY > 0, "restored reading session resumes below the first screen")
+        numbered.tag = 0
+        restored.selectNumberedTab(numbered)
+        try expect(restoredWindow.representedURL?.path == secondURL.path, "relaunch restores the first reordered tab")
+        try expect(try editor(in: restoredWindow).string == secondSource + "追加B", "other tab restores its independent source mode")
+        numbered.tag = 1
+        restored.selectNumberedTab(numbered)
+        try expect(restoredWindow.representedURL?.path == firstURL.path && (try? readingView(in: restoredWindow)) != nil, "relaunch restores the second reordered tab and its reading mode")
+        try expect(!restoredWindow.isDocumentEdited, "clean session restore does not make files dirty")
+
+        restored.closeAllTabs(nil)
+        try wait("close all hides the clean reader window") { !restoredWindow.isVisible }
+        try expect(restored.confirmQuit(), "empty window can flush its cleared session without a prompt")
+        let closed = try JSONDecoder().decode(WorkspaceSession.self, from: Data(contentsOf: sessionURL))
+        try expect(closed.entries.isEmpty && closed.activeID == nil, "close all clears the persisted session")
+        let blank = ReaderWindow(supportDirectory: support)
+        let blankWindow = try require(blank.window, "blank relaunch window exists")
+        blank.showWindow(nil)
+        defer { blankWindow.orderOut(nil) }
+        try wait("empty session relaunch becomes editable") { hasEditableSource(in: blankWindow) }
+        try expect(blankWindow.representedURL == nil && (try editor(in: blankWindow)).string.isEmpty, "relaunch after close all has one blank editable document")
+        try expect(try Data(contentsOf: firstURL) == updatedBytes, "session restore and close all never overwrite the externally updated first source")
+        try expect(try Data(contentsOf: secondURL) == Data((secondSource + "追加B").utf8), "session restore and close all preserve the second saved source")
+        // Prevent deferred writes after temporary test directories are removed.
+        try expect(blank.confirmQuit(), "blank relaunch can finish persistence cleanly")
     }
 
     private static func allViews(_ root: NSView) -> [NSView] {
@@ -219,6 +359,11 @@ struct UIWorkflowTests {
         try require(views(in: window).compactMap { $0 as? NSTextView }.first {
             !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区"
         }, "active source editor is attached to the window")
+    }
+    private static func hasEditableSource(in window: NSWindow) -> Bool {
+        views(in: window).compactMap { $0 as? NSTextView }.contains {
+            !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区"
+        }
     }
     private static func readingView(in window: NSWindow) throws -> NSTextView {
         try require(views(in: window).compactMap { $0 as? NSTextView }.first {

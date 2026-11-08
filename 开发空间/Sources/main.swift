@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { reader.showWindow(nil); return true }
     @objc func about(_ sender: Any?) {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "2"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "3"
         NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "轻阅", .applicationVersion: "\(version) · Mac 构建 \(build)", .credits: NSAttributedString(string: "轻量、本机、原生。\nTXT · JSON · YAML · Markdown · 配置文件")])
     }
     private func buildMenus() {
@@ -44,8 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let file = submenu("文件")
         item(file, "新建", #selector(ReaderWindow.newDocument(_:)), "n", target: reader)
         item(file, "打开…", #selector(ReaderWindow.openDocument(_:)), "o", target: reader)
+        item(file, "快速打开…", #selector(ReaderWindow.quickOpen(_:)), "p", shift: true, target: reader)
+        let recentRoot = NSMenuItem(title: "最近打开", action: nil, keyEquivalent: ""); let recentItems = NSMenu(title: "最近打开"); recentRoot.submenu = recentItems; file.addItem(recentRoot); reader.attachRecentMenu(recentItems)
         item(file, "保存", #selector(ReaderWindow.saveDocument(_:)), "s", target: reader)
         item(file, "另存为…", #selector(ReaderWindow.saveAs(_:)), "s", shift: true, target: reader)
+        let saveAll = NSMenuItem(title: "保存全部", action: #selector(ReaderWindow.saveAllDocuments(_:)), keyEquivalent: "s"); saveAll.keyEquivalentModifierMask = [.command, .option]; saveAll.target = reader; file.addItem(saveAll)
         file.addItem(.separator())
         item(file, "重新载入磁盘文件", #selector(ReaderWindow.reloadDocument(_:)), "r", shift: true, target: reader)
         let reopen = NSMenuItem(title: "按编码重新打开", action: nil, keyEquivalent: ""); let codecs = NSMenu()
@@ -53,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reopen.submenu = codecs; file.addItem(reopen); file.addItem(.separator())
         item(file, "清除最近文件记录", #selector(ReaderWindow.clearRecent(_:)), target: reader)
         item(file, "关闭标签", #selector(ReaderWindow.closeCurrent(_:)), "w", target: reader)
+        item(file, "关闭全部标签", #selector(ReaderWindow.closeAllTabs(_:)), "w", shift: true, target: reader)
+        item(file, "会话与恢复草稿…", #selector(ReaderWindow.showDraftManagement(_:)), target: reader)
+        item(file, "当前文件草稿恢复开关", #selector(ReaderWindow.toggleCurrentDraftRecovery(_:)), target: reader)
+        item(file, "恢复详情…", #selector(ReaderWindow.showRestoreNotices(_:)), target: reader)
         item(file, "复制当前文件路径", #selector(ReaderWindow.copyCurrentPath(_:)), target: reader)
         item(file, "在 Finder 中显示", #selector(ReaderWindow.revealCurrentFile(_:)), target: reader)
         let edit = submenu("编辑")
@@ -72,6 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(view, "专注 / 退出专注", #selector(ReaderWindow.toggleFocus(_:)), "f", shift: true, target: reader)
         item(view, "上一个标签", #selector(ReaderWindow.previousTab(_:)), "[", shift: true, target: reader)
         item(view, "下一个标签", #selector(ReaderWindow.nextTab(_:)), "]", shift: true, target: reader)
+        item(view, "标签向左移动", #selector(ReaderWindow.moveCurrentTabLeft(_:)), target: reader)
+        item(view, "标签向右移动", #selector(ReaderWindow.moveCurrentTabRight(_:)), target: reader)
         for index in 0..<9 {
             let entry = NSMenuItem(title: index == 8 ? "最后一个标签" : "标签 \(index + 1)", action: #selector(ReaderWindow.selectNumberedTab(_:)), keyEquivalent: "\(index + 1)")
             entry.target = reader; entry.tag = index; view.addItem(entry)

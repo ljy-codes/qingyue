@@ -384,10 +384,12 @@ final class TextFile {
 
     private struct RecoveryEnvelope: Codable {
         let version: Int
-        let documents: [RecoveryRecord]
+        let documents: [RecoverySnapshot]
     }
 
-    private struct RecoveryRecord: Codable {
+    /// Immutable copy-on-write snapshot. Capture it on the document owner thread;
+    /// JSON encoding and disk I/O can then safely run on a background queue.
+    struct RecoverySnapshot: Codable {
         let id: UUID
         let path: String?
         let resolvedPath: String?
@@ -434,6 +436,19 @@ final class TextFile {
         }
     }
 
+    func recoverySnapshot() -> RecoverySnapshot { RecoverySnapshot(self) }
+
+    static func restore(snapshot: RecoverySnapshot) throws -> TextFile {
+        guard snapshot.text.utf8.count <= maximumSize,
+              snapshot.baselineText.utf8.count <= maximumSize,
+              !snapshot.text.contains("\0"), !snapshot.baselineText.contains("\0"),
+              snapshot.path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+              snapshot.resolvedPath.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true else {
+            throw TextFileError.recoveryInvalid
+        }
+        return snapshot.restore()
+    }
+
     static func writeRecovery(_ docs: [TextFile], to url: URL) throws {
         // Keep the writer's limits consistent with its reader. Otherwise one
         // oversize/new tab could replace a valid recovery file with unreadable state.
@@ -441,7 +456,7 @@ final class TextFile {
               docs.allSatisfy({ $0.text.utf8.count <= maximumSize && $0.baselineText.utf8.count <= maximumSize }) else {
             throw TextFileError.io("恢复草稿超出容量限制，请先保存部分文档。原有草稿仍然保留。")
         }
-        let envelope = RecoveryEnvelope(version: 1, documents: docs.map(RecoveryRecord.init))
+        let envelope = RecoveryEnvelope(version: 1, documents: docs.map(RecoverySnapshot.init))
         let data = try JSONEncoder().encode(envelope)
         guard data.count <= 150 * 1024 * 1024 else { throw TextFileError.io("草稿总量过大，请先保存部分文档。") }
         let fm = FileManager.default
@@ -466,6 +481,6 @@ final class TextFile {
               envelope.documents.allSatisfy({ $0.text.utf8.count <= maximumSize && $0.baselineText.utf8.count <= maximumSize }) else {
             throw TextFileError.recoveryInvalid
         }
-        return envelope.documents.map { $0.restore() }
+        return try envelope.documents.map { try restore(snapshot: $0) }
     }
 }

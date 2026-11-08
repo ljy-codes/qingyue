@@ -9,6 +9,8 @@ final class ReaderTab {
     var isReading = false
     var sourceAnchor = 0
     var automaticKind = true
+    var recoverDraft = true
+    var hasWorkspacePosition = false
     var rendered: ReadingDocument?
     var kind: TextKind
     init(_ file: TextFile) {
@@ -51,7 +53,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let sideTitle = NSTextField(labelWithString: "最近打开")
     private let sideNote = NSTextField(wrappingLabelWithString: "⌘O  打开文件\n⌘S  保存修改\n⌘F  查找文本")
     private let recentStack = FlippedStackView()
-    private let tabsStack = NSStackView()
+    private let tabsStack = TabStripView()
     private var tabViewIDs: [UUID] = []
     private var tabTitleButtons: [ActionButton] = []
     private let tabScroll = NSScrollView()
@@ -76,6 +78,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var searchIndex = -1
     private var pendingFind: Bool?
     private var openingPaths = Set<String>()
+    private let fileOpenQueue = DispatchQueue(label: "qingyue.file-open", qos: .userInitiated)
     private var showLineNumbers = UserDefaults.standard.object(forKey: "lineNumbers") as? Bool ?? true
     private var readingFontName = UserDefaults.standard.string(forKey: "readingFont") ?? "PingFang SC"
     private var readingLineSpacing = CGFloat(UserDefaults.standard.object(forKey: "lineSpacing") as? Double ?? 6)
@@ -107,6 +110,22 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var recoveryTask: DispatchWorkItem?
     private var generation = 0
     private var shuttingDown = false
+    private lazy var workspace = WorkspaceStore(root: dataDirectory)
+    private var restoringWorkspace = false
+    private var deferredOpenURLs: [URL] = []
+    private var pendingNewDocument = false
+    private var recoveryEnabled = UserDefaults.standard.object(forKey: "recoveryEnabled") as? Bool ?? true
+    private var restoreSessionEnabled = UserDefaults.standard.object(forKey: "restoreSession") as? Bool ?? true
+    private var restoreNotices: [String] = []
+    private var excludedDraftPaths: Set<String> { get { Set(UserDefaults.standard.stringArray(forKey: "excludedDraftPaths") ?? []) } set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: "excludedDraftPaths") } }
+    private var persistenceGeneration = 0
+    private var lastDraftSave: Date?
+    private var quickOpenController: QuickOpenController?
+    private var recentMenu: NSMenu?
+    private var modalDepth = 0
+    private var deferredDocumentMutations: [() -> Void] = []
+    private var savingAll = false
+    private var closeBatch = false
     private let supportOverride: URL?
     private var dataDirectory: URL {
         if let path = supportOverride { return path }
@@ -127,8 +146,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         applyTheme()
         if !win.setFrameUsingName("QingyueMainWindow") { win.center() }
         win.setFrameAutosaveName("QingyueMainWindow")
-        restoreRecovery()
         if tabs.isEmpty { newDocument(nil) }
+        restoreWorkspace()
         refreshRecent()
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: editorScroll.contentView)
         NotificationCenter.default.addObserver(self, selector: #selector(becameActive), name: NSApplication.didBecomeActiveNotification, object: nil)
@@ -190,6 +209,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         canvas.radius = 10; add(canvas, to: root)
         tabsStack.orientation = .horizontal; tabsStack.alignment = .centerY; tabsStack.spacing = 4
         tabsStack.translatesAutoresizingMaskIntoConstraints = false
+        tabsStack.reorder = { [weak self] id, insertion in self?.reorderTab(id: id, insertion: insertion) }
         tabScroll.drawsBackground = false; tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.scrollerStyle = .overlay
         tabScroll.documentView = tabsStack; add(tabScroll, to: canvas)
 
@@ -345,12 +365,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             tabViewIDs = ids; tabTitleButtons = []
             for tab in tabs {
                 let id = tab.file.id
-                let b = ActionButton(tab.file.title) { [weak self] in
+                let b = DraggableTabButton(tab.file.title) { [weak self] in
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.selectTab(i) }
                 }
+                b.tabID = id
                 b.widthAnchor.constraint(equalToConstant: 116).isActive = true
                 let context = NSMenu()
-                for (title, action) in [("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
+                for (title, action) in [("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("关闭全部标签", #selector(closeAllTabs(_:))), ("向左移动", #selector(moveContextLeft(_:))), ("向右移动", #selector(moveContextRight(_:))), ("切换此文件草稿恢复", #selector(toggleContextRecovery(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
                     let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; item.representedObject = id; context.addItem(item)
                 }
                 b.menu = context
@@ -389,9 +410,92 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         }
     }
     private func remember(_ url: URL) {
-        var items = recent.filter { $0 != url.path }; items.insert(url.path, at: 0); recent = Array(items.prefix(15)); refreshRecent()
+        var items = recent.filter { $0 != url.path }; items.insert(url.path, at: 0); recent = Array(items.prefix(15)); refreshRecent(); refreshRecentMenu()
     }
-    @objc func clearRecent(_ sender: Any?) { recent = []; refreshRecent() }
+    @objc func clearRecent(_ sender: Any?) {
+        recent = []; UserDefaults.standard.removeObject(forKey: "positions"); refreshRecent(); refreshRecentMenu()
+    }
+    func attachRecentMenu(_ menu: NSMenu) { recentMenu = menu; refreshRecentMenu() }
+    private func refreshRecentMenu() {
+        guard let menu = recentMenu else { return }
+        menu.removeAllItems()
+        for path in recent {
+            let url = URL(fileURLWithPath: path)
+            let item = NSMenuItem(title: "\(url.lastPathComponent) — \(url.deletingLastPathComponent().lastPathComponent)", action: #selector(openRecentItem(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = path; item.toolTip = path
+            menu.addItem(item)
+        }
+        if menu.items.isEmpty { let item = NSMenuItem(title: "暂无最近文件", action: nil, keyEquivalent: ""); item.isEnabled = false; menu.addItem(item) }
+        menu.addItem(.separator())
+        let clear = NSMenuItem(title: "清除最近文件与位置", action: #selector(clearRecent(_:)), keyEquivalent: ""); clear.target = self; menu.addItem(clear)
+    }
+    @objc private func openRecentItem(_ item: NSMenuItem) { if let path = item.representedObject as? String { openURLs([URL(fileURLWithPath: path)]) } }
+    @objc func quickOpen(_ sender: Any?) {
+        guard !restoringWorkspace else { return }
+        let opened = tabs.map { tab in QuickOpenItem(id: "tab:" + tab.file.id.uuidString, title: tab.file.title, subtitle: tab.file.url?.path ?? "未保存的文本", isOpen: true) }
+        let paths = Set(tabs.compactMap { $0.file.url?.standardizedFileURL.path })
+        let recentItems = recent.filter { !paths.contains($0) }.map { path in QuickOpenItem(id: "path:" + path, title: URL(fileURLWithPath: path).lastPathComponent, subtitle: path, isOpen: false) }
+        quickOpenController?.close()
+        quickOpenController = QuickOpenController(items: opened + recentItems) { [weak self] id in
+            guard let self = self else { return }
+            if id.hasPrefix("tab:"), let uuid = UUID(uuidString: String(id.dropFirst(4))), let i = self.tabs.firstIndex(where: { $0.file.id == uuid }) { self.selectTab(i) }
+            else if id.hasPrefix("path:") { self.openURLs([URL(fileURLWithPath: String(id.dropFirst(5)))]) }
+            self.window?.makeKeyAndOrderFront(nil)
+        }
+        quickOpenController?.present(relativeTo: window)
+    }
+    @objc func showDraftManagement(_ sender: Any?) {
+        guard !restoringWorkspace else { return }
+        let a = NSAlert(); a.messageText = "会话与恢复草稿"
+        a.informativeText = "恢复草稿在本机按文档后台保存，不会自动写回原文件。手动关闭标签会移除对应会话与草稿；退出时可选择保留草稿。"
+        let recover = NSButton(checkboxWithTitle: "自动保存恢复草稿", target: nil, action: nil); recover.state = recoveryEnabled ? .on : .off
+        let session = NSButton(checkboxWithTitle: "启动时恢复上次标签会话", target: nil, action: nil); session.state = restoreSessionEnabled ? .on : .off
+        let currentDraft = NSButton(checkboxWithTitle: "当前文件允许保存草稿", target: nil, action: nil); currentDraft.state = active?.recoverDraft == false ? .off : .on; currentDraft.isEnabled = active != nil
+        let time = lastDraftSave.map { DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .medium) } ?? "本次尚未保存"
+        let detail = label("最近成功写入：" + time)
+        let content = NSStackView(views: [recover, session, currentDraft, detail]); content.orientation = .vertical; content.alignment = .leading; content.spacing = 12
+        content.frame = NSRect(x: 0, y: 0, width: 400, height: 125); a.accessoryView = content
+        a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消"); a.addButton(withTitle: "清除已存草稿")
+        let answer = runDocumentModal({ a.runModal() })
+        if answer == .alertThirdButtonReturn { clearDraftFiles(); return }
+        guard answer == .alertFirstButtonReturn else { return }
+        if recoveryEnabled && recover.state == .off {
+            guard alert("关闭恢复并清除已存草稿？", "当前编辑内容仍在窗口内，但关闭后无法依靠草稿恢复，请及时保存原文件。", buttons: ["关闭并清除", "取消"]) == .alertFirstButtonReturn else { return }
+        }
+        recoveryEnabled = recover.state == .on; restoreSessionEnabled = session.state == .on
+        UserDefaults.standard.set(recoveryEnabled, forKey: "recoveryEnabled"); UserDefaults.standard.set(restoreSessionEnabled, forKey: "restoreSession")
+        if let tab = active {
+            tab.recoverDraft = currentDraft.state == .on
+            if let path = tab.file.url?.standardizedFileURL.path {
+                var excluded = excludedDraftPaths
+                if tab.recoverDraft { excluded.remove(path) } else { excluded.insert(path) }
+                excludedDraftPaths = excluded
+            }
+        }
+        writeRecovery(); updateStatus("会话与草稿设置已更新")
+    }
+    @objc func toggleCurrentDraftRecovery(_ sender: Any?) {
+        guard let tab = active else { return }
+        if tab.recoverDraft && alert("排除此文档的恢复草稿？", "当前内容仍在编辑器中，已存草稿会清除；关闭前请保存原文件。", buttons: ["排除并清除", "取消"]) != .alertFirstButtonReturn { return }
+        tab.recoverDraft.toggle()
+        if let path = tab.file.url?.standardizedFileURL.path {
+            var paths = excludedDraftPaths
+            if tab.recoverDraft { paths.remove(path) } else { paths.insert(path) }
+            excludedDraftPaths = paths
+        }
+        writeRecovery(); updateStatus(tab.recoverDraft ? "当前文档允许恢复草稿" : "当前文档已排除恢复草稿")
+    }
+    private func clearDraftFiles() {
+        guard alert("清除全部恢复草稿？", "不会删除原文件或窗口内的编辑内容。继续编辑后，已启用恢复的文档会重新生成草稿。", buttons: ["清除", "取消"]) == .alertFirstButtonReturn else { return }
+        recoveryTask?.cancel(); persistenceGeneration += 1
+        workspace.clearDrafts { [weak self] error in
+            if let error = error { self?.showError(error) }
+            else { self?.lastDraftSave = nil; self?.updateStatus("已清除草稿 · 继续编辑后按设置重新保存") }
+        }
+    }
+    @objc func showRestoreNotices(_ sender: Any?) {
+        _ = alert("会话恢复详情", restoreNotices.isEmpty ? "没有恢复错误。" : restoreNotices.joined(separator: "\n"), buttons: ["关闭"])
+    }
     private func rememberPosition(_ tab: ReaderTab) {
         guard let path = tab.file.url?.path else { return }
         var positions = UserDefaults.standard.dictionary(forKey: "positions") as? [String: [Double]] ?? [:]
@@ -409,23 +513,29 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
 
     @objc func newDocument(_ sender: Any?) {
-        stashCurrent(); tabs.append(ReaderTab(TextFile())); selectTab(tabs.count - 1, stash: false)
+        if modalDepth > 0 { deferredDocumentMutations.append { [weak self] in self?.newDocument(sender) }; return }
+        if restoringWorkspace { pendingNewDocument = true; return }
+        stashCurrent(); tabs.append(ReaderTab(TextFile())); selectTab(tabs.count - 1, stash: false); scheduleRecovery()
     }
     @objc func openDocument(_ sender: Any?) {
         let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = false
         p.message = "打开本机文本文件 · TXT / JSON / YAML / MD / 配置文件"
-        if p.runModal() == .OK { openURLs(p.urls) }
+        if runDocumentModal({ p.runModal() }) == .OK { openURLs(p.urls) }
     }
     func openURLs(_ urls: [URL]) {
+        if modalDepth > 0 { deferredDocumentMutations.append { [weak self] in self?.openURLs(urls) }; return }
+        if restoringWorkspace { deferredOpenURLs += urls; return }
         for url in urls {
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
             if let i = tabs.firstIndex(where: { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == resolved }) { selectTab(i); continue }
             guard openingPaths.insert(resolved.path).inserted else { continue }
             statusLeft.stringValue = "正在打开 \(url.lastPathComponent)…"
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            fileOpenQueue.async { [weak self] in
                 let result = Result { try TextFile.open(url) }
                 DispatchQueue.main.async {
                     guard let self = self else { return }
+                    self.performDocumentMutation { [weak self] in
+                    guard let self = self, !self.shuttingDown else { return }
                     self.openingPaths.remove(resolved.path)
                     switch result {
                     case .success(let file):
@@ -433,9 +543,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                         if self.tabs.count == 1, let initial = self.tabs.first, initial.file.url == nil, initial.file.text.isEmpty {
                             self.tabs.removeAll()
                         }
-                        let tab = ReaderTab(file); self.restorePosition(tab)
-                        self.tabs.append(tab); self.selectTab(self.tabs.count - 1, stash: false); self.remember(url)
+                        let tab = ReaderTab(file); tab.recoverDraft = !self.excludedDraftPaths.contains(url.standardizedFileURL.path); self.restorePosition(tab)
+                        self.tabs.append(tab); self.selectTab(self.tabs.count - 1, stash: false); self.remember(url); self.scheduleRecovery()
+                        if self.window?.isVisible == false { self.showWindow(nil) }
                     case .failure(let error): self.showError(error)
+                    }
                     }
                 }
             }
@@ -453,6 +565,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         rememberPosition(tab)
     }
     private func selectTab(_ index: Int, stash: Bool = true) {
+        guard modalDepth == 0 else { return }
         guard tabs.indices.contains(index) else { return }
         if stash { stashCurrent() }
         pendingFind = nil
@@ -471,7 +584,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let anchor = tab.sourceAnchor
         if reading { renderReading() }
         window?.contentView?.layoutSubtreeIfNeeded()
-        if reading { scrollToSource(anchor) }
+        if reading || tab.hasWorkspacePosition { scrollToSource(anchor); tab.hasWorkspacePosition = false }
         else {
             restoringLocation = true
             editorScroll.contentView.scroll(to: tab.scroll); editorScroll.reflectScrolledClipView(editorScroll.contentView)
@@ -479,6 +592,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         }
         scheduleSearch()
         window?.makeFirstResponder(reading ? preview : editor)
+        scheduleRecovery()
     }
     @objc func saveDocument(_ sender: Any?) { _ = saveCurrent() }
     @objc func undoEdit(_ sender: Any?) {
@@ -500,12 +614,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let panel = NSSavePanel(); panel.nameFieldStringValue = tab.file.url?.lastPathComponent ?? "未命名.txt"
             panel.canCreateDirectories = true; panel.message = "保存到本机，保留所选编码与换行符"
             if let dir = tab.file.url?.deletingLastPathComponent() { panel.directoryURL = dir }
-            guard panel.runModal() == .OK, let url = panel.url else { return false }
+            guard runDocumentModal({ panel.runModal() }) == .OK, let url = panel.url else { return false }
             destination = url
         }
         do {
             try tab.file.save(to: destination, allowOverwrite: overwrite)
             refreshAutomaticKind(tab)
+            if !tab.recoverDraft, let path = tab.file.url?.path { var excluded = excludedDraftPaths; excluded.insert(path); excludedDraftPaths = excluded }
             if let url = tab.file.url { remember(url) }
             refreshTabs(); updateStatus("已保存"); writeRecovery(); return true
         } catch TextFileError.externalChange {
@@ -524,6 +639,47 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         } catch { showError(error); return false }
     }
     @objc func closeCurrent(_ sender: Any?) { closeTab(current) }
+    @objc func saveAllDocuments(_ sender: Any?) {
+        guard !savingAll && !restoringWorkspace else { return }
+        stashCurrent(); savingAll = true
+        let selected = active?.file.id
+        var summary = ""
+        defer {
+            savingAll = false
+            if let id = selected, let i = tabs.firstIndex(where: { $0.file.id == id }) { selectTab(i) }
+            writeRecovery()
+            updateStatus(summary)
+        }
+        let ids = tabs.filter { $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil) }.map { $0.file.id }
+        var count = 0
+        for id in ids {
+            guard let i = tabs.firstIndex(where: { $0.file.id == id }) else { continue }
+            selectTab(i)
+            guard saveCurrent() else { summary = "保存全部已停止 · 已保存 \(count) 份，其余内容仍保留"; return }
+            count += 1
+        }
+        summary = "保存全部完成 · \(count) 份"
+    }
+    @objc func closeAllTabs(_ sender: Any?) {
+        guard !restoringWorkspace else { return }
+        closeBatch = true
+        defer { closeBatch = false; if tabs.isEmpty { window?.performClose(nil) }; writeRecovery() }
+        let ids = tabs.map { $0.file.id }
+        for id in ids.reversed() { if let i = tabs.firstIndex(where: { $0.file.id == id }), !closeTab(i) { break } }
+    }
+    private func reorderTab(id: UUID, insertion: Int) {
+        guard let from = tabs.firstIndex(where: { $0.file.id == id }) else { return }
+        stashCurrent(); let selected = active?.file.id
+        let tab = tabs.remove(at: from)
+        tabs.insert(tab, at: min(tabs.count, max(0, insertion > from ? insertion - 1 : insertion)))
+        current = tabs.firstIndex(where: { $0.file.id == selected }) ?? 0
+        refreshTabs(); writeRecovery()
+    }
+    @objc func moveCurrentTabLeft(_ sender: Any?) { if let id = active?.file.id, current > 0 { reorderTab(id: id, insertion: current - 1) } }
+    @objc func moveCurrentTabRight(_ sender: Any?) { if let id = active?.file.id, current + 1 < tabs.count { reorderTab(id: id, insertion: current + 2) } }
+    @objc private func moveContextLeft(_ item: NSMenuItem) { if let i = contextIndex(item), i > 0 { reorderTab(id: tabs[i].file.id, insertion: i - 1) } }
+    @objc private func moveContextRight(_ item: NSMenuItem) { if let i = contextIndex(item), i + 1 < tabs.count { reorderTab(id: tabs[i].file.id, insertion: i + 2) } }
+    @objc private func toggleContextRecovery(_ item: NSMenuItem) { if let i = contextIndex(item) { selectTab(i); toggleCurrentDraftRecovery(nil) } }
     @discardableResult private func closeTab(_ index: Int) -> Bool {
         guard tabs.indices.contains(index) else { return true }
         selectTab(index)
@@ -533,29 +689,48 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             if result == .alertFirstButtonReturn && !saveCurrent() { return false }
         }
         changing = true; tabs.remove(at: index); changing = false
-        if tabs.isEmpty { current = 0; window?.performClose(nil) }
+        if tabs.isEmpty { current = 0; if !closeBatch { window?.performClose(nil) } }
         else { selectTab(min(index, tabs.count - 1), stash: false) }
         writeRecovery()
         return true
     }
-    private func confirmDocumentsClosure() -> Bool {
+    private func confirmDocumentsClosure(allowKeep: Bool = false) -> (confirmed: Bool, discarded: Set<UUID>) {
         stashCurrent()
+        var discarded = Set<UUID>()
         for index in tabs.indices where tabs[index].file.isDirty && (!tabs[index].file.text.isEmpty || tabs[index].file.url != nil) {
             selectTab(index)
-            let result = alert("保存“\(tabs[index].file.title)”的修改？", "退出前可以保存、取消退出，或放弃这份修改。", buttons: ["保存", "取消", "不保存"])
-            if result == .alertSecondButtonReturn { return false }
-            if result == .alertFirstButtonReturn && !saveCurrent() { return false }
+            let tab = tabs[index]
+            let canKeep = allowKeep && recoveryEnabled && tab.recoverDraft
+            let choices = canKeep ? ["保存", "取消", "保留草稿", "不保存"] : ["保存", "取消", "不保存"]
+            let detail = canKeep ? "可保存原文件，或保留本机草稿供下次恢复。" : "此文档没有启用恢复草稿，退出前请保存或明确放弃修改。"
+            let result = alert("如何处理“\(tab.file.title)”的修改？", detail, buttons: choices)
+            if result == .alertSecondButtonReturn { return (false, []) }
+            if result == .alertFirstButtonReturn && !saveCurrent() { return (false, []) }
+            if (!canKeep && result == .alertThirdButtonReturn) || (canKeep && result.rawValue == NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + 3) { discarded.insert(tab.file.id) }
         }
-        return true
+        return (true, discarded)
     }
     func confirmQuit() -> Bool {
         if shuttingDown { return true }
-        guard confirmDocumentsClosure() else { return false }
-        shuttingDown = true; recoveryTask?.cancel(); try? FileManager.default.removeItem(at: recoveryURL)
+        if restoringWorkspace { updateStatus("正在恢复上次会话，请稍候再退出"); return false }
+        let outcome = confirmDocumentsClosure(allowKeep: true)
+        guard outcome.confirmed else { return false }
+        recoveryTask?.cancel()
+        if !tabs.isEmpty {
+            stashCurrent()
+            let snapshot = workspaceSnapshot(discarding: outcome.discarded)
+            let result = workspace.saveAndWait(session: snapshot.0, drafts: snapshot.1)
+            if !result.errors.isEmpty { updateStatus("会话或草稿保存失败"); showPersistenceErrors(result.errors); return false }
+        } else { workspace.flush() }
+        shuttingDown = true
         return true
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard confirmDocumentsClosure() else { return false }
+        guard !restoringWorkspace else { return false }
+        // Closing the document window closes its tabs. Quitting the app preserves
+        // the session, so users can choose which behavior they want.
+        let outcome = confirmDocumentsClosure()
+        guard outcome.confirmed else { return false }
         recoveryTask?.cancel(); searchTask?.cancel(); searchVersion += 1
         tabs.removeAll(); current = 0; reading = false
         changing = true; editor.string = ""; preview.string = ""; changing = false
@@ -621,6 +796,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         ruler.needsDisplay = true
         if !restoringLocation && liveResizeAnchor == nil { active?.sourceAnchor = currentSourceOffset() }
         if reading { updateStatus() }
+        if !restoringLocation && liveResizeAnchor == nil { scheduleRecovery() }
     }
     private func cancelFind() { if searchVisible { hideFind() } else if focused { toggleFocus(nil) } }
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -727,7 +903,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("阅读版心"), width])])
         content.orientation = .vertical; content.alignment = .leading; content.spacing = 12; content.frame = NSRect(x: 0, y: 0, width: 320, height: 260)
         a.accessoryView = content
-        guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         active?.sourceAnchor = currentSourceOffset()
         showLineNumbers = numbers.state == .on; wrapping = wrap.state == .on
         fontSize = CGFloat(Int(size.titleOfSelectedItem ?? "14") ?? 14)
@@ -959,7 +1135,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         if reading { toggleReading(nil) }
         let a = NSAlert(); a.messageText = "跳转到行"; a.addButton(withTitle: "跳转"); a.addButton(withTitle: "取消")
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 26)); input.placeholderString = "行号，如 42"; a.accessoryView = input
-        guard a.runModal() == .alertFirstButtonReturn, let number = Int(input.stringValue), number > 0 else { return }
+        guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn, let number = Int(input.stringValue), number > 0 else { return }
         let starts = ruler.starts; let index = min(number - 1, starts.count - 1)
         editor.setSelectedRange(NSRange(location: starts[index], length: 0)); editor.scrollRangeToVisible(editor.selectedRange()); window?.makeFirstResponder(editor)
     }
@@ -989,32 +1165,91 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             textView.textContainer?.widthTracksTextView = true; textView.textContainerInset = NSSize(width: 12, height: 12)
             textView.backgroundColor = theme.editor
             textView.textStorage?.setAttributedString(TextFeatures.markdownPreview(text, palette: theme.palette, fontSize: 13))
-            scroll.documentView = textView; alert.accessoryView = scroll; alert.runModal()
+            scroll.documentView = textView; alert.accessoryView = scroll; runDocumentModal({ alert.runModal() })
         }
     }
     private func scheduleRecovery() {
+        guard !restoringWorkspace && !shuttingDown else { return }
         recoveryTask?.cancel()
         let task = DispatchWorkItem { [weak self] in self?.writeRecovery() }; recoveryTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
+    }
+    private func workspaceSnapshot(discarding ids: Set<UUID> = []) -> (WorkspaceSession, [TextFile.RecoverySnapshot]) {
+        let visible = tabs.filter { !ids.contains($0.file.id) || $0.file.url != nil }
+        let entries = visible.map { tab in
+            WorkspaceEntry(id: tab.file.id, path: tab.file.url?.path, isReading: tab.isReading, sourceAnchor: tab.sourceAnchor,
+                           selectionLocation: tab.selection.location, selectionLength: tab.selection.length,
+                           automaticKind: tab.automaticKind, kindRaw: tab.kind.rawValue, recoverDraft: tab.recoverDraft)
+        }
+        let drafts = recoveryEnabled ? visible.filter { !ids.contains($0.file.id) && $0.recoverDraft && $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil) }.map { $0.file.recoverySnapshot() } : []
+        let draftIDs = Set(drafts.map { $0.id })
+        let storedEntries = restoreSessionEnabled ? entries : entries.filter { draftIDs.contains($0.id) }
+        return (WorkspaceSession(version: 1, entries: storedEntries, activeID: storedEntries.contains(where: { $0.id == active?.file.id }) ? active?.file.id : nil), drafts)
     }
     private func writeRecovery() {
-        guard !shuttingDown else { return }
-        do { try TextFile.writeRecovery(tabs.map { $0.file }.filter { $0.isDirty && (!$0.text.isEmpty || $0.url != nil) }, to: recoveryURL) }
-        catch { updateStatus("恢复草稿写入失败 · 请及时保存") }
+        guard !shuttingDown && !restoringWorkspace else { return }
+        stashCurrent()
+        let value = workspaceSnapshot()
+        persistenceGeneration += 1; let generation = persistenceGeneration
+        workspace.save(session: value.0, drafts: value.1) { [weak self] result in
+            guard let self = self, generation == self.persistenceGeneration, !self.shuttingDown else { return }
+            if result.errors.isEmpty { self.lastDraftSave = result.savedAt }
+            else { self.updateStatus("本机会话/草稿部分保存失败 · 请保存原文件"); self.statusLeft.toolTip = result.errors.joined(separator: "\n") }
+        }
     }
-    private func restoreRecovery() {
-        guard FileManager.default.fileExists(atPath: recoveryURL.path) else { return }
-        do {
-            let files = try TextFile.recovery(from: recoveryURL)
-            if !files.isEmpty { tabs = files.map { ReaderTab($0) }; selectTab(0, stash: false); updateStatus("已恢复 \(files.count) 份未保存草稿") }
-        } catch { showError(error) }
+    private func restoreWorkspace() {
+        restoringWorkspace = true; editor.isEditable = false; updateStatus("正在恢复上次会话…")
+        workspace.load { [weak self] result in
+            guard let self = self else { return }
+            let loaded = result.entries.filter { self.restoreSessionEnabled || $0.file.isDirty }
+            if !loaded.isEmpty {
+                self.tabs = loaded.map { loaded in
+                    let tab = ReaderTab(loaded.file), entry = loaded.entry
+                    tab.isReading = entry.isReading; tab.sourceAnchor = max(0, min(entry.sourceAnchor, tab.file.text.utf16.count)); tab.hasWorkspacePosition = true
+                    tab.selection = NSRange(location: max(0, entry.selectionLocation), length: max(0, entry.selectionLength))
+                    tab.automaticKind = entry.automaticKind
+                    if !entry.automaticKind { tab.kind = TextKind(rawValue: entry.kindRaw) ?? tab.kind }
+                    tab.recoverDraft = entry.recoverDraft && !(tab.file.url.map { self.excludedDraftPaths.contains($0.path) } ?? false)
+                    return tab
+                }
+                self.current = loaded.firstIndex(where: { $0.entry.id == result.activeID }) ?? 0
+            }
+            self.restoringWorkspace = false; self.editor.isEditable = true
+            if self.tabs.isEmpty { self.newDocument(nil) } else { self.selectTab(min(self.current, self.tabs.count - 1), stash: false) }
+            self.restoreNotices = result.warnings
+            if !result.warnings.isEmpty { self.updateStatus("部分会话未能恢复 · 文件菜单可查看详情") }
+            else if !loaded.isEmpty { self.updateStatus("已恢复 \(loaded.count) 个标签") }
+            let urls = self.deferredOpenURLs; self.deferredOpenURLs = []
+            if !urls.isEmpty { self.openURLs(urls) }
+            if self.pendingNewDocument { self.pendingNewDocument = false; self.newDocument(nil) }
+        }
+    }
+    private func showPersistenceErrors(_ messages: [String]) {
+        _ = alert("本机状态未完整保存", messages.joined(separator: "\n"), buttons: ["知道了"])
+    }
+    private func performDocumentMutation(_ action: @escaping () -> Void) {
+        if modalDepth > 0 { deferredDocumentMutations.append(action) } else { action() }
+    }
+    @discardableResult private func runDocumentModal<T>(_ action: () -> T) -> T {
+        modalDepth += 1
+        defer {
+            modalDepth -= 1
+            if modalDepth == 0 {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.modalDepth == 0, !self.shuttingDown else { return }
+                    let actions = self.deferredDocumentMutations; self.deferredDocumentMutations = []
+                    for action in actions { self.performDocumentMutation(action) }
+                }
+            }
+        }
+        return action()
     }
     private func alert(_ title: String, _ detail: String, buttons: [String]) -> NSApplication.ModalResponse {
         let a = NSAlert(); a.messageText = title; a.informativeText = detail; a.alertStyle = .warning
-        buttons.forEach { a.addButton(withTitle: $0) }; return a.runModal()
+        buttons.forEach { a.addButton(withTitle: $0) }; return runDocumentModal({ a.runModal() })
     }
     private func showError(_ error: Error) {
-        let a = NSAlert(); a.messageText = "未能完成操作"; a.informativeText = error.localizedDescription; a.alertStyle = .warning; a.addButton(withTitle: "知道了"); a.runModal()
+        let a = NSAlert(); a.messageText = "未能完成操作"; a.informativeText = error.localizedDescription; a.alertStyle = .warning; a.addButton(withTitle: "知道了"); runDocumentModal({ a.runModal() })
         updateStatus("操作未完成，编辑内容已保留")
     }
 }
