@@ -25,3 +25,7 @@ for reader_source in "$reader_test_root"/Sources/*.swift; do
 done
 xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "${reader_ui_sources[@]}" "$reader_test_root/Tests/UIWorkflowTests.swift" -o "$reader_test_build/UIWorkflowTests"
 "$reader_test_build/UIWorkflowTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/WindowMenuBar.swift" "$reader_test_root/Tests/WindowMenuBarTests.swift" -o "$reader_test_build/WindowMenuBarTests"
+"$reader_test_build/WindowMenuBarTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "${reader_ui_sources[@]}" "$reader_test_root/Tests/ReaderMenusTests.swift" -o "$reader_test_build/ReaderMenusTests"
+"$reader_test_build/ReaderMenusTests"

@@ -19,11 +19,11 @@ final class ReaderTab {
         undo.levelsOfUndo = 100
     }
     func updateKindAfterPathChange() {
-        if automaticKind { kind = TextKind.detect(url: file.url, text: file.text) }
+        if automaticKind { kind = TextKind.detect(url: file.url ?? file.suggestedName.map { URL(fileURLWithPath: $0) }, text: file.text) }
     }
 }
 
-final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate {
+final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSMenuItemValidation {
     private var tabs: [ReaderTab] = []
     private var current = 0
     private var changing = false
@@ -46,6 +46,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let sidebar = ColorView()
     private let canvas = ColorView()
     private let header = NSView()
+    private let menuRow = ColorView()
+    private let windowMenuBar = WindowMenuBar()
+    private var menuRowHeight: NSLayoutConstraint!
+    private var sidebarToggleButton: ActionButton!
     private var branding: NSStackView!
     private var focusHiddenActions: [NSView] = []
     private let titleLabel = NSTextField(labelWithString: "轻阅")
@@ -180,6 +184,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func buildInterface() {
         guard let window = window else { return }
         window.contentView = root
+        add(menuRow, to: root); add(windowMenuBar, to: menuRow)
+        windowMenuBar.prepareMenu = { [weak self] _ in self?.refreshRecentMenu() }
+        sidebarToggleButton = button("收起侧栏", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
+        add(sidebarToggleButton, to: menuRow)
         add(header, to: root)
         titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         subtitle.font = .systemFont(ofSize: 11)
@@ -289,13 +297,19 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         tabsHeight = tabScroll.heightAnchor.constraint(equalToConstant: 39)
         toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 36)
         headerHeight = header.heightAnchor.constraint(equalToConstant: 54)
+        menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 34)
         canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 12)
         canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16)
         statusNormalTrailing = statusRight.trailingAnchor.constraint(equalTo: codecPopup.leadingAnchor, constant: -12)
         statusReadingTrailing = statusRight.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20)
         NSLayoutConstraint.activate([
+            menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            menuRow.topAnchor.constraint(equalTo: root.topAnchor, constant: 5), menuRowHeight,
+            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor), windowMenuBar.trailingAnchor.constraint(lessThanOrEqualTo: sidebarToggleButton.leadingAnchor, constant: -12),
+            windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 30),
+            sidebarToggleButton.trailingAnchor.constraint(equalTo: menuRow.trailingAnchor), sidebarToggleButton.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), sidebarToggleButton.widthAnchor.constraint(equalToConstant: 104),
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22), header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 15), headerHeight,
+            header.topAnchor.constraint(equalTo: menuRow.bottomAnchor, constant: 10), headerHeight,
             branding.leadingAnchor.constraint(equalTo: header.leadingAnchor), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), sidebar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14), sidebarWidth,
@@ -342,6 +356,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         if followSystemAppearance { dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
         window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.panel
+        menuRow.color = theme.window
+        windowMenuBar.applyAppearance(foreground: theme.text, background: theme.window, highlight: theme.selection)
         titleLabel.textColor = theme.text; subtitle.textColor = theme.muted; sideTitle.textColor = theme.muted; sideNote.textColor = theme.muted
         statusLeft.textColor = theme.muted; statusRight.textColor = theme.muted
         findCounter.textColor = theme.muted
@@ -368,10 +384,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                 let b = DraggableTabButton(tab.file.title) { [weak self] in
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.selectTab(i) }
                 }
+                b.doubleClickHandler = { [weak self] in self?.renameDocument(id: id) }
                 b.tabID = id
                 b.widthAnchor.constraint(equalToConstant: 116).isActive = true
                 let context = NSMenu()
-                for (title, action) in [("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("关闭全部标签", #selector(closeAllTabs(_:))), ("向左移动", #selector(moveContextLeft(_:))), ("向右移动", #selector(moveContextRight(_:))), ("切换此文件草稿恢复", #selector(toggleContextRecovery(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
+                for (title, action) in [("重命名…", #selector(renameContextTab(_:))), ("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("关闭全部标签", #selector(closeAllTabs(_:))), ("向左移动", #selector(moveContextLeft(_:))), ("向右移动", #selector(moveContextRight(_:))), ("切换此文件草稿恢复", #selector(toggleContextRecovery(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
                     let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; item.representedObject = id; context.addItem(item)
                 }
                 b.menu = context
@@ -414,6 +431,59 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func clearRecent(_ sender: Any?) {
         recent = []; UserDefaults.standard.removeObject(forKey: "positions"); refreshRecent(); refreshRecentMenu()
+    }
+    func configureWindowMenus(_ groups: [WindowMenuGroup]) { windowMenuBar.setGroups(groups) }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard let action = item.action else { return true }
+        if action == #selector(toggleSidebar(_:)) { item.state = showingSidebar ? .on : .off }
+        if action == #selector(toggleReading(_:)) { item.state = reading ? .on : .off }
+        if action == #selector(toggleFocus(_:)) { item.state = focused ? .on : .off }
+        if action == #selector(toggleWrap(_:)) { item.state = wrapping ? .on : .off }
+        if action == #selector(toggleCurrentDraftRecovery(_:)) { item.state = active?.recoverDraft == true ? .on : .off }
+        if modalDepth > 0 { return false }
+        if action == #selector(clearRecent(_:)) || action == #selector(showGuide(_:)) || action == #selector(showRestoreNotices(_:)) { return true }
+        if restoringWorkspace { return false }
+        if action == #selector(undoEdit(_:)) || action == #selector(redoEdit(_:)) {
+            let fieldUndo = (window?.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0.undoManager : nil }
+            if reading && fieldUndo == nil { return false }
+            let manager = fieldUndo ?? active?.undo
+            return action == #selector(undoEdit(_:)) ? manager?.canUndo == true : manager?.canRedo == true
+        }
+        if action == #selector(formatJSON(_:)) { return active?.kind == .json && !reading }
+        if action == #selector(copyCurrentPath(_:)) || action == #selector(revealCurrentFile(_:)) || action == #selector(reloadDocument(_:)) || action == #selector(reopenEncoding(_:)) { return active?.file.url != nil }
+        if action == #selector(selectNumberedTab(_:)) { return !tabs.isEmpty && (item.tag == 8 || item.tag < tabs.count) }
+        if action == #selector(moveCurrentTabLeft(_:)) { return current > 0 }
+        if action == #selector(moveCurrentTabRight(_:)) { return current + 1 < tabs.count }
+        return active != nil
+    }
+    @objc func renameCurrentDocument(_ sender: Any?) { if let id = active?.file.id { renameDocument(id: id) } }
+    @objc private func renameContextTab(_ item: NSMenuItem) { if let id = item.representedObject as? UUID { renameDocument(id: id) } }
+    private func renameDocument(id: UUID) {
+        guard !restoringWorkspace, modalDepth == 0, let i = tabs.firstIndex(where: { $0.file.id == id }) else { return }
+        selectTab(i); stashCurrent()
+        let tab = tabs[i], file = tab.file
+        let oldPath = file.url?.path
+        let a = NSAlert(); a.messageText = "重命名"
+        a.informativeText = file.url == nil ? "先为文档起名；首次保存时再选择位置。" : "修改磁盘上的文件名，尚未保存的正文修改会继续保留在编辑器中。"
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 26))
+        input.stringValue = file.title == "未命名" ? "未命名.txt" : file.title
+        input.setAccessibilityLabel("新的文件名"); a.accessoryView = input
+        a.addButton(withTitle: "重命名"); a.addButton(withTitle: "取消")
+        a.window.initialFirstResponder = input
+        guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
+        do {
+            try file.rename(toName: input.stringValue)
+            if let before = oldPath, let after = file.url?.path, before != after {
+                recent = recent.map { $0 == before ? after : $0 }
+                var positions = UserDefaults.standard.dictionary(forKey: "positions") as? [String: [Double]] ?? [:]
+                if let position = positions.removeValue(forKey: before) { positions[after] = position }
+                UserDefaults.standard.set(positions, forKey: "positions")
+                var excluded = excludedDraftPaths
+                if excluded.remove(before) != nil { excluded.insert(after) }; excludedDraftPaths = excluded
+                remember(file.url!)
+            }
+            refreshAutomaticKind(tab); refreshTabs(); writeRecovery(); updateStatus("已重命名为 \(file.title)")
+        } catch { refreshTabs(); showError(error) }
     }
     func attachRecentMenu(_ menu: NSMenu) { recentMenu = menu; refreshRecentMenu() }
     private func refreshRecentMenu() {
@@ -540,7 +610,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                     switch result {
                     case .success(let file):
                         self.stashCurrent()
-                        if self.tabs.count == 1, let initial = self.tabs.first, initial.file.url == nil, initial.file.text.isEmpty {
+                        if self.tabs.count == 1, let initial = self.tabs.first, initial.file.url == nil, initial.file.text.isEmpty, initial.file.suggestedName == nil {
                             self.tabs.removeAll()
                         }
                         let tab = ReaderTab(file); tab.recoverDraft = !self.excludedDraftPaths.contains(url.standardizedFileURL.path); self.restorePosition(tab)
@@ -613,6 +683,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         if chosenDestination == nil && (saveAs || tab.file.url == nil) {
             let panel = NSSavePanel(); panel.nameFieldStringValue = tab.file.url?.lastPathComponent ?? "未命名.txt"
             panel.canCreateDirectories = true; panel.message = "保存到本机，保留所选编码与换行符"
+            if tab.file.url == nil, let name = tab.file.suggestedName { panel.nameFieldStringValue = name }
             if let dir = tab.file.url?.deletingLastPathComponent() { panel.directoryURL = dir }
             guard runDocumentModal({ panel.runModal() }) == .OK, let url = panel.url else { return false }
             destination = url
@@ -650,7 +721,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             writeRecovery()
             updateStatus(summary)
         }
-        let ids = tabs.filter { $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil) }.map { $0.file.id }
+        let ids = tabs.filter { $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil) }.map { $0.file.id }
         var count = 0
         for id in ids {
             guard let i = tabs.firstIndex(where: { $0.file.id == id }) else { continue }
@@ -683,7 +754,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @discardableResult private func closeTab(_ index: Int) -> Bool {
         guard tabs.indices.contains(index) else { return true }
         selectTab(index)
-        if let file = active?.file, file.isDirty && (!file.text.isEmpty || file.url != nil) {
+        if let file = active?.file, file.isDirty && (!file.text.isEmpty || file.url != nil || file.suggestedName != nil) {
             let result = alert("保存“\(active!.file.title)”的修改？", "保存会写回本机文件。", buttons: ["保存", "取消", "不保存"])
             if result == .alertSecondButtonReturn { return false }
             if result == .alertFirstButtonReturn && !saveCurrent() { return false }
@@ -697,7 +768,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func confirmDocumentsClosure(allowKeep: Bool = false) -> (confirmed: Bool, discarded: Set<UUID>) {
         stashCurrent()
         var discarded = Set<UUID>()
-        for index in tabs.indices where tabs[index].file.isDirty && (!tabs[index].file.text.isEmpty || tabs[index].file.url != nil) {
+        for index in tabs.indices where tabs[index].file.isDirty && (!tabs[index].file.text.isEmpty || tabs[index].file.url != nil || tabs[index].file.suggestedName != nil) {
             selectTab(index)
             let tab = tabs[index]
             let canKeep = allowKeep && recoveryEnabled && tab.recoverDraft
@@ -850,13 +921,20 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         followSystemAppearance = false; dark.toggle()
         UserDefaults.standard.set(false, forKey: "followSystemAppearance"); UserDefaults.standard.set(dark, forKey: "dark"); applyTheme()
     }
-    @objc func toggleSidebar(_ sender: Any?) { showingSidebar.toggle(); updateModeControls() }
+    @objc func toggleSidebar(_ sender: Any?) {
+        let anchor = currentSourceOffset()
+        showingSidebar.toggle(); updateModeControls()
+        if reading { updateReadingWidth(); scrollToSource(anchor) } else { updateWrap() }
+    }
     @objc func toggleFocus(_ sender: Any?) {
         let anchor = currentSourceOffset(); focused.toggle(); updateModeControls(); updateReadingWidth(); scrollToSource(anchor)
     }
     private func updateModeControls() {
         let hideSidebar = focused || !showingSidebar
         sidebar.isHidden = hideSidebar
+        sidebarToggleButton.title = showingSidebar ? "收起侧栏" : "展开侧栏"
+        sidebarToggleButton.setAccessibilityLabel(sidebarToggleButton.title)
+        menuRow.isHidden = focused; menuRowHeight.constant = focused ? 0 : 34
         canvasInsetLeading.isActive = !hideSidebar; canvasFullLeading.isActive = hideSidebar
         tabsHeight.constant = focused ? 0 : 39; tabScroll.isHidden = focused
         toolsHeight.constant = focused ? 0 : 36; tools.isHidden = focused
@@ -1181,7 +1259,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                            selectionLocation: tab.selection.location, selectionLength: tab.selection.length,
                            automaticKind: tab.automaticKind, kindRaw: tab.kind.rawValue, recoverDraft: tab.recoverDraft)
         }
-        let drafts = recoveryEnabled ? visible.filter { !ids.contains($0.file.id) && $0.recoverDraft && $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil) }.map { $0.file.recoverySnapshot() } : []
+        let drafts = recoveryEnabled ? visible.filter { !ids.contains($0.file.id) && $0.recoverDraft && $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil) }.map { $0.file.recoverySnapshot() } : []
         let draftIDs = Set(drafts.map { $0.id })
         let storedEntries = restoreSessionEnabled ? entries : entries.filter { draftIDs.contains($0.id) }
         return (WorkspaceSession(version: 1, entries: storedEntries, activeID: storedEntries.contains(where: { $0.id == active?.file.id }) ? active?.file.id : nil), drafts)

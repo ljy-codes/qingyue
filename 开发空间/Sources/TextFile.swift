@@ -171,6 +171,8 @@ final class TextFile {
 
     let id: UUID
     var url: URL?
+    /// A name for an untitled document. Naming it does not create a disk file.
+    var suggestedName: String?
     var text: String
     var codec: TextCodec = .utf8
     var lineEnding: LineEnding = .lf
@@ -191,7 +193,7 @@ final class TextFile {
         !wasSaved || textChanged || codec != baselineCodec || lineEnding != baselineLineEnding
     }
 
-    var title: String { url?.lastPathComponent ?? "未命名" }
+    var title: String { url?.lastPathComponent ?? suggestedName ?? "未命名" }
 
     init(text: String = "", url: URL? = nil) {
         id = UUID()
@@ -244,6 +246,86 @@ final class TextFile {
         let current = try Data(contentsOf: resolved, options: .mappedIfSafe)
         guard current.count <= Self.maximumSize else { return true }
         return Self.digest(current) != baselineDigest
+    }
+
+    /// Rename just the existing directory entry. This never saves the editor's
+    /// current text, changes its identity, or authorizes overwriting another file.
+    /// A symbolic link is renamed as a link, leaving its target in place.
+    func rename(toName name: String) throws {
+        guard Self.isValidFileName(name) else {
+            throw TextFileError.io("文件名不能为空，不能是“.”或“..”，也不能包含斜线、换行或控制字符。")
+        }
+        guard let source = url?.standardizedFileURL else {
+            suggestedName = name
+            return
+        }
+        // A proposed URL on a new document does not grant ownership of a disk
+        // item at that location. Only a read/saved baseline can rename a file.
+        guard wasSaved else {
+            throw TextFileError.io("这份文档尚未保存，不能重命名磁盘文件。请先选择保存位置。")
+        }
+        guard try !diskChanged() else { throw TextFileError.externalChange }
+        if source.lastPathComponent.utf8.elementsEqual(name.utf8) { return }
+
+        let parent = source.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent(name, isDirectory: false)
+        var sourceInfo = stat(), destinationInfo = stat()
+        guard lstat(source.path, &sourceInfo) == 0 else { throw TextFileError.externalChange }
+        let destinationExists = lstat(destination.path, &destinationInfo) == 0
+        var needsCaseStep = false
+        if destinationExists {
+            let sameEntry = sourceInfo.st_dev == destinationInfo.st_dev && sourceInfo.st_ino == destinationInfo.st_ino
+            // On a case-insensitive filesystem, lstat("NAME") also finds "name".
+            // Directory names distinguish that alias from two real hard links:
+            // an independently present target name must never be replaced.
+            let actualNames = try FileManager.default.contentsOfDirectory(atPath: parent.path)
+            let exactTargetExists = actualNames.contains { $0.utf8.elementsEqual(name.utf8) }
+            needsCaseStep = sameEntry && !exactTargetExists
+            guard needsCaseStep else {
+                throw TextFileError.io("同一文件夹中已存在“\(name)”，请使用其他名称；没有覆盖任何文件。")
+            }
+        } else if errno != ENOENT {
+            throw Self.posixError("无法检查新文件名")
+        }
+
+        // Recheck the baseline just before the move. This minimizes ordinary
+        // external-edit races; unrelated, noncooperating writers still require
+        // platform file coordination for stronger transaction guarantees.
+        guard try !diskChanged() else { throw TextFileError.externalChange }
+        if needsCaseStep {
+            let temporary = parent.appendingPathComponent(".lightreader-rename-\(UUID().uuidString).tmp")
+            guard renamex_np(source.path, temporary.path, UInt32(RENAME_EXCL)) == 0 else {
+                throw Self.posixError("无法重命名文件")
+            }
+            if renamex_np(temporary.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
+                let moveError = errno
+                if renamex_np(temporary.path, source.path, UInt32(RENAME_EXCL)) != 0 {
+                    // Never erase a newly created item while rolling back. Keep
+                    // the original bytes reachable and update our model to the
+                    // safe temporary entry so a later Save cannot hit a stranger.
+                    url = temporary
+                    loadedResolvedURL = Self.resolvedFileURL(temporary)
+                    throw TextFileError.io("重命名未完成，原文件已保留在“\(temporary.path)”。当前编辑内容仍在，请在 Finder 中检查或另存为。")
+                }
+                if moveError == EEXIST {
+                    throw TextFileError.io("新名称已被其他文件占用，原文件名已恢复；没有覆盖文件。")
+                }
+                throw Self.posixError("无法重命名，原文件名已恢复", code: moveError)
+            }
+        } else if renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) != 0 {
+            if errno == EEXIST {
+                throw TextFileError.io("新名称已被其他文件占用，请使用其他名称；没有覆盖文件。")
+            }
+            throw Self.posixError("无法重命名文件")
+        }
+        url = destination
+        loadedResolvedURL = Self.resolvedFileURL(destination)
+    }
+
+    private static func isValidFileName(_ name: String) -> Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && name != "." && name != ".." && !name.contains("/")
+            && !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) })
     }
 
     func save(to destination: URL? = nil, allowOverwrite: Bool = false) throws {
@@ -317,7 +399,7 @@ final class TextFile {
         // RENAME_EXCL closes that race instead of silently replacing its creator's data.
         let result = !sameDestination && !allowOverwrite
             ? renamex_np(temporary.path, resolvedURL.path, UInt32(RENAME_EXCL))
-            : rename(temporary.path, resolvedURL.path)
+            : Darwin.rename(temporary.path, resolvedURL.path)
         if result != 0 {
             if errno == EEXIST { throw TextFileError.externalChange }
             throw Self.posixError("保存失败，编辑内容仍然保留")
@@ -392,6 +474,7 @@ final class TextFile {
     struct RecoverySnapshot: Codable {
         let id: UUID
         let path: String?
+        let suggestedName: String?
         let resolvedPath: String?
         let text: String
         let codec: TextCodec
@@ -406,6 +489,7 @@ final class TextFile {
         init(_ file: TextFile) {
             id = file.id
             path = file.url?.path
+            suggestedName = file.suggestedName
             resolvedPath = file.loadedResolvedURL?.path
             text = file.text
             codec = file.codec
@@ -420,6 +504,7 @@ final class TextFile {
 
         func restore() -> TextFile {
             let file = TextFile(id: id, text: text, url: path.map { URL(fileURLWithPath: $0) })
+            file.suggestedName = suggestedName
             // This is the physical location recorded when the snapshot was read.
             // Resolving it again could bless a newly introduced symlink and hide
             // a retargeting conflict after recovery.
@@ -443,6 +528,7 @@ final class TextFile {
               snapshot.baselineText.utf8.count <= maximumSize,
               !snapshot.text.contains("\0"), !snapshot.baselineText.contains("\0"),
               snapshot.path.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true,
+              snapshot.suggestedName.map({ $0.utf8.count <= 4096 && Self.isValidFileName($0) }) ?? true,
               snapshot.resolvedPath.map({ $0.hasPrefix("/") && !$0.contains("\0") }) ?? true else {
             throw TextFileError.recoveryInvalid
         }
@@ -467,7 +553,7 @@ final class TextFile {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".recovery-\(UUID().uuidString).tmp")
         defer { try? fm.removeItem(at: temporary) }
         try writePrivate(data, to: temporary)
-        guard rename(temporary.path, url.path) == 0 else { throw posixError("恢复草稿更新失败") }
+        guard Darwin.rename(temporary.path, url.path) == 0 else { throw posixError("恢复草稿更新失败") }
     }
 
     static func recovery(from url: URL) throws -> [TextFile] {

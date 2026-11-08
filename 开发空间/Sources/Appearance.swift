@@ -103,7 +103,9 @@ private let qingyueTabPasteboardType = NSPasteboard.PasteboardType("local.xiaoyu
 
 final class DraggableTabButton: ActionButton, NSDraggingSource {
     var tabID: UUID?
+    var doubleClickHandler: (() -> Void)?
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { doubleClickHandler?(); return }
         guard let window = window, let id = tabID else { super.mouseDown(with: event); return }
         let start = event.locationInWindow
         while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {

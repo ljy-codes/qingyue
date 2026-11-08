@@ -91,6 +91,135 @@ struct FileCoreTests {
             try expect(file.isDirty && file.text == "new content", "refused save retains new content")
         }
 
+        try test("Untitled renaming only suggests a name and survives new and legacy recovery") {
+            let file = TextFile(text: "尚未保存的正文 😀")
+            let id = file.id
+            try file.rename(toName: "我的配置.json")
+            try expect(file.title == "我的配置.json" && file.suggestedName == "我的配置.json", "untitled tab shows its chosen name")
+            try expect(file.url == nil && file.isDirty && file.id == id, "naming does not create a saved document or change identity")
+            let snapshot = file.recoverySnapshot()
+            let restored = try TextFile.restore(snapshot: JSONDecoder().decode(TextFile.RecoverySnapshot.self, from: JSONEncoder().encode(snapshot)))
+            try expect(restored.title == file.title && restored.text == file.text && restored.url == nil, "per-document snapshot preserves suggested name")
+            let legacy = directory.appendingPathComponent("named-recovery/state.json")
+            try TextFile.writeRecovery([file], to: legacy)
+            try expect(TextFile.recovery(from: legacy)[0].title == file.title, "legacy envelope also preserves suggested name")
+
+            // Snapshots produced before naming existed must still decode.
+            var oldObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as! [String: Any]
+            oldObject.removeValue(forKey: "suggestedName")
+            let oldSnapshot = try JSONDecoder().decode(TextFile.RecoverySnapshot.self, from: JSONSerialization.data(withJSONObject: oldObject))
+            try expect(TextFile.restore(snapshot: oldSnapshot).title == "未命名", "missing optional name remains backward compatible")
+        }
+
+        try test("Saved renaming preserves dirty text, identity, encoding and disk baseline") {
+            let original = directory.appendingPathComponent("rename-original.txt")
+            let destination = directory.appendingPathComponent("重命名后的配置.json")
+            let bytes = try TextCodec.utf8BOM.encode("磁盘旧内容\r\n")
+            try bytes.write(to: original)
+            try fm.setAttributes([.posixPermissions: 0o640], ofItemAtPath: original.path)
+            let file = try TextFile.open(original), id = file.id
+            file.text = "尚未保存的新内容\n"
+            try file.rename(toName: destination.lastPathComponent)
+            try expect(!fm.fileExists(atPath: original.path) && fm.fileExists(atPath: destination.path), "directory entry is renamed")
+            try expect(Data(contentsOf: destination) == bytes, "renaming never saves pending text")
+            try expect(file.id == id && file.url == destination && file.title == destination.lastPathComponent, "identity retained and path updated")
+            try expect(file.text == "尚未保存的新内容\n" && file.isDirty && !file.diskChanged(), "unsaved text and baseline remain coherent")
+            try expect(file.codec == .utf8BOM && file.lineEnding == .crlf, "format state is unchanged")
+            try expect((fm.attributesOfItem(atPath: destination.path)[.posixPermissions] as? NSNumber)?.intValue == 0o640, "rename preserves mode")
+            let restored = try TextFile.restore(snapshot: file.recoverySnapshot())
+            try expect(restored.url == destination && restored.isDirty && !restored.diskChanged(), "renamed draft restores its updated path and baseline")
+            try file.save()
+            try expect(Data(contentsOf: destination) == TextCodec.utf8BOM.encode("尚未保存的新内容\r\n"), "later explicit save uses the new path and old encoding")
+            try expect(!fm.fileExists(atPath: original.path) && !file.isDirty, "save never recreates the old path")
+        }
+
+        try test("Renaming refuses existing files, directories and dangling symbolic links") {
+            let source = directory.appendingPathComponent("rename-collision-source.txt")
+            let target = directory.appendingPathComponent("rename-collision-target.txt")
+            let folder = directory.appendingPathComponent("rename-collision-folder")
+            let dangling = directory.appendingPathComponent("rename-collision-link.txt")
+            try Data("source".utf8).write(to: source)
+            try Data("do not replace".utf8).write(to: target)
+            try fm.createDirectory(at: folder, withIntermediateDirectories: false)
+            try fm.createSymbolicLink(at: dangling, withDestinationURL: directory.appendingPathComponent("not-created-target"))
+            let file = try TextFile.open(source)
+            file.text = "unsaved"
+            for name in [target.lastPathComponent, folder.lastPathComponent, dangling.lastPathComponent] {
+                try expectIO({ try file.rename(toName: name) }, contains: "已存在")
+            }
+            try expect(String(contentsOf: source) == "source" && String(contentsOf: target) == "do not replace", "collisions leave both files intact")
+            try expect(file.url == source && file.text == "unsaved" && file.isDirty, "collision preserves model and pending edits")
+            try expect(try fm.destinationOfSymbolicLink(atPath: dangling.path).hasSuffix("not-created-target"), "dangling link is not followed or overwritten")
+        }
+
+        try test("External changes and proposed locations cannot authorize a rename") {
+            let source = directory.appendingPathComponent("rename-external.txt")
+            let target = directory.appendingPathComponent("rename-external-new.txt")
+            try Data("loaded".utf8).write(to: source)
+            let file = try TextFile.open(source)
+            file.text = "pending"
+            try Data("changed elsewhere".utf8).write(to: source)
+            try expectError({ try file.rename(toName: target.lastPathComponent) }, matching: .externalChange)
+            try expect(String(contentsOf: source) == "changed elsewhere" && !fm.fileExists(atPath: target.path), "changed disk entry is not moved")
+            try expect(file.url == source && file.text == "pending" && file.isDirty, "refused external rename keeps edits")
+            let proposed = TextFile(text: "new", url: source)
+            try expectIO({ try proposed.rename(toName: target.lastPathComponent) }, contains: "尚未保存")
+            try expect(String(contentsOf: source) == "changed elsewhere", "new document cannot rename an unowned path")
+        }
+
+        try test("Symbolic-link renaming moves only the link and preserves target writes") {
+            let target = directory.appendingPathComponent("rename-link-target.conf")
+            let link = directory.appendingPathComponent("rename-link.conf")
+            let renamed = directory.appendingPathComponent("rename-link-new.conf")
+            try Data("key=before\n".utf8).write(to: target)
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: target.lastPathComponent)
+            let file = try TextFile.open(link)
+            file.text = "key=after\n"
+            try file.rename(toName: renamed.lastPathComponent)
+            try expect(!fm.fileExists(atPath: link.path), "old link name is removed")
+            try expect(try fm.destinationOfSymbolicLink(atPath: renamed.path) == target.lastPathComponent, "new link retains exact relative target")
+            try expect(String(contentsOf: target) == "key=before\n" && !file.diskChanged() && file.isDirty, "rename does not save or move the target")
+            try file.save()
+            try expect(String(contentsOf: target) == "key=after\n", "later save still writes through renamed link")
+            try expect(try fm.destinationOfSymbolicLink(atPath: renamed.path) == target.lastPathComponent, "saving retains the renamed link")
+        }
+
+        try test("Case-only renaming is safe and never treats a real hard link as an alias") {
+            let source = directory.appendingPathComponent("CaseRename.txt")
+            let destination = directory.appendingPathComponent("caserename.TXT")
+            try Data("case bytes".utf8).write(to: source)
+            let file = try TextFile.open(source)
+            try file.rename(toName: destination.lastPathComponent)
+            try expect(file.url == destination && !file.isDirty && !file.diskChanged(), "case-only rename establishes a coherent clean path")
+            try expect(Data(contentsOf: destination) == Data("case bytes".utf8), "case-only rename retains data")
+            let actualNames = try fm.contentsOfDirectory(atPath: directory.path)
+            try expect(actualNames.contains { $0.utf8.elementsEqual(destination.lastPathComponent.utf8) }, "directory records the requested capitalization")
+            try expect(!actualNames.contains { $0.utf8.elementsEqual(source.lastPathComponent.utf8) }, "old spelling is no longer a directory entry")
+
+            let other = directory.appendingPathComponent("rename-hardlink-other.txt")
+            try fm.linkItem(at: destination, to: other)
+            try expectIO({ try file.rename(toName: other.lastPathComponent) }, contains: "已存在")
+            let renamed = directory.appendingPathComponent("rename-hardlink-allowed.txt")
+            try file.rename(toName: renamed.lastPathComponent)
+            try expect(String(contentsOf: renamed) == "case bytes" && String(contentsOf: other) == "case bytes", "moving one hard-link name retains both byte streams")
+            let ino1 = try fm.attributesOfItem(atPath: renamed.path)[.systemFileNumber] as? NSNumber
+            let ino2 = try fm.attributesOfItem(atPath: other.path)[.systemFileNumber] as? NSNumber
+            try expect(ino1 == ino2, "directory-entry rename does not split hard links")
+        }
+
+        try test("Invalid rename suggestions never change text, paths or titles") {
+            let file = TextFile(text: "keep")
+            for bad in ["", "   ", ".", "..", "folder/file.txt", "bad\0name", "bad\nname", "bad\tname"] {
+                try expectIO({ try file.rename(toName: bad) }, contains: "文件名")
+                try expect(file.title == "未命名" && file.url == nil && file.text == "keep", "invalid name leaves untitled document unchanged")
+            }
+            let source = directory.appendingPathComponent("rename-no-op.txt")
+            try Data("same".utf8).write(to: source)
+            let saved = try TextFile.open(source)
+            try saved.rename(toName: source.lastPathComponent)
+            try expect(saved.url == source && !saved.isDirty && !saved.diskChanged(), "identical name is a safe no-op")
+        }
+
         try test("Mixed newlines are preserved and require explicit conversion after editing") {
             let url = directory.appendingPathComponent("mixed.txt")
             let data = Data("甲\r\n乙\n丙\r丁".utf8)
@@ -409,6 +538,15 @@ struct FileCoreTests {
             throw actual
         }
         throw NSError(domain: "FileCoreTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "Expected \(expected)"])
+    }
+
+    static func expectIO(_ body: () throws -> Void, contains fragment: String) throws {
+        do { try body() }
+        catch TextFileError.io(let message) {
+            try expect(message.contains(fragment), "rename error is actionable: \(message)")
+            return
+        }
+        throw NSError(domain: "FileCoreTests", code: 6, userInfo: [NSLocalizedDescriptionKey: "Expected rename error containing \(fragment)"])
     }
 
     static func aclText(_ url: URL) throws -> String {

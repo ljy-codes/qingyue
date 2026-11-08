@@ -1,6 +1,6 @@
 # 轻阅 · 开发空间
 
-产品版本保持 **0.1.0**，本轮 **Mac 构建 3**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
+产品版本保持 **0.1.0**，本轮 **Mac 构建 4**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
 
 本机只维护 Mac 客户端。Windows 的独立实现要求记录在上一级 `docs/Windows后续实现.md`，没有 Windows 工程、客户端或安装包。
 
@@ -10,6 +10,8 @@
 - `Sources/ReadingDocument.swift`：阅读内容、源文/显示块范围对应和目录。
 - `Sources/WorkspaceStore.swift`：会话元数据、独立恢复草稿与后台串行持久化。
 - `Sources/QuickOpenController.swift`：已打开与最近文件的原生快速定位面板。
+- `Sources/WindowMenuBar.swift`：窗口内紧凑菜单条。
+- `Sources/ReaderMenus.swift`：系统菜单和窗口菜单共用的命令分组。
 - `Resources/Info.plist`：版本、构建编号、应用与文本关联元数据。
 - `Tests/`：文件往返、冲突、Unicode、搜索、编辑操作与阅读映射测试。
 - `Samples/`：Markdown、JSON、YAML 和配置示例。
@@ -25,11 +27,11 @@
 bash scripts/build.sh
 ```
 
-产品为上一级 `交付产品/轻阅.app`。脚本读取 Info.plist 中的 `CFBundleShortVersionString=0.1.0` 和 `CFBundleVersion=3`，以 `x86_64-apple-macosx13.0` 为目标优化编译，模块缓存写入 `build/ModuleCache`。图标由构建时 Swift/AppKit 脚本绘制。
+产品为上一级 `交付产品/轻阅.app`。脚本读取 Info.plist 中的 `CFBundleShortVersionString=0.1.0` 和 `CFBundleVersion=4`，以 `x86_64-apple-macosx13.0` 为目标优化编译，模块缓存写入 `build/ModuleCache`。图标由构建时 Swift/AppKit 脚本绘制。
 
 脚本执行 ad-hoc 签名和 `codesign --verify --deep --strict` 验证，不等同于 Developer ID、公证或 Apple Silicon 验收，也不自动替换 `/Applications` 中的已安装副本。文件关联仍使用 `Alternate`，不抢系统默认编辑器。
 
-产品版本与构建编号分别管理。旧 `v0.1.0` 预发布保留，本轮使用 `macos-build-3`；发布包必须对应实际提交与验收结果，不能用相同文件名悄悄替换历史内容。
+产品版本与构建编号分别管理。旧 `v0.1.0` 预发布保留，本轮使用 `macos-build-4`；发布包必须对应实际提交与验收结果，不能用相同文件名悄悄替换历史内容。
 
 ## 测试
 
@@ -70,3 +72,13 @@ Markdown 使用原生 TextKit，支持基本标题、列表、任务、引用、
 ## 可选GUI模态诊断
 
 `Tests/ModalSafetyTests.swift`覆盖保存确认与系统保存面板期间的异步打开。它需要正常桌面XPC/辅助界面服务环境，不加入默认沙箱测试。用除main.swift外全部Sources编译该入口后运行；测试所有正文与恢复目录均在临时目录，不能指向用户真实草稿。构建3该诊断22项通过。
+
+## 构建 4 的交互约定
+
+窗口内菜单条提供“文件、编辑、搜索、视图、标签、帮助”，复用命令、快捷键与状态。点击菜单时应保持正文或输入框原有的焦点，确保剪切、复制、粘贴等响应链命令作用于正确控件。专注布局可以隐藏菜单条，退出后恢复。
+
+顶部侧栏开关必须在侧栏收起后仍可见，且可在新建、阅读、编辑和调整窗口大小后再次展开侧栏。
+
+标签重命名由双击和右键入口触发。磁盘文件重命名不能自动保存未提交正文，不能绕过外部修改检查或覆盖同名目标；新建文档只记录建议名称，首次保存再选择位置。名称恢复需兼容旧版草稿 JSON 缺少新增字段的情况。
+
+本轮菜单、侧栏和重命名的执行结果应补到 `../docs/Mac构建4验收.md`，未执行的检查不能记为通过。
