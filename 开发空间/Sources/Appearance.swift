@@ -44,6 +44,7 @@ final class FlippedStackView: NSStackView {
 }
 
 final class ActionButton: NSButton {
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
     override var title: String { didSet { setAccessibilityLabel(title); needsDisplay = true } }
     var actionHandler: (() -> Void)?
     var fill: NSColor = .clear { didSet { needsDisplay = true } }
@@ -65,12 +66,13 @@ final class ActionButton: NSButton {
         widthAnchor.constraint(greaterThanOrEqualToConstant: symbol == nil ? 48 : 74).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:)") }
-    @objc private func performAction() { actionHandler?() }
+    @objc private func performAction() { if isEnabled { actionHandler?() } }
     override func draw(_ dirtyRect: NSRect) {
         let bg = isHighlighted ? fill.blended(withFraction: 0.15, of: ink) ?? fill : fill
         bg.setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 1), xRadius: 7, yRadius: 7).fill()
-        let attrs: [NSAttributedString.Key: Any] = [.font: font!, .foregroundColor: ink]
+        let drawInk = isEnabled ? ink : ink.withAlphaComponent(0.35)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font!, .foregroundColor: drawInk]
         let str = NSAttributedString(string: title, attributes: attrs)
         let size = str.size()
         var x = (bounds.width - size.width) / 2
@@ -79,22 +81,32 @@ final class ActionButton: NSButton {
             img.isTemplate = false
             let imageSize: CGFloat = 14
             x -= 10
-            ink.setFill()
+            drawInk.setFill()
             let rect = NSRect(x: x, y: (bounds.height - imageSize) / 2, width: imageSize, height: imageSize)
             img.lockFocus()
-            ink.set()
+            drawInk.set()
             NSRect(origin: .zero, size: img.size).fill(using: .sourceAtop)
             img.unlockFocus()
             img.draw(in: rect)
             x += 21
         }
         str.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))
+        if window?.firstResponder === self {
+            NSColor.keyboardFocusIndicatorColor.setStroke()
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 3), xRadius: 6, yRadius: 6)
+            ring.lineWidth = 2; ring.stroke()
+        }
     }
 }
 
 final class EditorTextView: NSTextView {
     var tabUndo = UndoManager()
     var filesDropped: (([URL]) -> Void)?
+    var cancelHandler: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) {
+        if hasMarkedText() { super.cancelOperation(sender); return }
+        if let action = cancelHandler { action() } else { super.cancelOperation(sender) }
+    }
     override var undoManager: UndoManager? { tabUndo }
     override func insertTab(_ sender: Any?) {
         if hasMarkedText() { super.insertTab(sender); return }

@@ -24,7 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { reader.showWindow(nil); return true }
     @objc func about(_ sender: Any?) {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "轻阅", .applicationVersion: "0.1.0 · 本机体验版", .credits: NSAttributedString(string: "轻量、本机、原生。\nTXT · JSON · YAML · Markdown · 配置文件")])
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "2"
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "轻阅", .applicationVersion: "\(version) · Mac 构建 \(build)", .credits: NSAttributedString(string: "轻量、本机、原生。\nTXT · JSON · YAML · Markdown · 配置文件")])
     }
     private func buildMenus() {
         let main = NSMenu()
@@ -51,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reopen.submenu = codecs; file.addItem(reopen); file.addItem(.separator())
         item(file, "清除最近文件记录", #selector(ReaderWindow.clearRecent(_:)), target: reader)
         item(file, "关闭标签", #selector(ReaderWindow.closeCurrent(_:)), "w", target: reader)
+        item(file, "复制当前文件路径", #selector(ReaderWindow.copyCurrentPath(_:)), target: reader)
+        item(file, "在 Finder 中显示", #selector(ReaderWindow.revealCurrentFile(_:)), target: reader)
         let edit = submenu("编辑")
         item(edit, "撤销", #selector(ReaderWindow.undoEdit(_:)), "z", target: reader); item(edit, "重做", #selector(ReaderWindow.redoEdit(_:)), "z", shift: true, target: reader); edit.addItem(.separator())
         item(edit, "剪切", #selector(NSText.cut(_:)), "x"); item(edit, "复制", #selector(NSText.copy(_:)), "c"); item(edit, "粘贴", #selector(NSText.paste(_:)), "v"); item(edit, "全选", #selector(NSText.selectAll(_:)), "a")
@@ -65,9 +69,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item(view, "切换明亮 / 深色", #selector(ReaderWindow.toggleTheme(_:)), "t", shift: true, target: reader)
         item(view, "显示 / 隐藏侧栏", #selector(ReaderWindow.toggleSidebar(_:)), "b", target: reader)
         item(view, "自动换行", #selector(ReaderWindow.toggleWrap(_:)), target: reader)
+        item(view, "专注 / 退出专注", #selector(ReaderWindow.toggleFocus(_:)), "f", shift: true, target: reader)
+        item(view, "上一个标签", #selector(ReaderWindow.previousTab(_:)), "[", shift: true, target: reader)
+        item(view, "下一个标签", #selector(ReaderWindow.nextTab(_:)), "]", shift: true, target: reader)
+        for index in 0..<9 {
+            let entry = NSMenuItem(title: index == 8 ? "最后一个标签" : "标签 \(index + 1)", action: #selector(ReaderWindow.selectNumberedTab(_:)), keyEquivalent: "\(index + 1)")
+            entry.target = reader; entry.tag = index; view.addItem(entry)
+        }
         item(view, "放大字体", #selector(ReaderWindow.increaseFont(_:)), "+", target: reader)
         item(view, "缩小字体", #selector(ReaderWindow.decreaseFont(_:)), "-", target: reader)
-        item(view, "Markdown 标题目录", #selector(ReaderWindow.showOutline(_:)), "o", shift: true, target: reader)
+        item(view, "文档目录", #selector(ReaderWindow.showOutline(_:)), "o", shift: true, target: reader)
         let help = submenu("帮助"); item(help, "使用说明", #selector(ReaderWindow.showGuide(_:)), target: reader)
         NSApp.mainMenu = main
     }

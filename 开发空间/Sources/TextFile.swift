@@ -258,14 +258,15 @@ final class TextFile {
         // Explicit overwrite also applies to a clean snapshot whose disk file
         // changed or disappeared. Do not report a successful save without writing.
         if sameDestination, !isDirty, !allowOverwrite { return }
-        if lineEnding == .mixed && (textChanged || codec != baselineCodec || !sameDestination) {
-            // An untouched mixed-newline file can be copied byte-for-byte when available.
-            if !(!textChanged && codec == baselineCodec && originalData != nil) {
+        let data: Data
+        if lineEnding == .mixed {
+            // A real write must either copy the untouched original bytes or use
+            // a newline format explicitly selected by the user. Recovery stores
+            // normalized text, and large files may have no raw snapshot, so a
+            // clean baseline alone cannot reconstruct mixed newline sequences.
+            guard !textChanged, codec == baselineCodec, let original = originalData else {
                 throw TextFileError.mixedLineEndings
             }
-        }
-        let data: Data
-        if lineEnding == .mixed, !textChanged, codec == baselineCodec, let original = originalData {
             data = original
         } else {
             let useBOM = codec == baselineCodec ? hasBOM : true

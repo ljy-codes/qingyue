@@ -207,6 +207,20 @@ enum TextFeatures {
         let metadataEnd = frontmatterEnd(sourceLines)
         var index = 0
         while index < sourceLines.count {
+            let sourceStart = sourceLines[index].range.location
+            let displayStart = output.length
+            // The renderer deliberately records block ranges rather than
+            // pretending that removed Markdown punctuation maps character-wise.
+            // `index` points to the first unconsumed line when this scope exits,
+            // including early `continue` paths for fences, tables and metadata.
+            defer {
+                if output.length > displayStart {
+                    let sourceEnd = index < sourceLines.count ? sourceLines[index].range.location : (text as NSString).length
+                    let sourceRange = NSRange(location: sourceStart, length: max(0, sourceEnd - sourceStart))
+                    output.addAttribute(NSAttributedString.Key("qingyue.sourceRange"), value: NSValue(range: sourceRange),
+                                        range: NSRange(location: displayStart, length: output.length - displayStart))
+                }
+            }
             let line = sourceLines[index]
             let trimmed = line.text.trimmingCharacters(in: .whitespaces)
             if let end = metadataEnd, index <= end {

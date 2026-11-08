@@ -6,6 +6,9 @@ reader_project_dir="$(cd "$reader_script_dir/.." && pwd)"
 reader_product_dir="$(cd "$reader_project_dir/.." && pwd)/交付产品"
 reader_build_dir="$reader_project_dir/build"
 reader_app_dir="$reader_product_dir/轻阅.app"
+reader_info_plist="$reader_project_dir/Resources/Info.plist"
+reader_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$reader_info_plist")"
+reader_build_number="$(/usr/bin/plutil -extract CFBundleVersion raw "$reader_info_plist")"
 
 mkdir -p "$reader_build_dir/ModuleCache" "$reader_product_dir"
 reader_sources=("$reader_project_dir"/Sources/*.swift)
@@ -15,7 +18,7 @@ if [ ! -f "${reader_sources[0]}" ]; then
 fi
 
 reader_sdk="$(/usr/bin/xcrun --show-sdk-path)"
-echo "正在编译轻阅 · Intel macOS 13+"
+echo "正在编译轻阅 $reader_version（Mac 构建 $reader_build_number）· Intel macOS 13+"
 /usr/bin/xcrun swiftc \
     -O -whole-module-optimization \
     -target x86_64-apple-macosx13.0 \
@@ -31,7 +34,7 @@ echo "正在编译轻阅 · Intel macOS 13+"
 
 mkdir -p "$reader_app_dir/Contents/MacOS" "$reader_app_dir/Contents/Resources"
 /bin/cp "$reader_build_dir/LightReader" "$reader_app_dir/Contents/MacOS/LightReader"
-/bin/cp "$reader_project_dir/Resources/Info.plist" "$reader_app_dir/Contents/Info.plist"
+/bin/cp "$reader_info_plist" "$reader_app_dir/Contents/Info.plist"
 /bin/cp "$reader_build_dir/AppIcon.icns" "$reader_app_dir/Contents/Resources/AppIcon.icns"
 /bin/cp "$reader_project_dir/../操作指导/使用说明.md" "$reader_app_dir/Contents/Resources/使用说明.md"
 /bin/cp "$reader_project_dir/Samples/示例.md" "$reader_app_dir/Contents/Resources/示例.md"
@@ -39,5 +42,6 @@ mkdir -p "$reader_app_dir/Contents/MacOS" "$reader_app_dir/Contents/Resources"
 /usr/bin/codesign --force --sign - "$reader_app_dir"
 /usr/bin/codesign --verify --deep --strict "$reader_app_dir"
 
-echo "构建完成：$reader_app_dir"
+echo "构建完成：轻阅 $reader_version（Mac 构建 $reader_build_number）"
+echo "$reader_app_dir"
 /usr/bin/du -sh "$reader_app_dir"

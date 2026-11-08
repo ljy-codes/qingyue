@@ -107,6 +107,72 @@ struct FileCoreTests {
             try expect(String(contentsOf: url, encoding: .utf8) == "甲\r\n乙\r\n丙\r\n丁新", "explicit conversion")
         }
 
+        try test("Recovered clean mixed text cannot silently normalize on overwrite or Save As") {
+            let url = directory.appendingPathComponent("recovered-mixed.txt")
+            let copy = directory.appendingPathComponent("recovered-mixed-copy.txt")
+            let recovery = directory.appendingPathComponent("mixed-recovery/state.json")
+            let original = Data("a\r\nb\nc\r".utf8)
+            try original.write(to: url)
+            let file = try TextFile.open(url)
+            let baseline = file.text
+            file.text += "草稿修改"
+            try TextFile.writeRecovery([file], to: recovery)
+            let restored = try TextFile.recovery(from: recovery)[0]
+            restored.text = baseline
+            try expect(!restored.isDirty && restored.originalData == nil, "recovered text can return to a clean baseline without raw bytes")
+            try restored.save()
+            try expect(Data(contentsOf: url) == original, "ordinary unchanged save is still a byte-preserving no-op")
+            try expectError({ try restored.save(to: copy) }, matching: .mixedLineEndings)
+            try expect(!fm.fileExists(atPath: copy.path), "refused Save As creates no converted file")
+
+            let external = Data("external content\r\n".utf8)
+            try external.write(to: url)
+            try expectError({ try restored.save() }, matching: .externalChange)
+            try expectError({ try restored.save(allowOverwrite: true) }, matching: .mixedLineEndings)
+            try expect(Data(contentsOf: url) == external, "overwrite approval does not authorize newline conversion")
+            try expect(restored.text == baseline && restored.lineEnding == .mixed, "refused write retains recovered text and format state")
+            restored.lineEnding = .crlf
+            try restored.save(allowOverwrite: true)
+            try expect(Data(contentsOf: url) == Data("a\r\nb\r\nc\r\n".utf8), "explicit newline choice permits the overwrite")
+            try expect(!restored.isDirty, "explicit converted save establishes a new baseline")
+        }
+
+        try test("Large uncached mixed snapshots require explicit conversion for every real write") {
+            let url = directory.appendingPathComponent("large-mixed.txt")
+            let copy = directory.appendingPathComponent("large-mixed-copy.txt")
+            let original = Data((String(repeating: "x", count: 4 * 1024 * 1024 + 16) + "\r\n甲\n乙\r").utf8)
+            try original.write(to: url)
+            let file = try TextFile.open(url)
+            try expect(file.originalData == nil && file.lineEnding == .mixed && !file.isDirty, "large mixed input deliberately has no raw cache")
+            try file.save()
+            try expect(Data(contentsOf: url) == original, "large clean no-op retains exact mixed bytes")
+            try expectError({ try file.save(to: copy) }, matching: .mixedLineEndings)
+            try expect(!fm.fileExists(atPath: copy.path), "large Save As does not silently normalize")
+            let external = Data("other process".utf8)
+            try external.write(to: url)
+            try expectError({ try file.save(allowOverwrite: true) }, matching: .mixedLineEndings)
+            try expect(Data(contentsOf: url) == external, "large clean overwrite refuses format loss")
+            file.lineEnding = .lf
+            try file.save(allowOverwrite: true)
+            try expect(Data(contentsOf: url) == Data(file.text.utf8), "an explicit LF choice writes the normalized snapshot")
+        }
+
+        try test("Untouched cached mixed snapshots retain exact bytes when copied or explicitly overwritten") {
+            for codec in TextCodec.allCases {
+                let url = directory.appendingPathComponent("cached-mixed-\(codec.rawValue).txt")
+                let copy = directory.appendingPathComponent("cached-mixed-copy-\(codec.rawValue).txt")
+                let original = try codec.encode("甲\r\n乙\n丙\r")
+                try original.write(to: url)
+                let file = try TextFile.open(url)
+                try file.save(to: copy)
+                try expect(Data(contentsOf: copy) == original, "cached Save As preserves mixed bytes and \(codec.label)")
+                try Data("external".utf8).write(to: copy)
+                try file.save(allowOverwrite: true)
+                try expect(Data(contentsOf: copy) == original, "cached overwrite restores exact mixed bytes and \(codec.label)")
+                try expect(file.lineEnding == .mixed && !file.isDirty, "byte copy keeps clean mixed state")
+            }
+        }
+
         try test("Cached raw bytes are a snapshot even when another process writes in place") {
             let url = directory.appendingPathComponent("snapshot.txt")
             let original = Data((String(repeating: "A", count: 3 * 1024 * 1024) + "\r\n\n").utf8)
