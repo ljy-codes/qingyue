@@ -1,0 +1,58 @@
+<DrawingImage xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+  <DrawingImage.Drawing>
+    <DrawingGroup>
+      <!-- The transparent artboard keeps every export on the same 512-unit grid. -->
+      <GeometryDrawing Brush="Transparent">
+        <GeometryDrawing.Geometry>
+          <RectangleGeometry Rect="0,0,512,512"/>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+
+      <!-- Fresh cyan to vivid blue, with a clear silhouette on both desktop tones. -->
+      <GeometryDrawing>
+        <GeometryDrawing.Brush>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="0.85,1">
+            <GradientStop Color="#16B8C8" Offset="0"/>
+            <GradientStop Color="#258DE0" Offset="0.48"/>
+            <GradientStop Color="#4A67DE" Offset="1"/>
+          </LinearGradientBrush>
+        </GeometryDrawing.Brush>
+        <GeometryDrawing.Pen>
+          <Pen Thickness="2">
+            <Pen.Brush>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#7DE3E0" Offset="0"/>
+                <GradientStop Color="#7792EE" Offset="1"/>
+              </LinearGradientBrush>
+            </Pen.Brush>
+          </Pen>
+        </GeometryDrawing.Pen>
+        <GeometryDrawing.Geometry>
+          <RectangleGeometry Rect="16,16,480,480" RadiusX="108" RadiusY="108"/>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+
+      <!-- Two broad leaves, with a full one-pixel spine gap even at 16 px.
+           The rising right leaf suggests light opening out of the book.
+           No lettering, page rules, effects, or size-dependent decoration. -->
+      <GeometryDrawing Geometry="M 104,173 C 153,158 201,173 240,205 L 240,363 C 201,337 152,324 104,330 C 98,331 94,327 94,320 L 94,185 C 94,179 98,175 104,173 Z">
+        <GeometryDrawing.Brush>
+          <LinearGradientBrush StartPoint="0.2,0" EndPoint="0.85,1">
+            <GradientStop Color="#FFF9EB" Offset="0"/>
+            <GradientStop Color="#FFFFFF" Offset="0.55"/>
+            <GradientStop Color="#E7F7F5" Offset="1"/>
+          </LinearGradientBrush>
+        </GeometryDrawing.Brush>
+      </GeometryDrawing>
+      <GeometryDrawing Geometry="M 272,205 C 310,165 359,139 408,139 C 414,139 418,143 418,150 L 418,320 C 418,327 414,331 408,330 C 357,324 309,337 272,363 Z">
+        <GeometryDrawing.Brush>
+          <LinearGradientBrush StartPoint="0.1,0" EndPoint="0.9,1">
+            <GradientStop Color="#EEFFFE" Offset="0"/>
+            <GradientStop Color="#D6FAF6" Offset="0.5"/>
+            <GradientStop Color="#ADF0EB" Offset="1"/>
+          </LinearGradientBrush>
+        </GeometryDrawing.Brush>
+      </GeometryDrawing>
+    </DrawingGroup>
+  </DrawingImage.Drawing>
+</DrawingImage>

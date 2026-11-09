@@ -1,0 +1,11 @@
+<Solution>
+  <Project Path="src/Qingyue.Core/Qingyue.Core.csproj" />
+  <Project Path="src/Qingyue.Windows/Qingyue.Windows.csproj" />
+  <Project Path="tests/Qingyue.FileTests/Qingyue.FileTests.csproj" />
+  <Project Path="tests/Qingyue.TextTests/Qingyue.TextTests.csproj" />
+  <Project Path="tests/Qingyue.UITests/Qingyue.UITests.csproj" />
+  <Project Path="tests/Qingyue.EditingTests/Qingyue.EditingTests.csproj" />
+  <Project Path="tests/Qingyue.MarkdownTests/Qingyue.MarkdownTests.csproj" />
+  <Project Path="tests/Qingyue.FileTests/TextPositionTests/TextPositionTests.csproj" />
+  <Project Path="tests/Qingyue.TextTests/Audit/WpfAudit.csproj" />
+</Solution>

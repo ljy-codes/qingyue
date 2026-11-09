@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup><Compile Remove="WpfAudit.cs;Audit/**/*.cs" /></ItemGroup>
+  <PropertyGroup Condition="'$(TextOnlyBootstrap)' == 'true'">
+    <DefineConstants>$(DefineConstants);TEXT_ONLY_BOOTSTRAP</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(TextOnlyBootstrap)' != 'true'">
+    <ProjectReference Include="../../src/Qingyue.Core/Qingyue.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TextOnlyBootstrap)' == 'true'">
+    <Compile Include="../../src/Qingyue.Core/DocumentTypes.cs" Link="Core/DocumentTypes.cs" />
+    <Compile Include="../../src/Qingyue.Core/TextServices.cs" Link="Core/TextServices.cs" Condition="Exists('../../src/Qingyue.Core/TextServices.cs')" />
+    <Compile Include="../../src/Qingyue.Core/LanguageCatalog.cs" Link="Core/LanguageCatalog.cs" />
+    <Compile Include="../../src/Qingyue.Core/FormattingServices.cs" Link="Core/FormattingServices.cs" />
+    <Compile Include="../../src/Qingyue.Core/SearchEngine.cs" Link="Core/SearchEngine.cs" Condition="Exists('../../src/Qingyue.Core/SearchEngine.cs')" />
+    <Compile Include="../../src/Qingyue.Core/ReadingModel.cs" Link="Core/ReadingModel.cs" Condition="Exists('../../src/Qingyue.Core/ReadingModel.cs')" />
+  </ItemGroup>
+</Project>

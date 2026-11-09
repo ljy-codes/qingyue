@@ -1,0 +1,347 @@
+# Windows 验收记录
+
+## 2026-11-09｜WIN-BUILD2-20261109｜0.2.0 构建 2（本机升级与验收完成）
+
+本轮只修改 Windows 与其说明，延续 `feat/windows-client` 工作区；以下为开发验收时的记录，
+验收完成时尚未提交或推送代码，也未发布 GitHub Release。
+核心链路为原生编辑器 → DocumentFile → 原子保存 / WorkspaceStore 草稿，新增显示层只读，
+没有数据库、Redis、MQ、外部服务或账号权限链路。
+
+| 维度 | 适用性及执行范围 | 当前状态 |
+| --- | --- | --- |
+| 正常/异常/边界输入 | JSON 重复键/数字词法、TXT 空白、MD 围栏/硬换行/编辑中间态、Unicode | 最终 Core 34/34、MD 12/12；410 次编辑中间态通过 |
+| 旧数据/兼容 | 保留既有语言编号和会话结构；恢复草稿、编码、换行 | 最终文件核心 25/25 与 WPF 恢复流程通过 |
+| 生命周期/幂等 | 新建、重命名、保存、撤销、切换、关闭/恢复、安装/升级/卸载 | 最终编辑 30/30；隔离安装 25/25、清理 10/10、目录 10/10 |
+| 原子性/并发/异步 | 保存失败保留正文；草稿串行写；目录/修改条/预览防抖与取消 | 最终 WPF 148 项通过，含 41 项高亮缓存/结构/实际控件重入回归 |
+| 页面交互/性能 | 分屏、结构、深浅主题；长行、大文档高亮预算；包体/安装耗时 | ZIP 263 文件一致；已安装版 MD 深浅主题、分屏、格式化通过；修复后 0%、中途、100% 真实进度可见 |
+| 权限/收尾 | 临时目录/HKCU 隔离安装身份，禁止关闭用户窗口或删除真实资料 | 最终正式包经真实 Explorer 原位升级至 0.2.0.2，263 文件、登记、快捷方式及资料保留通过 |
+| SQL/Redis/MQ/跨服务 | 应用完全本地，无上述依赖 | 不适用 |
+
+首轮确认与修复记录：
+
+- `B2-MD-01`：MD 缺乏层次；加入编辑分色、标题字号与留白、引用/代码/表格及分屏预览。
+- `B2-TEST-01`：浅色对比度失败读取了离屏控件旧资源；显示编辑器后同一阈值通过，测试改为验证可见控件。
+- `B2-VIEW-01`：静态审查发现 JSON 结构中切语言可能无法返回；已增加自动退出及回归。
+- `B2-MD-02`：阅读点击预览、预览首帧复用旧文档；已按审查补修，最终 WPF 流程通过。
+- `B2-KIND-01`：未保存改名不按 SuggestedName 识别，以及阅读中改扩展名旧模型；已补修，最终 WPF 流程通过。
+- `B2-HIGHLIGHT-01`：长行预算、跨视觉折行字符串/块注释、字段预览长度；已修补并通过正式 WPF 测试入口。
+- `B2-HIGHLIGHT-02`：WPF `AppendText` 布局重入先于语法层的 `TextChanged`，导致按新行范围查询旧缓存越界。修复为布局前同步 `Editor.Text`、渲染重入保护与快照一致性检查；隐藏 HWND 中的真实控件回归覆盖 JSON/JSONC/MD 追加、缩短、撤销与超限恢复，最终全通过。
+- `B2-PACK-01`：首次发布将转义语言列表作为一个文化参数处理，遗漏 zh-Hans；必要文件检查阻止替换旧交付目录。去掉 CLI 语言筛选，改为对完成的暂存目录精确过滤，简体资源与全部主运行时文件保留，重新发布通过。
+- `B2-INSTALL-UI-01`：真实进度页的定位占位控件 `1018` 可见，遮挡带 `WS_CLIPSIBLINGS` 的整个子页；UIA 数值正常但画面空白。仅把该定位控件设为隐藏，保留坐标和进度计算。新增独立绘制回归，修复前 4 项遮挡检查失败，修复后 19/19 通过。
+
+最终复验的本轮尝试（保留失败来源，不计旧日志为通过）：
+
+- 沙箱内 Release 构建成功、0 警告/0 错误；文件测试因原子替换和 ACL 被沙箱拒绝为 13/25，属于执行权限问题。
+- 正常 Windows 权限重跑：文件核心 25/25、文本与格式 34/34；WPF 在 `B2-HIGHLIGHT-02` 失败，整套退出 1，尚不能发布。
+- 最终 `scripts/test.ps1` 退出 0：Release 构建 0 警告/错误，文件 25/25、文本/格式 34/34、WPF 148 项、编辑 30/30、Markdown 12/12、位置索引 5/5，阅读指针审查 0 失败。
+- `JsonSyntaxChecks.Check` 已接入正常 WPF 测试入口，新增的 41 项不会只停留在临时独立测试。最终输出为 `开发空间/Windows/artifacts/windows-build2-final-tests.log`。
+- Computer Use 已查看构建 2 单页安装界面和“浏览”目录对话框；首屏路径、快捷方式选择、“开始安装”及蓝青书页图标显示正常，未通过该窗口执行安装或卸载。
+
+数据与副作用：测试文档为合成内容，UI/文件测试使用独立临时资料目录；未触碰真实文档。
+安装矩阵使用 QingyueInstallerTest 产品身份。早期临时 `SyntaxChecks.exe` 异常弹窗的
+Computer Use 捕获曾失败，未强制操作；最终检查桌面已无轻阅/安装测试窗口。
+真实 IME 候选、屏幕阅读器、多系统/缩放、完整 CommonMark/GFM 仍不属于已验收项目。
+
+16:31 本机阶段记录：
+
+- 正式包安装至原位置 `D:\Program File\Qingyue`，安装结果 `Status=passed`、`Passed=true`；263 个发布文件逐个散列、版本、真实 HKCU 登记和两类快捷方式通过。安装前后真实资料摘要相同。
+- 使用独立资料目录启动已安装 EXE，Computer Use 实测 Markdown 自动识别、分级标题/引用/列表/代码块、左右分屏、格式化按钮及深浅主题；橙色未保存修改条可见。选择“保留草稿”正常退出，真实资料全部文件与目录复核不变。
+- 发现 `B2-INSTALL-UI-01`：进度页 UIA 有 0/84/100% 文字及进度值，实际画面中进度条、阶段与文件列表全部不可见。应用本身验收通过，安装器视觉验收尚未通过；正在修复并将重建安装 EXE，不能把本次安装结果当作视觉问题已解决。
+- 证据：`artifacts/installer/build2-local-install-20261109-154132-987-a80cb77774ee4e50a1ff91ed569c155c-result.json`、`artifacts/windows-build2-local-gui-checks.json`（均相对 Windows 工程目录）。
+
+16:41 最终复验与交付：
+
+- `scripts/test-installer-theme.ps1` 实际退出 0，19/19 通过，覆盖父子位置、兄弟遮挡、84% 条形填充像素、100%/失败文字及卸载原生进度。测试在未激活的独立桌面运行，没有执行安装或卸载。
+- 重建正式安装 EXE 后，再经真实 Explorer 原位升级。桌面实际看到 **0%**、**中途 73%**（同次 UIA 为 71%，截取时间不同）和 **100%** 的阶段文字、进度条及文件列表，首屏和完成页正常。取消自动启动后退出。
+- 最终安装结果 `Status=passed`、`Passed=true`、`RealProfileUnchanged=true`，263 个载荷文件逐个哈希通过，144 个清单外旧语言文件保留。应用、DLL、卸载器均为 0.2.0.2，快捷方式和真实卸载登记正确。
+- 最终应用的全部 263 个载荷哈希与前述 GUI 冒烟所测版本相同，故安装器资源修复后未重复运行整套应用测试。安装 EXE 重建通过，ZIP 不变。
+- 最终摘要：`artifacts/windows-build2-final-delivery.json`；安装证据：`artifacts/installer/build2-local-install-20261109-163829-651-8e7a806c949f49639c36747299b014e1-result.json`。
+
+| 产物 | 字节 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.2.0-Windows构建2-x64-setup.exe` | 43,657,520 | `DEC72AFB45472B41471EE15872B473C6B4C97598408949FAA570B21AD64454DB` |
+| `交付产品/轻阅-0.2.0-Windows构建2-x64.zip` | 62,144,245 | `917CF64459BC32DB6A5214AE875076AC51AE279DBC5299A94509B7BE332EAB19` |
+| `交付产品/轻阅-Windows-x64` | 138,871,472 | 263 文件，与 ZIP 逐个一致 |
+
+兼容性：会话、草稿及语言编号保持兼容，无数据迁移；Mac 未修改。包体比历史路径修复版小 925,986 字节（约 2.08%），同压缩方式的纯解压对照没有证明提速。本机向导耗时包含授权、截图及点击等待，不能用作纯安装耗时。
+边界：本地包未签名，Markdown 为轻量原生解析且分屏限 20 万 UTF-16 单元；完整 CommonMark/GFM、多系统/DPI/IME 和屏幕阅读器未验收。中断安装仍可能留下部分程序文件，没有完整事务回滚。
+
+本轮主要修改文件（路径相对于 `开发空间/Windows/`，完整实现与测试随 Windows 分支提交）：
+
+| 文件 | 修改原因 |
+| --- | --- |
+| `src/Qingyue.Windows/MainWindow.Markdown.cs`、`MarkdownPreview.cs`、`MarkdownSyntax.cs`、`ReadingRenderer.cs` | Markdown 语法分色、分屏生命周期与有层次的原生预览；预览保持只读。 |
+| `src/Qingyue.Windows/MainWindow.Formatting.cs`、`JsonSyntaxLayer.cs` | 明显的格式化入口、JSON 分色/结构及长行和布局重入保护。 |
+| `src/Qingyue.Windows/MainWindow.Editing.cs`、`EditorTab.cs` | 新文件编号、标签排序、片段/逻辑行选择及橙绿修改状态。 |
+| `src/Qingyue.Core/FormattingServices.cs`、`LanguageCatalog.cs` | 格式化数据完整性、TXT/MD 等处理及兼容追加语言识别。 |
+| `installer/qingyue.nsi`、`theme.cpp`、`wizard.rc`、`version.nsh` | 单页安装设置、真实工作量进度、定位占位遮挡修复及构建版本。 |
+| `scripts/publish.ps1`、`build-installer.ps1` | 暂存发布和必要文件校验、卫星语言过滤、压缩与载荷进度。 |
+| `installer/tests/theme-visibility.cpp`、`scripts/test-installer-theme.ps1`、相关 Core/WPF/MD/编辑测试 | 对数据、交互和真实绘制缺陷进行回归验证。 |
+| `docs/`、根 README/CHANGELOG、Windows 使用说明与示例 | 同步能力、版本、兼容边界和实测证据；Mac 源码不变。 |
+
+---
+
+# Windows 构建 1 验收（历史）
+
+日期：2026-11-09，时区 Asia/Shanghai。产品版本 0.1.0，Windows 构建 1。
+仓库基线 `d80950e54eb627222b2830480fbf63ecd4796a8c`，工作分支 `feat/windows-client`。
+本地源码、测试和产物均已生成，未提交、推送或发布 GitHub Release。
+
+## 环境与范围
+
+| 项目 | 实际环境 |
+| --- | --- |
+| 系统 | Windows x64，build 26300.9818，DisplayVersion 26H2 |
+| SDK | .NET SDK 10.0.400 |
+| 运行时 | Microsoft.NETCore.App / Microsoft.WindowsDesktop.App 10.0.11 |
+| 界面 | .NET 10 + WPF，原生 TextBox / FlowDocument |
+| 平台目标 | win-x64，面向 Windows 10 22H2 / Windows 11；其他版本未实机验收 |
+| 第三方组件 | 无第三方 NuGet 依赖 |
+
+Windows 工程新增在 `开发空间/Windows`。文件、搜索、格式、阅读模型与界面分别实现；
+相关变更包括根 README、CHANGELOG、Windows 平台记录、使用说明、计划和忽略规则。
+Swift 源码、Mac 构建脚本和 Mac 历史验收未改动；本机未重测 Mac 客户端。
+Windows 与 Mac 的会话及偏好独立，不承诺互读草稿。
+
+## 构建与自动检查
+
+在仓库根目录使用 PowerShell 7：
+
+```powershell
+pwsh -File 开发空间/Windows/scripts/test.ps1
+pwsh -File 开发空间/Windows/scripts/publish.ps1
+```
+
+原始完整测试和本轮构建、界面回归及发布均退出 0。Release 编译 0 警告、0 错误。
+本轮只调整主题、下拉控件样式和图标，重新执行构建及 WPF 流程；文件、文本与安装器安全矩阵沿用此前验收。
+测试命令会编译全部 7 个项目，再执行下面各套检查。
+真实 ACL/File.Replace 和 GUI 测试在允许 Windows 文件权限及交互桌面的环境运行。
+
+| 检查 | 结果 | 主要覆盖 |
+| --- | --- | --- |
+| 文件与草稿核心 | 25/25 组通过 | 编码字节往返、外部冲突、覆盖、混合换行、占用/只读、重命名、ACL、硬链接/重解析点、损坏隔离、串行写入及清除 |
+| 文本、搜索与阅读模型 | 23/23 组通过 | Unicode、全词、正则捕获/超时/限额、替换原子性、JSON 数值与重复键、Markdown 映射、HTML 惰性文字 |
+| WPF 真实控件流程 | 75 项通过 | 原有 33 项流程，以及深浅主题正文/行号对比度、三种下拉框展开/选择/焦点/关闭、展开时主题切换 |
+| 文本位置索引 | 5/5 组通过 | 空文本与边界、中文/emoji、LF/CR/CRLF、随机对照、百万 UTF-16 单元 |
+| WPF TextPointer 映射审查 | 0 失败 | 原文、多行、中文/emoji、Markdown 跨块与表格 |
+
+完整输出：`开发空间/Windows/artifacts/windows-build1-tests.log`。
+本轮界面回归输出：`开发空间/Windows/artifacts/theme-dropdown-ui-tests.log`。
+控件流程摘要：`开发空间/Windows/artifacts/ui-results.json`。
+深浅与窄窗口截图：同目录 `windows-build1-dark.png`、`windows-build1-light-narrow.png`，已打开检查。
+石墨灰编辑视图：`windows-build1-dark-edit.png`；三种展开列表：`combo-{dark,light}-{KindCombo,CodecCombo,EndingCombo}.png`。
+
+## 11:40 主题、下拉框与亮色图标复验
+
+- 已复现原缺陷：`ComboBoxItem` 固定深色文字叠加深色 Popup 背景，新真实控件检查在原样式下失败。
+- `Theme.xaml` 为三个非可编辑下拉框统一定义主题模板，覆盖关闭、展开、悬停、选择及键盘焦点；保留 `PART_Popup`、原生选择与滚动容器。
+- `Theme.xaml` 与 `MainWindow.Reading.cs` 的深色画刷同步改为石墨灰：正文 `#3F3F3F`、文字 `#DCDCCC`、面板 `#333333`，浅色值不变。
+- `Assets/Qingyue.xaml` 仅调整渐变颜色，保留双书页轮廓；重新生成 ICO、256/512 PNG 与深浅底多尺寸预览，改为明亮蓝青渐变。
+- `tests/Qingyue.UITests/Program.cs` 增加真实渲染画刷对比度和状态检查；75 项全部通过。正文、行号及各下拉状态均达到 4.5:1。
+- 最终便携 EXE 使用 `artifacts/theme-smoke/profile` 隔离资料启动，桌面确认新标题栏图标、石墨灰正文和展开列表。实际操作 Down、Enter、F4、Escape，选择和开关正常；Alt+F4 正常退出，进程已结束。
+- 通过 requesting-code-review 技能进行限定范围只读审查，未发现 Critical/Important/Minor 问题。该审查未运行 UI，实际按键证据由前述桌面检查补充。
+- ZIP 内全部 407 个文件与便携目录逐个 SHA256 一致，独立 ICO 与源图标一致；正式安装包已重新生成。
+
+本轮修改范围为 `Theme.xaml`、`MainWindow.Reading.cs`、`Assets/Qingyue.xaml` 及生成图标、
+`tests/Qingyue.UITests/Program.cs`、CHANGELOG、Windows 使用说明与验收/状态记录。
+不修改文件保存、编码处理或草稿格式，无数据迁移；多系统、多显示器/缩放及屏幕阅读器仍属于未验收边界。
+安装器删除逻辑未修改，未重复运行完整卸载矩阵。
+
+**本机文件更新及安装进程环境检查**：用户关闭轻阅后，于 11:44:48 +08:00 使用本轮正式包在原位置覆盖，
+11:45:33 +08:00 完成 12/12 项脚本检查，407 个发布文件逐个 SHA256 一致。
+桌面实测新蓝青图标、石墨灰编辑区和展开的编码列表可读，Escape 收起、Alt+F4 正常退出。
+启动检查使用隔离资料目录；真实用户资料安装前、安装后及启动检查后摘要一致，设置、最近记录、会话和草稿保留。
+结果见 `开发空间/Windows/artifacts/installer/local-install-results.json`。该次卸载登记检查仅覆盖安装进程
+继承的注册表视图，当时未通过 Windows 设置实际搜索验收；用户随后反馈中文搜索无结果，修复记录如下。
+
+## 13:38 系统应用列表登记修复与恢复验收
+
+- 已确认原因：从开发执行环境启动安装程序时继承了注册表虚拟化视图。该环境能读取轻阅登记，
+  真实 Explorer 发起的只读探针却返回 `qingyue: null`，Windows 设置和“程序和功能”也看不到轻阅。
+- 11:59:25 +08:00 的真实桌面安装前记录为 `artifacts/installer/desktop-shell-probe.json`。
+  通过已有 Explorer 窗口的 `Document.Application.ShellExecute` 执行原正式安装包后，
+  安装、407 个发布文件逐个哈希、卸载登记、图标、快捷方式、资料保留和隔离启动均通过。
+- 安装期间用户锁屏，脚本等待隔离窗口正常退出超过 45 秒，因此
+  `desktop-install-run.json` 保留原失败结果；`desktop-install.log` 保留已通过的安装检查。
+  用户解锁后，通过桌面 Alt+F4 正常关闭同一隔离窗口，当前无轻阅进程。
+- 13:35:37 +08:00 的 `desktop-registration-after.json` 由真实 Explorer 子进程生成，
+  确认名称 `轻阅 · Qingyue`、版本 `0.1.0 (Windows 构建 1)`、卸载入口及明亮蓝青图标正确。
+  安装目录共 409 个文件，即 407 个发布文件、卸载器和归属标记；核心文件散列与修复前一致。
+- 桌面实测“设置 → 应用 → 安装的应用”，搜索“轻阅”找到 1 个应用，
+  显示 `轻阅 · Qingyue`、新蓝青图标、上述版本和 140 MB。
+- 真实用户资料安装前与恢复验收后 SHA256 摘要均为
+  `4BEF7C920D18B10984D5062FC6C264C1309F321B6D604FC7759DA6E8EBD1F5E3`；
+  桌面和开始菜单快捷方式正确，EnvDock 登记未变化。
+- 13:38:01 +08:00 恢复验收 12/12 项通过，结果为
+  `开发空间/Windows/artifacts/installer/desktop-registration-results.json`。
+  `package-results.json` 的本机最终结果已指向该记录；11:45 的初次检查记录和锁屏超时记录均保留。
+
+本次仅修复本机实际安装登记，补充诊断脚本、验收记录和状态文档；应用与安装器源码、交付包均未改变，
+无资料迁移或格式变化。从具有注册表虚拟化的开发环境安装时，应通过真实 Explorer 发起安装并在
+Windows 设置中验证中文搜索；普通用户从 Explorer 双击现有安装包即可。
+
+## 安装路径选择修复
+
+用户截图中的实际路径为 `D:\Program File`，目录内已有其他软件。
+旧版文件夹选择器把父目录直接作为最终安装位置，随后正确触发非空目录保护，但没有帮助用户生成专用子目录。
+
+- `installer/install-directory.nsh` 提供与真实“浏览”回调共用的路径处理：
+  选择父目录后添加 `Qingyue`；已有轻阅安装、自带 `Qingyue` 或 `轻阅` 目录名时保留原路径；
+  清理尾部分隔符，避免重复目录或反斜杠。这里只计算并显示路径，不创建或删除文件。
+- `installer/qingyue.nsi` 的浏览回调调用共享逻辑，安装位置页增加说明；
+  手动输入非轻阅非空目录时，错误明确说明应使用“浏览”或输入完整专用路径。
+- `scripts/test-installer-directory.ps1` 编译并运行只读 NSIS 回归程序，直接调用生产路径处理函数。
+  修复前 4 项失败，修复后 10/10 项通过，包含中文/空格、公共父目录、盘符、
+  尾部分隔符、现有自定义安装、空选择及父目录文件不变。
+- 重新构建测试安装器，安装/默认保留矩阵 25/25 项、共享生产彻底清理矩阵 10/10 项通过。
+  非轻阅非空目录、根目录、链接、版本与占用保护仍有效，真实用户资料逐文件哈希不变。
+  测试身份及其资料已由隔离清理流程移除。
+- 原始回归结果位于 `artifacts/installer/directory-selection/before-fix-results.json`、
+  同目录 `results.json`，安装/清理矩阵为 `artifacts/installer/test/` 下的结果文件。
+- 旧正式安装包仍被用户打开的向导占用，直接覆盖构建报 `Can't open output file`；
+  修复安装器另存为 `交付产品/轻阅-0.1.0-Windows构建1-x64-setup-路径修复.exe`，
+  构建记录为 `artifacts/installer/build-directory-fix-results.json`。原向导需退出后重新打开修复包。
+  桌面控制恢复两次均返回 `failed to activate captured window`，没有强行终止旧向导。
+- 修复正式包于 13:53:39 +08:00 编译完成，无编译警告；大小 44,583,506 字节。
+  407 个应用发布文件和便携 ZIP 均未改变，`package-results.json` 已指向新安装包并保留旧包信息。
+
+本次仅改变交互式“浏览”的路径选择及提示。手动完整路径、静默 `/D=`、升级/迁移规则、
+默认保留用户资料及卸载清理范围不变；应用正文、主题和草稿格式未修改。
+新修复安装器尚未替换本机应用，既有本机验收仍对应此前的安装包。
+
+## 关键修复与回归证据
+
+- 重启与阅读中切换类型使用实际阅读锚点；编辑后使旧目录失效并异步刷新。
+- 仅查找不再展开隐藏替换模板；CRLF 源文替换偏移正确，全部替换和格式化可撤销。
+- 光标、行号、滚动及会话捕获复用文本位置索引，避免每次移动都扫描全文前缀。
+- YAML 只说明缩进 Tab 检查，未提供完整校验的类型不显示完整“检查通过”。
+- 退出放弃当前标签后，会话不保留失效活动 ID，也不复活已放弃草稿。
+- 先命名的空文档能恢复名称；无内容无名称的默认空标签不产生无意义恢复项。
+- 首次加载生成完整行号；首次阅读通过控件 Padding 保留正文边距。
+- 实际打包程序暴露了空行行号重复：自定义编辑行距与 WPF 行索引方法使用的默认行距不一致。
+  新增 `甲\n\n乙\n\n丙` 真实控件检查，先观察到 `1,2,3,3,4` 失败，再统一为字体自然行距，
+  回归得到 `1,2,3,4,5`，最终包首次显示的示例行号也连续。
+
+独立审查历史和处理状态见 `开发空间/Windows/tests/Qingyue.TextTests/WPF-review.md`。
+
+## 最终交付包（含新图标与安装器）
+
+| 产物 | 路径 / 大小 |
+| --- | --- |
+| 可执行文件 | `交付产品/轻阅-Windows-x64/Qingyue.exe` |
+| 便携目录 | `交付产品/轻阅-Windows-x64`，407 个文件，146,872,087 字节（约 140.1 MiB） |
+| ZIP | `交付产品/轻阅-0.1.0-Windows构建1-x64.zip`，65,322,143 字节（约 62.3 MiB） |
+| 当前安装 EXE | `交付产品/轻阅-0.1.0-Windows构建1-x64-setup-路径修复.exe`，44,583,506 字节（约 42.5 MiB） |
+| 此前安装 EXE | `交付产品/轻阅-0.1.0-Windows构建1-x64-setup.exe`，44,595,274 字节；旧向导仍运行，未覆盖 |
+| 随包资料 | `Windows使用说明.md`、`安装器许可.txt`、独立图标、`示例/示例.md` 及文本/编码样例 |
+
+`Qingyue.runtimeconfig.json` 使用 `includedFrameworks`，随包包含 .NETCore 和 WindowsDesktop 10.0.11。
+这是自包含目录包，无需另装 .NET；必须保留整个目录，不能只复制 EXE。
+安装 EXE 同样包含运行时，提供当前用户安装、可选路径和系统卸载入口。
+当前未签名，无自动更新或系统文件关联。
+
+SHA256：
+
+```text
+Qingyue.exe
+590FDF2EEA6CC77BA59CC7457A814585AC812D2E7E3D93F0564E8BDE2D764DAB
+
+Qingyue.dll
+087F87C13F6C5C505468D914922190D407BE0CB7983EB02A2DCFDF8B9D70A279
+
+轻阅-0.1.0-Windows构建1-x64.zip
+D5D7C3F3B834F5845FE3A013B1A50FD2A9979E357A3616872DF74918E114CB8E
+
+轻阅-0.1.0-Windows构建1-x64-setup.exe
+DB8E127E00DEE5825CAB947BF7CCB5B6A24885340E500F7E8D962ABA86F1B10E
+
+轻阅-0.1.0-Windows构建1-x64-setup-路径修复.exe
+18B74EF7AD1C093F7E6C58A988B37834B36FF7E66987C477951B2437122925DD
+```
+
+应用逻辑在 DLL 中；EXE 是运行时入口，不能仅依靠 EXE 哈希判断源码是否更新。
+体积、运行时与哈希原始记录：`开发空间/Windows/artifacts/package-results.json`。
+
+## 客户端实机检查与采样
+
+通过 computer-use 操作最终打包的 EXE，使用环境变量 `QINGYUE_SUPPORT_DIRECTORY`
+将用户数据隔离到 `开发空间/Windows/artifacts/final-verified-profile`。
+已确认 Windows 示例首次打开、连续行号、切换原生 Markdown 阅读、中文排版及正文边距。
+Alt+F4 正常退出后，进程已不存在。此前候选包还实测了阅读内 Ctrl+F / F3 中文匹配，
+最终代码的同类搜索由完整 WPF 流程再次覆盖。
+
+2026-11-09 10:08:14 +08:00 的原便携包启动采样：到 `WaitForInputIdle` 为 632 ms，
+当时进程工作集 84,385,792 字节（约 80.5 MiB）。
+这不是严格冷启动或完整加载基准，也不代表长文档的常态或峰值占用。
+原始记录：`开发空间/Windows/artifacts/final-smoke-results.json`。
+
+位置索引检查中，百万 UTF-16 文本构建 3 ms、300,000 次查询 31 ms；
+只代表本机该检查，不是窗口输入延迟基准。
+WPF 综合测试包含百万字符替换模板等压力场景，测试进程工作集不作为日常应用占用。
+
+## 安装器、卸载与图标验收
+
+主题/图标安装器在 2026-11-09 11:39:31 +08:00 生成，路径修复包于 13:53:39 +08:00 生成；
+下表安装/默认保留和彻底清理矩阵已于 13:51 重新执行，分别通过 25 项和 10 项。
+卸载逻辑未变，路径新增回归另见前文。NSIS 3.11，原生主题和安全插件以
+MSVC x86 `/W4 /WX` 构建；正式包编译无警告。卸载界面预览故意不含安装/删除 section，
+其未引用回调/变量与未使用 instfiles 的 3 条警告仅属于无副作用预览程序。
+
+使用固定隔离产品身份 `QingyueInstallerTest`、独立 HKCU 登记、测试快捷方式与
+`%LOCALAPPDATA%\QingyueInstallerTest`，最终代码重新执行：
+
+```powershell
+pwsh -File 开发空间/Windows/scripts/test-installer.ps1
+pwsh -File 开发空间/Windows/scripts/test-installer-purge.ps1
+pwsh -File 开发空间/Windows/scripts/build-wizard-preview.ps1
+```
+
+| 检查 | 结果 | 主要覆盖 |
+| --- | --- | --- |
+| 安装与默认卸载 | 25/25 项通过 | 中文和空格自定义目录、逐文件哈希、注册/快捷方式、覆盖更新、降级/迁移拒绝、运行/占用保护、默认保留草稿与设置、未知文件保留、重装 |
+| 彻底清理 | 10/10 项通过 | 共用生产删除宏、草稿占用失败与保留卸载入口、重试成功、只读测试文件、嵌套联接和根联接拒绝、外部文档与未知安装文件保留 |
+| 卸载界面交互 | 预览实测通过 | 默认保留；选清理后进入独立确认页；未勾选时按钮禁用、勾选启用；后退再进入清空确认；取消关闭 |
+| 正式包本机文件安装 | 初次脚本 12/12 项通过 | 新主题与图标版本原位置覆盖、407 个发布文件逐个哈希、安装进程视图内登记/标记、新图标引用、真实资料不变、实际 EXE 启动与桌面正常退出；系统设置登记随后单独修复 |
+| 真实桌面登记与中文搜索 | 恢复验收 12/12 项通过 | 真实 Explorer 启动正式包，实际卸载登记、系统设置中文搜索、新图标、快捷方式、资料摘要、解锁后正常退出；保留原锁屏超时记录 |
+| 图标 | 多尺寸实测通过 | 矢量源生成 16/24/32/48/64/128/256 ICO；深浅底预览、EXE 与 WPF 图标、快捷方式独立 ICO 引用 |
+
+安装欢迎页、路径页与最终卸载预览已在本机查看，深蓝品牌侧栏、书页图标、文字和按钮正常显示。
+真实卸载器未通过桌面自动化执行删除：自动化策略限制直接操作卸载程序。
+删除行为通过同一生产宏的隔离测试验收，页面通过同一宏的无副作用预览验收；
+未对真实用户资料执行彻底清理。磁盘根目录仅使用不含安装/删除操作的校验程序验证。
+
+“彻底清理”范围固定为默认 `%LOCALAPPDATA%\Qingyue`，不包含外部文档或开发指定的资料目录。
+普通卸载和静默卸载默认保留资料，静默模式没有清理开关。安装文件按清单删除，未知文件保留；
+数据文件被占用时清理可部分完成，失败后保留卸载入口供重试。
+
+本机正式安装位置为 `C:\Users\nb-liuxinsheng\AppData\Local\Programs\Qingyue`。
+2026-11-09 11:45:33 +08:00 完成本轮文件覆盖及安装进程环境内检查，桌面/开始菜单引用明亮蓝青独立图标；
+系统应用列表登记当时仅检查了虚拟视图。13:38:01 +08:00 已完成真实桌面登记与设置中文搜索恢复验收。
+真实资料安装前后摘要一致；启动冒烟使用隔离资料目录，空白文档、石墨灰主题与编码下拉列表正常，Alt+F4 正常退出，
+确认进程已结束。该次到 `WaitForInputIdle` 为 793 ms，工作集 88,797,184 字节；
+仅是本机启动采样，不作为冷启动或常态占用保证。
+
+原始记录位于 `开发空间/Windows/artifacts/installer/`：
+`build-results.json`、`test/integration-results.json`、`test/purge-results.json`、
+`wizard-preview-results.json`、`local-install-results.json`、`desktop-shell-probe.json`、
+`desktop-registration-after.json`、`desktop-install.log`、`desktop-install-run.json`、
+`desktop-registration-results.json`。
+
+最终对 `qingyue.nsi`、`uninstall-pages.nsh`、`uninstall-actions.nsh`、`safety.cpp` 和
+`build-installer.ps1` 进行独立只读审查，未发现 P0/P1/P2 阻断项。
+
+## 兼容性、限制与未验收项
+
+- Markdown 为轻量原生排版，行内语法主要提取可见文字；不是完整 CommonMark/GFM，
+  不下载远程图片，不执行 HTML。源文与阅读内容按块近似定位。
+- Windows 构建 1 暂无配置语法着色、整行 Tab/Shift+Tab 缩进和换行继承缩进；
+  YAML 仅检查缩进 Tab，INI 无完整语法校验。
+- 文件上限 50 MiB，富文本阅读上限 200,000 UTF-16 单元，搜索上限 5,000,000 单元；
+  不承诺超大文本的编辑响应。保存失败保留正文，恢复草稿不自动写回原文件。
+- 针对只读、占用、ACL、链接和冲突采用保守保护；不支持可靠替换的文件系统可用另存为。
+  网络盘、断电/磁盘故障以及所有权限组合未做完整矩阵测试。
+- 未执行人工 IME 候选交互、屏幕阅读器、不同 Windows 版本、多显示器与各档缩放验收；
+  原生控件保留默认输入法行为，不等于这些项目已通过。
+- 已验证本机安装、同版本覆盖与降级保护；尚无跨版本升级实测，未执行签名和 SmartScreen 分发验收，未发布在线版本。
+
+后续补充 IME、无障碍、不同系统/缩放及网络文件系统验收，再决定正式签名与分发。

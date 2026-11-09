@@ -1,0 +1,122 @@
+using System.Diagnostics;
+using System.Text;
+using Qingyue.Windows;
+
+var tests = new (string Name, Action Run)[]
+{
+    ("空文本、负数和 Int32 边界", Boundaries),
+    ("中文、emoji、组合字符及换行字面映射", LiteralMapping),
+    ("LF、CR、CRLF、连续换行和尾换行", Newlines),
+    ("随机文本对照前缀规范化与线性反向查找", Differential),
+    ("1M UTF16 文本与 300000 次查询", MillionText),
+};
+int failures = 0;
+foreach (var test in tests)
+{
+    try { test.Run(); Console.WriteLine("PASS " + test.Name); }
+    catch (Exception ex) { failures++; Console.Error.WriteLine("FAIL " + test.Name + "\n" + ex); }
+}
+Console.WriteLine($"RESULT {tests.Length - failures}/{tests.Length} passed");
+return failures == 0 ? 0 : 1;
+
+static void Equal<T>(T actual, T expected)
+{
+    if (!EqualityComparer<T>.Default.Equals(actual, expected))
+        throw new Exception($"预期 {expected}，实际 {actual}");
+}
+static string Normalize(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+static void Boundaries()
+{
+    var index = new TextPositionIndex("");
+    foreach (var offset in new[] { int.MinValue, -1, 0, 1, int.MaxValue })
+    {
+        Equal(index.ToSource(offset), 0);
+        Equal(index.ToEditor(offset), 0);
+        Equal(index.Location(offset), (1, 1));
+        Equal(index.LogicalLineAt(offset), 1);
+    }
+    index = new TextPositionIndex("中😀\r\nx");
+    Equal(index.ToSource(int.MaxValue), 5);
+    Equal(index.ToEditor(int.MaxValue), 6);
+    Equal(index.Location(int.MaxValue), (2, 2));
+    Equal(index.ToSource(int.MinValue), 0);
+    Equal(index.ToEditor(int.MinValue), 0);
+    Equal(index.Location(int.MinValue), (1, 1));
+    try { _ = new TextPositionIndex(null!); }
+    catch (ArgumentNullException) { return; }
+    throw new Exception("null 文本必须拒绝");
+}
+static void LiteralMapping()
+{
+    var index = new TextPositionIndex("中😀\r\nx\ry\nZ");
+    int[] source = [0, 1, 2, 3, 4, 4, 5, 6, 7, 8, 9];
+    int[] editor = [0, 1, 2, 3, 5, 6, 7, 8, 9, 10];
+    (int, int)[] locations = [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 1), (2, 2), (3, 1), (3, 2), (4, 1), (4, 2)];
+    for (int i = 0; i < source.Length; i++)
+    {
+        Equal(index.ToSource(i), source[i]);
+        Equal(index.Location(i), locations[i]);
+        Equal(index.LogicalLineAt(i), locations[i].Item1);
+    }
+    for (int i = 0; i < editor.Length; i++) Equal(index.ToEditor(i), editor[i]);
+    var combining = new TextPositionIndex("e\u0301😀");
+    Equal(combining.Location(4), (1, 5)); // UTF-16 units, not grapheme clusters.
+}
+static void Newlines()
+{
+    foreach (var text in new[] { "a\nb", "a\rb", "a\r\nb", "\r\n", "\r", "\n", "\r\r\n\n", "a\n\n", "无换行😀", "😀\r\n中\r\ne\u0301\n" })
+        VerifyAgainstOracle(text);
+}
+static void Differential()
+{
+    var random = new Random(20261109);
+    string[] atoms = ["中", "😀", "e\u0301", "\r", "\n", "\r\n", "x", "\t", "\u2028"];
+    for (int sample = 0; sample < 100; sample++)
+    {
+        var builder = new StringBuilder();
+        for (int i = 0; i < 20; i++) builder.Append(atoms[random.Next(atoms.Length)]);
+        VerifyAgainstOracle(builder.ToString());
+    }
+}
+static void VerifyAgainstOracle(string raw)
+{
+    var index = new TextPositionIndex(raw);
+    var normalized = Normalize(raw);
+    for (int offset = -1; offset <= raw.Length + 1; offset++)
+    {
+        var prefix = Normalize(raw[..Math.Clamp(offset, 0, raw.Length)]);
+        Equal(index.ToSource(offset), prefix.Length);
+        var line = prefix.Count(c => c == '\n') + 1;
+        var column = prefix.Length - prefix.LastIndexOf('\n');
+        Equal(index.Location(offset), (line, column));
+        Equal(index.LogicalLineAt(offset), line);
+    }
+    for (int offset = -1; offset <= normalized.Length + 1; offset++)
+    {
+        int source = Math.Clamp(offset, 0, normalized.Length);
+        // Independent, deliberately slow oracle. The canonical raw position is
+        // the last prefix with that LF length, including a whole CRLF pair.
+        int expected = Enumerable.Range(0, raw.Length + 1).Last(i => Normalize(raw[..i]).Length == source);
+        Equal(index.ToEditor(offset), expected);
+        Equal(index.ToSource(index.ToEditor(offset)), source);
+    }
+}
+static void MillionText()
+{
+    string text = string.Concat(Enumerable.Repeat("中😀\r\nx\ry\nZ", 100_000));
+    Equal(text.Length, 1_000_000);
+    var timer = Stopwatch.StartNew();
+    var index = new TextPositionIndex(text);
+    long buildMs = timer.ElapsedMilliseconds;
+    timer.Restart();
+    for (int i = 0; i < 100_000; i++)
+    {
+        Equal(index.ToSource(i * 10 + 5), i * 9 + 4);
+        Equal(index.ToEditor(i * 9 + 4), i * 10 + 5);
+        Equal(index.LogicalLineAt(i * 10 + 5), i * 3 + 2);
+    }
+    Equal(index.ToSource(int.MaxValue), 900_000);
+    Equal(index.ToEditor(int.MaxValue), 1_000_000);
+    Equal(index.Location(int.MaxValue), (300_001, 2));
+    Console.WriteLine($"1M: build={buildMs}ms, 300000 queries={timer.ElapsedMilliseconds}ms");
+}

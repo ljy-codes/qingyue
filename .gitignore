@@ -7,3 +7,9 @@
 *.log
 .env
 .env.*
+**/bin/
+**/obj/
+开发空间/Windows/.dotnet-home/
+开发空间/Windows/**/artifacts/
+开发空间/Windows/.tmp/
+.dotnet-home/

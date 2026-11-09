@@ -2,11 +2,16 @@
 
 轻量的本地文本阅读与编辑工具：打开方便、阅读舒服、修改可靠。
 
-A lightweight local text reader and editor, starting with macOS.
+A lightweight local text reader and editor for macOS and Windows.
 
-当前产品版本仍为 **0.1.0**，本轮为 **Mac 构建 4**。下载：[Mac 构建 4 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)；[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.1.0 · Mac 构建 4**。下载：[Mac 构建 4 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)；[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
+
+Windows 当前为 **0.2.0 · 构建 2**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
+新增 TXT/Markdown 格式化、MD 分屏预览、JSON 分色与结构折叠、橙绿修改行提示，以及简化安装与真实进度；
+本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)，操作差异见 [Windows 使用说明](操作指导/Windows使用说明.md)。
+下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
 
 ## 当前功能
 
@@ -41,12 +46,18 @@ macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写�
 | --- | --- |
 | Intel Mac，macOS 13+ | 当前客户端和构建目标 |
 | Apple Silicon Mac | 尚未交付原生 ARM 包，也未做实机验收 |
-| Windows | 单独实现，当前没有客户端或安装包；[后续实现记录](docs/Windows后续实现.md) |
+| Windows x64 | 已实现 WPF 客户端、自包含便携包与深色安装/卸载向导；[实施记录](docs/Windows后续实现.md) |
 | Linux | 后续方向，尚未实施 |
 
-本机只处理 Mac 版本。Windows 的需求、差异和验证项记录在本仓库，留待 Windows 环境独立处理；不会将当前 Mac 界面或 Darwin 文件操作直接当作 Windows 实现。
+Windows 已在独立目录实现，测试与发布产物按平台记录。Mac 工程与历史验收保持原样。
 
 ## 构建与测试
+
+Windows：在 Windows / PowerShell 7 中执行 `pwsh -File 开发空间/Windows/scripts/test.ps1`，
+再用 `pwsh -File 开发空间/Windows/scripts/publish.ps1` 生成 `交付产品/轻阅-Windows-x64/Qingyue.exe` 与 ZIP。
+再用 `pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish` 生成安装 EXE。
+需要 .NET 10 SDK；安装器另需 NSIS 与 MSVC x86 工具链。自包含发布包含运行时。
+安装可选位置，卸载默认保留用户信息，彻底清理需二次确认。Windows 验收见 [docs/test.md](docs/test.md)。
 
 安装 Xcode Command Line Tools 后，在仓库根目录运行：
 

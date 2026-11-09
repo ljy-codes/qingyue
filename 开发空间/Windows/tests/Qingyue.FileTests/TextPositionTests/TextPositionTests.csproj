@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <!-- Keep generated .cs files under the parent test project's excluded obj/bin. -->
+    <BaseIntermediateOutputPath>../obj/TextPositionTests/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>../obj/TextPositionTests/</MSBuildProjectExtensionsPath>
+    <BaseOutputPath>../bin/TextPositionTests/</BaseOutputPath>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- .cs.test avoids the parent FileTests project's recursive .cs glob. -->
+    <Compile Include="Program.cs.test" />
+    <Compile Include="../../../src/Qingyue.Windows/TextPositionIndex.cs" Link="TextPositionIndex.cs" />
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

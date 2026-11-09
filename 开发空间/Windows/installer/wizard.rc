@@ -1,0 +1,38 @@
+#include <windows.h>
+#include <commctrl.h>
+
+// NSIS dialog/control IDs are its public ChangeUI contract.
+105 DIALOGEX 0, 0, 540, 310
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
+EXSTYLE WS_EX_CONTROLPARENT
+CAPTION "轻阅"
+FONT 9, "Microsoft YaHei UI"
+BEGIN
+    CONTROL "", 1100, "Static", SS_OWNERDRAW | WS_VISIBLE, 0, 0, 168, 310
+    LTEXT "QINGYUE / SETUP", 1101, 192, 24, 320, 12
+    LTEXT "", 1037, 192, 48, 320, 26
+    LTEXT "", 1038, 192, 80, 320, 24
+    // IDC_CHILDRECT is geometry only. A visible static here clips the entire
+    // WS_CLIPSIBLINGS instfiles page behind it, including progress and details.
+    LTEXT "", 1018, 192, 112, 320, 145, NOT WS_VISIBLE
+    CONTROL "", 1035, "Static", SS_ETCHEDHORZ | WS_VISIBLE, 192, 268, 320, 1
+    LTEXT "本地运行 · 无需额外运行库", 1028, 192, 283, 125, 12
+    PUSHBUTTON "上一步", 3, 320, 278, 58, 22, WS_TABSTOP
+    DEFPUSHBUTTON "下一步", 1, 384, 278, 64, 22, WS_TABSTOP
+    PUSHBUTTON "取消", 2, 454, 278, 58, 22, WS_TABSTOP
+END
+
+106 DIALOGEX 0, 0, 320, 145
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_CLIPSIBLINGS
+EXSTYLE WS_EX_CONTROLPARENT
+FONT 9, "Microsoft YaHei UI"
+BEGIN
+    LTEXT "", 1006, 0, 0, 320, 18, SS_PATHELLIPSIS
+    LTEXT "正在准备，请稍候", 1102, 0, 21, 320, 18
+    // NSIS's instruction counter remains available for uninstall; installation
+    // uses a separate byte-weighted bar so preflight instructions cannot fake 90%.
+    CONTROL "", 1004, "msctls_progress32", WS_VISIBLE | PBS_SMOOTH, 0, 42, 320, 10
+    CONTROL "", 1103, "msctls_progress32", NOT WS_VISIBLE | PBS_SMOOTH, 0, 42, 320, 10
+    PUSHBUTTON "查看详细信息", 1027, 0, 61, 86, 18, WS_TABSTOP
+    CONTROL "", 1016, "SysListView32", WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 0, 61, 320, 81
+END

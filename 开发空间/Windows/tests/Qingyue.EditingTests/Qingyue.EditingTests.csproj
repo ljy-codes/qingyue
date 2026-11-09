@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <!-- Compile into this project's own obj/bin; never lock the application's outputs. -->
+    <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+    <Compile Remove="WpfTests.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
+    <Compile Include="../../src/Qingyue.Windows/*.cs" Exclude="../../src/Qingyue.Windows/App.xaml.cs" Link="Windows/%(Filename)%(Extension)" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Page Include="../../src/Qingyue.Windows/MainWindow.xaml" Link="MainWindow.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Page Include="../../src/Qingyue.Windows/Theme.xaml" Link="Theme.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.png" Link="Assets/Qingyue.png" Condition="'$(EditingCoreOnly)' != 'true'" />
+  </ItemGroup>
+</Project>
