@@ -73,6 +73,7 @@ public sealed class MarkdownPreview : RichTextBox
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         }
         Document = document;
+        IsDocumentEnabled = document.Blocks.OfType<BlockUIContainer>().Any();
         UpdatePadding();
     }
 
@@ -81,10 +82,11 @@ public sealed class MarkdownPreview : RichTextBox
         var model = ReadingModel.Build(text, TextKind.Markdown);
         // Do not decorate the mapped reader's live Runs. This document is private to the
         // preview, and its temporary renderer/map is deliberately never exposed or reused.
-        var document = new RenderedReading(model).Document;
+        var document = new RenderedReading(model, renderMermaid: false).Document;
         document.FontSize = FontSize;
         document.LineHeight = FontSize * 1.75;
         var paragraphs = document.Blocks.Cast<Paragraph>().ToArray();
+        var diagramBudget = new MermaidBlock.Budget();
         DocumentList? list = null;
         for (int i = 0; i < model.Blocks.Count; i++)
         {
@@ -92,7 +94,21 @@ public sealed class MarkdownPreview : RichTextBox
             var paragraph = paragraphs[i];
             RenderedReading.StyleBlock(paragraph, block, FontSize);
             string source = text.Substring(block.SourceStart, block.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
-            if (block.Kind == ReadingBlockKind.Table)
+            if (MermaidBlock.IsMermaid(block))
+            {
+                if (diagramBudget.TakeBlock(block))
+                {
+                    document.Blocks.InsertBefore(paragraph, new BlockUIContainer(
+                        MermaidBlock.Create(block, FontSize, budget: diagramBudget))
+                    {
+                        Margin = new Thickness(0, 8, 0, 18)
+                    });
+                    document.Blocks.Remove(paragraph);
+                }
+                else if (diagramBudget.LimitNotice() is { } notice)
+                    document.Blocks.InsertBefore(paragraph, notice);
+            }
+            else if (block.Kind == ReadingBlockKind.Table)
             {
                 document.Blocks.InsertBefore(paragraph, TablePreview(block.Text));
                 document.Blocks.Remove(paragraph);

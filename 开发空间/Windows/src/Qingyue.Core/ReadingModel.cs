@@ -150,6 +150,12 @@ public sealed class ReadingModel
                 while (i < lines.Count && !ClosesFence(lines[i].Text, marker)) content.Add(lines[i++].Text);
                 if (i < lines.Count) i++;
                 Add(ReadingBlockKind.Code, string.Join("\n", content), first, i - 1);
+                var info = fence.Groups[2].Value.AsSpan().Trim();
+                int languageEnd = info.IndexOfAny(' ', '\t');
+                blocks[^1] = blocks[^1] with
+                {
+                    CodeLanguage = (languageEnd < 0 ? info : info[..languageEnd]).ToString()
+                };
                 continue;
             }
             var atx = Atx.Match(line);

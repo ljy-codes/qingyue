@@ -150,6 +150,7 @@ internal static class Program
                 jsonTab.Editor.Undo();
                 Check(jsonTab.File.Text == "{\"n\":9007199254740993,\"e\":1e+400}", "窗口格式化可撤销");
                 await Build2Checks.CheckFormatting(window, Check);
+                await MermaidUiChecks.Run(window, Check);
                 var namedEmpty = window.NewDocument();
                 window.RenameTab(namedEmpty, "空文档.md");
                 var namedResult = await window.PersistWorkspaceAsync();
@@ -329,7 +330,7 @@ internal static class Program
         return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
     }
 
-    private static void ClickAction(MainWindow window, string action)
+    internal static void ClickAction(MainWindow window, string action)
     {
         MenuItem? Find(ItemsControl parent)
         {

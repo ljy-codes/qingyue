@@ -8,6 +8,8 @@
   <ItemGroup>
     <Compile Include="../WpfAudit.cs" />
     <Compile Include="../../../src/Qingyue.Windows/ReadingRenderer.cs" Link="ReadingRenderer.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/MermaidBlock.cs" Link="MermaidBlock.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/MermaidSequenceView.cs" Link="MermaidSequenceView.cs" />
     <ProjectReference Include="../../../src/Qingyue.Core/Qingyue.Core.csproj" />
   </ItemGroup>
 </Project>

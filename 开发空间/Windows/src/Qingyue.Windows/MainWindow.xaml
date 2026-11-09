@@ -187,7 +187,7 @@
           <WrapPanel VerticalAlignment="Center">
             <Button x:Name="FormatButton" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button x:Name="StructureButton" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
-            <Button x:Name="MarkdownButton" Content="MD 预览" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="左侧编辑 Markdown，右侧查看标题、列表、代码块和表格"/>
+            <Button x:Name="MarkdownButton" Content="MD 预览" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="左侧编辑 Markdown，右侧查看标题、表格和 Mermaid 时序图"/>
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
           </WrapPanel>
         </Border>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <!-- Separate outputs: do not build or lock the application's or Core's bin/obj. -->
+    <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+    <Compile Include="../../src/Qingyue.Windows/MermaidSequenceView.cs" Link="MermaidSequenceView.cs"
+             Condition="Exists('../../src/Qingyue.Windows/MermaidSequenceView.cs')" />
+  </ItemGroup>
+</Project>

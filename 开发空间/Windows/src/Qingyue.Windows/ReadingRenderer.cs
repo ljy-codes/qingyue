@@ -15,15 +15,26 @@ public sealed class RenderedReading
         LineHeight = 27, TextAlignment = TextAlignment.Left
     };
 
-    public RenderedReading(ReadingModel model)
+    public RenderedReading(ReadingModel model, bool renderMermaid = true)
     {
         Document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
+        var diagramBudget = new MermaidBlock.Budget();
         foreach (var block in model.Blocks)
         {
             var run = new Run(block.Text);
             runs.Add((block.DisplayStart, run));
             var paragraph = new Paragraph(run) { Margin = new Thickness(0, 0, 0, 13) };
             StyleBlock(paragraph, block, Document.FontSize);
+            if (renderMermaid && MermaidBlock.IsMermaid(block))
+            {
+                if (diagramBudget.TakeBlock(block))
+                    Document.Blocks.Add(new BlockUIContainer(MermaidBlock.Create(block, Document.FontSize,
+                        sourceBelow: true, budget: diagramBudget))
+                    {
+                        Margin = new Thickness(0, 8, 0, 4)
+                    });
+                else if (diagramBudget.LimitNotice() is { } notice) Document.Blocks.Add(notice);
+            }
             Document.Blocks.Add(paragraph);
         }
         if (runs.Count == 0)

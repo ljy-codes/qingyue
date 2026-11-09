@@ -34,7 +34,12 @@ internal static class Program
             ("raw fallback and parser compatibility", Fallback),
             ("ordered marker numeric limits", OrderedMarkerLimits),
             ("successive incomplete edits remain renderable", EditingStates),
-            ("parser failures show raw text and recover", ParserFailureRecovery)
+            ("parser failures show raw text and recover", ParserFailureRecovery),
+            ("pasted Markdown shows a sequence diagram", MermaidChecks.Preview),
+            ("Mermaid fences, literal code and failure recovery", MermaidChecks.FencesAndFallback),
+            ("Mermaid reader preserves search and source mapping", MermaidChecks.ReadingMapping),
+            ("Mermaid has visible geometry and overflow scrolling", MermaidChecks.Layout),
+            ("Mermaid document budget keeps all source", MermaidChecks.DocumentBudget)
         };
         int failed = 0;
         foreach (var (name, run) in tests)

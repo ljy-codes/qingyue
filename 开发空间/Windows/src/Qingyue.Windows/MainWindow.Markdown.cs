@@ -141,7 +141,7 @@ public partial class MainWindow
         splitter.SetResourceReference(Control.BackgroundProperty, "BorderBrush");
         Grid.SetColumn(splitter, 1);
         markdownSplit.Children.Add(splitter);
-        var right = Pane("预览  /  标题 · 列表 · 代码 · 表格", markdownPreviewHost);
+        var right = Pane("预览  /  标题 · 表格 · Mermaid 时序图", markdownPreviewHost);
         Grid.SetColumn(right, 2);
         markdownSplit.Children.Add(right);
     }

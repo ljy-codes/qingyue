@@ -34,5 +34,8 @@ public sealed record SearchMatch(int Start, int Length, string Replacement);
 public enum ReadingBlockKind { Paragraph, Heading, Code, Quote, ListItem, Separator, Table }
 public sealed record ReadingBlock(
     ReadingBlockKind Kind, string Text, int SourceStart, int SourceLength,
-    int DisplayStart, int Level = 0);
+    int DisplayStart, int Level = 0)
+{
+    public string? CodeLanguage { get; init; }
+}
 public sealed record ReadingHeading(string Title, int SourceStart, int DisplayStart, int Level = 1);

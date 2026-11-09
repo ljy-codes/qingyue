@@ -8,8 +8,9 @@ macOS 当前为 **0.1.0 · Mac 构建 4**。下载：[Mac 构建 4 体验包](ht
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
-Windows 当前为 **0.2.0 · 构建 2**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
+Windows 当前为 **0.2.0 · 构建 3**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
 新增 TXT/Markdown 格式化、MD 分屏预览、JSON 分色与结构折叠、橙绿修改行提示，以及简化安装与真实进度；
+Markdown 的 `mermaid` 围栏支持离线时序图预览，支持范围及源码回退见 Windows 使用说明。
 本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)，操作差异见 [Windows 使用说明](操作指导/Windows使用说明.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
 

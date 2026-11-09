@@ -16,8 +16,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.2.0-Windows构建2-x64.zip`
-及 `交付产品/轻阅-0.2.0-Windows构建2-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.2.0-Windows构建3-x64.zip`
+及 `交付产品/轻阅-0.2.0-Windows构建3-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -29,6 +29,11 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。
 - `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序与恢复。
 - `tests/Qingyue.MarkdownTests`：Markdown 分色、预览与阅读映射兼容。
+- `tests/Qingyue.SequenceTests`：有限 Mermaid 时序语法、错误与资源限制。
+- `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
+
+构建 3 支持 `mermaid` 围栏中的离线 `sequenceDiagram`，不引入 WebView 或脚本运行时。
+语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。
 
 测试产物在 `artifacts`，不纳入 Git。GUI 流程测试需要可用的 Windows 交互桌面。
 手工验收范围与结果见仓库 `docs/test.md`，用户操作见 `操作指导/Windows使用说明.md`。
