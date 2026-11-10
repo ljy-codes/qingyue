@@ -42,29 +42,59 @@ ZIP 中 **264/264** 文件与发布目录 SHA256 一致。
 发布保留中文和英文回退资源，运行时及 WPF 组件完整；安装器逻辑未改，继续支持路径选择、
 实际文件写入进度、默认保留用户资料和单独确认的彻底卸载。
 
-隔离安装回归的四项目录保护通过，随后被真实旧版进程阻断。
-单独复核退出码 **3**、目标文件数 **0**；未绕过运行保护，后续安装/卸载矩阵尚未重跑。
-本机旧版 **0.2.0.5 尚未替换**：窗口最小化且含未保存内容，桌面工具两次激活失败。
-升级前资料已备份在本地 ignored artifacts，不强杀该窗口。
+用户解锁桌面后，旧版窗口已确认无未保存内容，通过 Alt+F4 正常退出。
+本机已从 **0.2.0.5 原位升级至 0.3.0.1**，安装位置为 `D:\Program File\Qingyue`。
+正式静默安装退出 **0**，耗时 **8,356 ms**，不含人工操作时间。
+264 个载荷文件逐个 SHA256 一致；144 个历史清单外文件原样保留。
+EXE、DLL、卸载器版本、HKCU 登记及桌面/开始菜单快捷方式均通过。
+安装前真实资料已备份并核对，安装和隔离 GUI 验收后，3 个用户资料文件及空目录均保持一致。
 
-收尾再次核对：安装包与 ZIP 的 SHA256 仍与上表记录一致，旧版进程仍在。
-恢复用户窗口返回 `GetCursorPos failed: 拒绝访问 (0x80070005)`，没有发送关闭按键、
-改动正文或覆盖安装，需用户保存或保留草稿并正常退出旧版后继续。
-正常权限下的无交互 GitHub 推送返回
+最终隔离安装/覆盖/默认保留资料卸载矩阵 **25/25 通过**；
+彻底卸载、文件占用、只读及目录联接保护 **10/10 通过**。
+矩阵使用隔离产品身份和合成资料，未卸载真实安装或清理真实用户信息。
+先前旧版运行导致的退出码 **3**、零文件写入以及桌面锁定时的
+`GetCursorPos failed: 拒绝访问 (0x80070005)` 保留为历史失败证据，
+不计入本轮已完成的安装和视觉验收。
+
+已安装版使用独立 profile 和合成 Markdown 完成实际桌面验收：
+
+- 打开默认全宽预览，标题层次、4 行 3 列表格和 PNG 正常显示；编辑原文后可返回预览。
+- 最大化、恢复并缩窄至约 **806px** 后，图片适应宽度、表格保持结构，长路径自动折行。
+- 图片放大窗口正常打开，缩放从 100% 到 125%；宽表独立窗口可实际拖动横向滚动条查看右侧列。
+- Ctrl+F 输入“长路径”，无需 Enter 即出现匹配高亮；Esc 返回原阅读视口。
+  目录跟随当前图片章节，章节跳转后“返回位置”可回到原视口。
+- 点击“复制全文（含图片）”，实际在新 Word 文档中默认粘贴并保存。
+  DOCX 只读检查确认 **1 表、4 行、每行 3 格、1 张内嵌 PNG**，
+  长路径和末尾标记完整；图片 600×220，解码后 RGBA 像素与合成原图一致。
+- 通过真实菜单和保存对话框导出 HTML，确认 **1 表、4 行、12 单元格和 1 张内嵌 PNG**，
+  长路径与末尾标记完整；图片重新编码后文件字节不同，解码后像素一致。
+- 已保存的 Word 样本及隔离轻阅窗口均正常关闭；隔离 PID 已退出。
+  随后复核合成原文、图片、正式安装包、ZIP、已安装载荷及真实用户资料，全部保持一致。
+
+Word 本机默认使用“合并格式”，字体和颜色会跟随目标文档，不承诺像素级排版一致。
+**腾讯文档实际粘贴、DPI/多屏仍未验收**；历史特定带图文档持续卡死尚未稳定复现，
+不能宣称已经根治。此次解锁后仅做交付验收和文档收尾，未修改生产源码或重新打包。
+
+源码实现已在本地提交 `0d96350`。GitHub 同步仍未完成：
+普通执行宿主与已核验 Explorer 父进程/用户 SID 的真实桌面环境均执行了无交互推送，
+后者同样退出 **128**，返回
 `Cannot prompt because user interactivity has been disabled / unable to get password from user`。
-因此 GitHub 同步尚未完成，除历史连接问题外还需恢复 GitHub 认证；未改动全局配置、
-远端或凭据，未强推。源码实现已在本地提交 `0d96350`。
-
-最终发布版使用独立 profile 和合成图文成功启动，可访问树确认全宽预览、图片、真实表格、
-复制/导出及返回入口；桌面工具不能激活窗口，截图未获得有效应用画面，
-因此不计为实际桌面视觉验收。仅清理本轮启动的隔离验收进程，用户实例未动。
-第三方实际粘贴、DPI/多屏和历史单个带图文档持续卡死仍不作已验证修复的结论。
-异步复制测试在写系统剪贴板前取消；剪贴板结构、图片像素和导出通过内存与合成文件检查。
+本机 PATH 中没有可用 GitHub CLI 登录入口，需用户恢复 GitHub 登录后同步
+`feat/windows-client`；未修改全局配置、远端或凭据，未强推、未自动操作认证界面。
 
 证据均在 `开发空间/Windows/artifacts/`：`test-v030-final.log`、
 `navigation-red.log`、`recovery-v030/REPORT.md`、`reader-v030/INTEGRATION.md`、
 `sharing-v030/STATUS.md`、`publish-v030-final.log`、`installer-v030-final.log`、
-`package-v030-final.json`、`installer-v030-running-guard.json`。合成资料和本机备份不入 Git。
+`package-v030-final.json`、`installer-v030-running-guard.json`。
+本轮解锁后新增证据：`installer-v030-unlocked-integration.log`、
+`installer-v030-unlocked-purge.log`、`installer/test/integration-results.json`、
+`installer/test/purge-results.json`、
+`installer/v030-local-install-20261110-185547-255-d861dfb7e6ed47fe852b89e53f204dbb-result.json`、
+`v030-gui/word-verification.json`、`v030-gui/html-image-verification.json`、
+`v030-gui/post-gui-verification.json` 和 `installer/v030-desktop-push-*.json`。
+启动 smoke 结果只记录启动事实，GUI 通过以独立的 post-gui 记录为准；
+PNG 压缩字节检查的初始失败另行保留，最终按解码像素验证。
+合成资料、Word/HTML 样本、本机备份和全部 artifacts 不入 Git。
 
 ## 2026-11-10｜WIN-BUILD5-MARKDOWN｜0.2.0 构建 5
 
