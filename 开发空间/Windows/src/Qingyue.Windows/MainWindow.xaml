@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Qingyue.Windows"
         Title="轻阅" Icon="Assets/Qingyue.ico" Width="1120" Height="790" MinWidth="820" MinHeight="520"
-        WindowStartupLocation="CenterScreen" AllowDrop="True" Drop="WindowDrop" DragOver="WindowDragOver">
+        WindowStartupLocation="CenterScreen" AllowDrop="True" Drop="WindowDrop" DragOver="WindowDragOver"
+        GotKeyboardFocus="TrackTextCommandTarget">
   <Window.Resources>
     <local:DocumentLabelConverter x:Key="DocumentLabel"/>
     <DataTemplate x:Key="DocumentLabelTemplate">
@@ -42,7 +43,7 @@
         <MenuItem Header="关闭全部标签" Tag="closeAll" Click="MenuAction"/>
         <MenuItem Header="退出" InputGestureText="Alt+F4" Tag="quit" Click="MenuAction"/>
       </MenuItem>
-      <MenuItem Header="编辑(_E)">
+      <MenuItem x:Name="EditMenu" Header="编辑(_E)">
         <MenuItem Header="撤销" Command="ApplicationCommands.Undo"/>
         <MenuItem Header="重做" Command="ApplicationCommands.Redo" InputGestureText="Ctrl+Y"/>
         <Separator/>
@@ -126,7 +127,17 @@
         </ScrollViewer>
       </DockPanel>
     </Border>
-    <Border x:Name="SearchPanel" Grid.Row="3" Visibility="Collapsed" Padding="18,10" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+    <!-- Preserve document logical focus and its selection drawing while typing a query. -->
+    <Border x:Name="SearchPanel" Grid.Row="3" FocusManager.IsFocusScope="True" Visibility="Collapsed" Padding="18,10" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+      <Border.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Undo" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.Redo" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.Cut" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.Copy" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.Paste" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.SelectAll" CanExecute="SearchCommandCanExecute"/>
+        <CommandBinding Command="ApplicationCommands.Delete" CanExecute="SearchCommandCanExecute"/>
+      </Border.CommandBindings>
       <StackPanel>
         <Grid>
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -187,7 +198,7 @@
           <WrapPanel VerticalAlignment="Center">
             <Button x:Name="FormatButton" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button x:Name="StructureButton" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
-            <Button x:Name="MarkdownButton" Content="MD 预览" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="左侧编辑 Markdown，右侧查看标题、表格和 Mermaid 时序图"/>
+            <Button x:Name="MarkdownButton" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
           </WrapPanel>
         </Border>

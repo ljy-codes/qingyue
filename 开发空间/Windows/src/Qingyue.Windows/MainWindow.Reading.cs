@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
@@ -12,6 +14,7 @@ public partial class MainWindow
         if (CurrentTab is not { } tab) return;
         if (tab.IsReading)
         {
+            if (markdownTab == tab) markdownTab = null;
             int offset = CurrentSourceAnchor(tab);
             tab.SourceAnchor = offset;
             tab.IsReading = false;
@@ -30,14 +33,17 @@ public partial class MainWindow
             ? tab.Reading.DisplayToSource(tab.Rendered.OffsetAt(tab.Preview.Selection.Start))
             : SourceOffset(tab, tab.Editor.CaretIndex);
 
-    private void EnterReading(EditorTab tab, int? sourceAnchor = null)
+    private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true)
     {
         tab.SourceAnchor = Math.Clamp(sourceAnchor ?? CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
         tab.Reading = ReadingModel.Build(tab.File.Text, tab.Kind);
         tab.IsReading = true;
-        if (tab.File.Text.Length <= 200_000)
+        if (PreviewLimits.CanRender(tab.File.Text, tab.Kind))
         {
-            tab.Rendered = new RenderedReading(tab.Reading);
+            tab.Editor.IsReadOnly = false;
+            tab.Rendered = tab.Kind == TextKind.Markdown
+                ? RenderedReading.Markdown(tab.Reading, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
+                : new RenderedReading(tab.Reading, sourcePath: tab.File.Path);
             tab.Preview.Document = tab.Rendered.Document;
             UpdateReadingWidth(tab);
             var pointer = tab.Rendered.PointerAt(tab.Reading.SourceToDisplay(tab.SourceAnchor));
@@ -45,7 +51,7 @@ public partial class MainWindow
             if (CurrentTab == tab)
             {
                 DocumentHost.Content = tab.Preview;
-                tab.Preview.Focus();
+                if (focus) FocusLoadedReading(tab);
                 tab.DispatcherBringIntoView(pointer);
             }
         }
@@ -56,6 +62,21 @@ public partial class MainWindow
             tab.Editor.CaretIndex = EditorOffset(tab, tab.SourceAnchor);
             ScrollToCaret(tab);
         }
+    }
+
+    private void FocusLoadedReading(EditorTab tab)
+    {
+        tab.Preview.Focus();
+        if (tab.Preview.IsLoaded) return;
+        // A newly attached RichTextBox cannot take keyboard focus until its
+        // template is loaded. Its selection layer also needs that first focus.
+        var expectedFocus = Keyboard.FocusedElement;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            if (CurrentTab == tab && tab.IsReading && ReferenceEquals(DocumentHost.Content, tab.Preview)
+                && (Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, expectedFocus)))
+                tab.Preview.Focus();
+        });
     }
 
     private static int SourceOffset(EditorTab tab, int editorOffset) => tab.Positions.ToSource(editorOffset);

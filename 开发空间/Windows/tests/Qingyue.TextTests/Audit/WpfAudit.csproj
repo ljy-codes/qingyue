@@ -8,6 +8,10 @@
   <ItemGroup>
     <Compile Include="../WpfAudit.cs" />
     <Compile Include="../../../src/Qingyue.Windows/ReadingRenderer.cs" Link="ReadingRenderer.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/ReadingRenderer.Markdown.cs" Link="ReadingRenderer.Markdown.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/RichDocumentMap.cs" Link="RichDocumentMap.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/MarkdownPreview.cs" Link="MarkdownPreview.cs" />
+    <Compile Include="../../../src/Qingyue.Windows/MarkdownSyntax.cs" Link="MarkdownSyntax.cs" />
     <Compile Include="../../../src/Qingyue.Windows/MermaidBlock.cs" Link="MermaidBlock.cs" />
     <Compile Include="../../../src/Qingyue.Windows/MermaidSequenceView.cs" Link="MermaidSequenceView.cs" />
     <ProjectReference Include="../../../src/Qingyue.Core/Qingyue.Core.csproj" />

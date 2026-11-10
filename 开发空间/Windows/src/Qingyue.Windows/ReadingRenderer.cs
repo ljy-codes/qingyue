@@ -1,11 +1,18 @@
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security;
+using System.Text;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
 
-public sealed class RenderedReading
+public sealed partial class RenderedReading
 {
     private readonly List<(int Offset, Run Run)> runs = [];
     public FlowDocument Document { get; } = new()
@@ -15,10 +22,14 @@ public sealed class RenderedReading
         LineHeight = 27, TextAlignment = TextAlignment.Left
     };
 
-    public RenderedReading(ReadingModel model, bool renderMermaid = true)
+    public RenderedReading(ReadingModel model, bool renderMermaid = true, string? sourcePath = null,
+        string? sourceText = null)
     {
         Document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         var diagramBudget = new MermaidBlock.Budget();
+        // Core intentionally exposes only visible image labels. The host can supply the
+        // original Markdown without changing the model or its selectable mapping Runs.
+        var images = sourceText is null ? null : MarkdownImages.Extract(sourceText);
         foreach (var block in model.Blocks)
         {
             var run = new Run(block.Text);
@@ -35,6 +46,14 @@ public sealed class RenderedReading
                     });
                 else if (diagramBudget.LimitNotice() is { } notice) Document.Blocks.Add(notice);
             }
+            if (images is not null && block.Kind != ReadingBlockKind.Code)
+                foreach (var reference in images.References)
+                    if (reference.Start >= block.SourceStart && reference.Start < (long)block.SourceStart + block.SourceLength &&
+                        !reference.IsRemote)
+                        Document.Blocks.Add(new BlockUIContainer(new MarkdownImageView(reference, sourcePath, images.Budget))
+                        {
+                            Tag = block, Margin = new Thickness(0, 8, 0, 12)
+                        });
             Document.Blocks.Add(paragraph);
         }
         if (runs.Count == 0)
@@ -101,6 +120,7 @@ public sealed class RenderedReading
 
     public TextPointer PointerAt(int offset)
     {
+        if (richMap is not null) return richMap.PointerAt(offset);
         var entry = runs[0];
         foreach (var candidate in runs)
         {
@@ -113,6 +133,7 @@ public sealed class RenderedReading
 
     public int OffsetAt(TextPointer pointer)
     {
+        if (richMap is not null) return richMap.OffsetAt(pointer);
         foreach (var entry in runs)
         {
             if (pointer.CompareTo(entry.Run.ContentStart) < 0) return entry.Offset;
@@ -121,5 +142,454 @@ public sealed class RenderedReading
         }
         var last = runs[^1];
         return last.Offset + last.Run.Text.Length;
+    }
+}
+
+// Kept in this compilation unit because the existing Markdown and WPF audit harnesses
+// link ReadingRenderer.cs directly. No changes to their projects or entry points needed.
+internal sealed record MarkdownImageReference(int Start, int Length, string Alt, string Target,
+    string Key, int ProjectedStart, int ProjectedLength)
+{
+    internal bool IsRemote => MarkdownImages.IsRemote(Target);
+}
+
+internal sealed class MarkdownImages
+{
+    internal string Text { get; }
+    internal IReadOnlyList<MarkdownImageReference> References { get; }
+    internal MarkdownImageBudget Budget { get; } = new();
+    private readonly Dictionary<string, MarkdownImageReference> byKey;
+    private readonly Dictionary<string, string> captions = new(StringComparer.Ordinal);
+
+    private MarkdownImages(string text, List<MarkdownImageReference> references)
+    {
+        Text = text;
+        References = references;
+        byKey = references.ToDictionary(r => r.Key, StringComparer.Ordinal);
+    }
+
+    internal bool TryGet(string key, out MarkdownImageReference reference) => byKey.TryGetValue(key, out reference!);
+
+    internal string Caption(MarkdownImageReference reference)
+    {
+        if (captions.TryGetValue(reference.Key, out var caption)) return caption;
+        // Match Core's inline alt formatting without parsing the potentially huge target.
+        var label = ReadingModel.Build("![" + reference.Alt + "](image)", TextKind.Markdown);
+        return captions[reference.Key] = label.VisibleText;
+    }
+
+    internal string RestoreLabels(string text)
+    {
+        foreach (var reference in References)
+        {
+            string marker = "[图片：" + reference.Key + "]";
+            if (text.Contains(marker, StringComparison.Ordinal))
+                text = text.Replace(marker, Caption(reference), StringComparison.Ordinal);
+        }
+        return text;
+    }
+
+    internal string FallbackText(string source)
+    {
+        if (References.Count == 0) return source;
+        var output = new StringBuilder();
+        int cursor = 0;
+        foreach (var reference in References)
+        {
+            output.Append(source, cursor, reference.Start - cursor);
+            output.Append("[图片：").Append(reference.Alt).Append(']');
+            cursor = reference.Start + reference.Length;
+        }
+        return output.Append(source, cursor, source.Length - cursor).ToString();
+    }
+
+    internal ReadingBlock OriginalRange(ReadingBlock block) => block with
+    {
+        SourceStart = OriginalOffset(block.SourceStart),
+        SourceLength = OriginalOffset(block.SourceStart + block.SourceLength) - OriginalOffset(block.SourceStart)
+    };
+
+    private int OriginalOffset(int offset)
+    {
+        int delta = 0;
+        foreach (var reference in References)
+        {
+            if (offset <= reference.ProjectedStart) break;
+            if (offset < reference.ProjectedStart + reference.ProjectedLength) return reference.Start;
+            delta += reference.Length - reference.ProjectedLength;
+        }
+        return offset + delta;
+    }
+
+    internal static MarkdownImages Extract(string source)
+    {
+        var references = new List<MarkdownImageReference>();
+        StringBuilder? projected = null;
+        string prefix = "qyimg" + Guid.NewGuid().ToString("N");
+        int copied = 0, lineStart = 0, fenceLength = 0;
+        char fenceMarker = '\0';
+        while (lineStart < source.Length)
+        {
+            int lineEnd = source.AsSpan(lineStart).IndexOfAny('\r', '\n');
+            lineEnd = lineEnd < 0 ? source.Length : lineStart + lineEnd;
+            int next = lineEnd;
+            if (next < source.Length && source[next++] == '\r' && next < source.Length && source[next] == '\n') next++;
+            int first = lineStart;
+            while (first < lineEnd && first - lineStart < 4 && source[first] == ' ') first++;
+            int markerEnd = first;
+            if (first - lineStart <= 3 && first < lineEnd && source[first] is '`' or '~')
+            {
+                while (markerEnd < lineEnd && source[markerEnd] == source[first]) markerEnd++;
+                int count = markerEnd - first;
+                if (count >= 3)
+                {
+                    if (fenceLength == 0) { fenceMarker = source[first]; fenceLength = count; }
+                    else if (source[first] == fenceMarker && count >= fenceLength &&
+                        source.AsSpan(markerEnd, lineEnd - markerEnd).Trim().IsEmpty) fenceLength = 0;
+                    lineStart = next;
+                    continue;
+                }
+            }
+            if (fenceLength == 0)
+            {
+                for (int i = lineStart; i < lineEnd; i++)
+                {
+                    if (source[i] == '\\') { i++; continue; }
+                    if (source[i] == '`')
+                    {
+                        int end = i + 1;
+                        while (end < lineEnd && source[end] == '`') end++;
+                        int ticks = end - i;
+                        bool closed = false;
+                        for (int j = end; j < lineEnd;)
+                        {
+                            if (source[j] != '`') { j++; continue; }
+                            int close = j + 1;
+                            while (close < lineEnd && source[close] == '`') close++;
+                            if (close - j == ticks) { i = close - 1; closed = true; break; }
+                            j = close;
+                        }
+                        // Conservatively leave the remainder literal while a code span is edited.
+                        if (!closed) break;
+                        continue;
+                    }
+                    if (source[i] != '!' || i + 1 >= lineEnd || source[i + 1] != '[') continue;
+                    int altEnd = i + 2;
+                    while (altEnd < lineEnd && source[altEnd] != ']')
+                    {
+                        if (source[altEnd] == '\\') altEnd++;
+                        altEnd++;
+                    }
+                    // Later starts on this line share the same first closing bracket.
+                    // Leave incomplete syntax literal and never rescan its whole tail.
+                    if (altEnd >= lineEnd) break;
+                    if (altEnd + 1 >= lineEnd || source[altEnd + 1] != '(')
+                    {
+                        i = altEnd;
+                        continue;
+                    }
+                    int targetStart = altEnd + 2, targetEnd = targetStart, depth = 0;
+                    bool angle = targetStart < lineEnd && source[targetStart] == '<';
+                    for (; targetEnd < lineEnd; targetEnd++)
+                    {
+                        char value = source[targetEnd];
+                        if (value == '\\' && targetEnd + 1 < lineEnd && source[targetEnd + 1] is '(' or ')')
+                        { targetEnd++; continue; }
+                        if (angle)
+                        {
+                            if (value == '>') angle = false;
+                            continue;
+                        }
+                        if (value == '(') depth++;
+                        else if (value == ')' && depth-- == 0) break;
+                    }
+                    if (targetEnd == lineEnd) break;
+                    string target = source[targetStart..targetEnd].Trim();
+                    if (target.StartsWith('<'))
+                    {
+                        int close = target.IndexOf('>');
+                        if (close < 0) continue;
+                        target = target[1..close];
+                    }
+                    else
+                    {
+                        // Accept the common optional Markdown title, while allowing bare spaces
+                        // in Windows file names. URL percent escapes are decoded by the loader.
+                        int title = target.LastIndexOf(" \"", StringComparison.Ordinal);
+                        if (title >= 0 && target.EndsWith('"')) target = target[..title].TrimEnd();
+                        else
+                        {
+                            title = target.LastIndexOf(" '", StringComparison.Ordinal);
+                            if (title >= 0 && target.EndsWith('\'')) target = target[..title].TrimEnd();
+                        }
+                    }
+                    target = target.Replace(@"\(", "(").Replace(@"\)", ")");
+                    projected ??= new StringBuilder(source.Length > 200_000 ? 4096 : source.Length);
+                    projected.Append(source, copied, i - copied);
+                    string key = prefix + references.Count;
+                    string replacement = "![" + key + "](" + key + ")";
+                    int projectedStart = projected.Length;
+                    projected.Append(replacement);
+                    references.Add(new(i, targetEnd + 1 - i, source[(i + 2)..altEnd], target,
+                        key, projectedStart, replacement.Length));
+                    copied = targetEnd + 1;
+                    i = targetEnd;
+                }
+            }
+            lineStart = next;
+        }
+        if (projected is null) return new(source, references);
+        projected.Append(source, copied, source.Length - copied);
+        return new(projected.ToString(), references);
+    }
+
+    internal static bool IsRemote(string target)
+    {
+        if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return false;
+        if (target.StartsWith(@"\\", StringComparison.Ordinal) || target.StartsWith("//", StringComparison.Ordinal)) return true;
+        int colon = target.IndexOf(':');
+        return colon > 1 && !target.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+internal sealed class MarkdownImageBudget
+{
+    private int count;
+    private long bytes, pixels;
+    internal bool TakeControl() => ++count <= 32;
+    internal bool Reserve(long imageBytes, long imagePixels)
+    {
+        lock (this)
+        {
+            if (bytes + imageBytes > 64L * 1024 * 1024 || pixels + imagePixels > 48_000_000) return false;
+            bytes += imageBytes;
+            pixels += imagePixels;
+            return true;
+        }
+    }
+    internal void Release(long imageBytes, long imagePixels)
+    {
+        lock (this) { bytes -= imageBytes; pixels -= imagePixels; }
+    }
+}
+
+internal sealed class MarkdownImageResult(BitmapSource? bitmap, string? error, Action? release = null) : IDisposable
+{
+    internal BitmapSource? Bitmap { get; } = bitmap;
+    internal string? Error { get; } = error;
+    private Action? releaseBudget = release;
+
+    internal void Accept() => Interlocked.Exchange(ref releaseBudget, null);
+    public void Dispose() => Interlocked.Exchange(ref releaseBudget, null)?.Invoke();
+}
+
+internal static class MarkdownImageLoader
+{
+    private sealed class ImageSourceException(string message) : Exception(message);
+    internal const int MaximumBytes = 16 * 1024 * 1024;
+    internal const long MaximumPixels = 32_000_000;
+    private static readonly SemaphoreSlim DecodeSlots = new(2);
+
+    internal static async Task<MarkdownImageResult> LoadAsync(string target, string? sourcePath,
+        MarkdownImageBudget budget, CancellationToken cancellation)
+    {
+        await DecodeSlots.WaitAsync(cancellation).ConfigureAwait(false);
+        try
+        {
+            // File resolution, base64 conversion, WIC header inspection and decoding all stay
+            // off the dispatcher. Only a fully loaded, frozen bitmap crosses back to WPF.
+            return await Task.Run(async () =>
+            {
+                try
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    byte[] bytes;
+                    if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        const string header = "data:image/png;base64,";
+                        if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
+                            return new MarkdownImageResult(null, "仅支持 data:image/png;base64 内嵌图片");
+                        if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
+                            return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                        bytes = Convert.FromBase64String(target[header.Length..]);
+                    }
+                    else
+                    {
+                        string path = LocalPath(target, sourcePath);
+                        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+                            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                        if (file.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                        bytes = new byte[checked((int)file.Length)];
+                        await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
+                        if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
+                            return new MarkdownImageResult(null, "图片读取期间发生变化，请刷新预览");
+                    }
+                    if (bytes.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                    cancellation.ThrowIfCancellationRequested();
+                    using var stream = new MemoryStream(bytes, writable: false);
+                    var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
+                    var frame = decoder.Frames[0];
+                    int width = frame.PixelWidth, height = frame.PixelHeight;
+                    if (width < 1 || height < 1 || width > 32768 || height > 32768 || (long)width * height > MaximumPixels)
+                        return new MarkdownImageResult(null, "图片像素超过上限（3200 万像素 / 单边 32768）");
+                    double scale = Math.Min(1, 4096d / Math.Max(width, height));
+                    long pixels = (long)Math.Ceiling(width * scale) * (long)Math.Ceiling(height * scale);
+                    if (!budget.Reserve(bytes.Length, pixels))
+                        return new MarkdownImageResult(null, "本篇图片总量超过上限（64 MiB / 4800 万解码像素）");
+                    bool success = false;
+                    try
+                    {
+                        stream.Position = 0;
+                        var bitmap = new BitmapImage();
+                        bitmap.BeginInit();
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+                        if (scale < 1)
+                        {
+                            if (width >= height) bitmap.DecodePixelWidth = 4096;
+                            else bitmap.DecodePixelHeight = 4096;
+                        }
+                        bitmap.StreamSource = stream;
+                        bitmap.EndInit();
+                        cancellation.ThrowIfCancellationRequested();
+                        bitmap.Freeze();
+                        success = true;
+                        return new MarkdownImageResult(bitmap, null, () => budget.Release(bytes.Length, pixels));
+                    }
+                    finally { if (!success) budget.Release(bytes.Length, pixels); }
+                }
+                catch (FileNotFoundException) { return new(null, "找不到图片文件"); }
+                catch (DirectoryNotFoundException) { return new(null, "找不到图片目录"); }
+                catch (ImageSourceException error) { return new(null, error.Message); }
+                catch (NotSupportedException) { return new(null, "图片格式不受支持或文件损坏"); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or SecurityException or
+                    FormatException or ArgumentException or OverflowException or COMException or InvalidOperationException)
+                { return new(null, "图片缺失、损坏或无法读取"); }
+            }, cancellation).ConfigureAwait(false);
+        }
+        finally { DecodeSlots.Release(); }
+    }
+
+    private static string LocalPath(string target, string? sourcePath)
+    {
+        if (target.Length > 32767) throw new ImageSourceException("图片路径过长");
+        if (MarkdownImages.IsRemote(target)) throw new ImageSourceException("网络图片未加载");
+        string path;
+        if (target.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Uri.TryCreate(target, UriKind.Absolute, out var uri) || !uri.IsFile || uri.IsUnc ||
+                !string.IsNullOrEmpty(uri.Host))
+                throw new ImageSourceException("网络图片未加载");
+            path = uri.LocalPath;
+        }
+        else path = Uri.UnescapeDataString(target);
+        if (MarkdownImages.IsRemote(path)) throw new ImageSourceException("网络图片未加载");
+        if (string.IsNullOrWhiteSpace(path)) throw new ImageSourceException("图片路径为空");
+        if (!Path.IsPathFullyQualified(path))
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath)) throw new ImageSourceException("相对图片需要文档路径");
+            string fullSource = Path.GetFullPath(sourcePath);
+            if (MarkdownImages.IsRemote(fullSource)) throw new ImageSourceException("网络图片未加载");
+            path = Path.GetFullPath(path, Path.GetDirectoryName(fullSource)!);
+        }
+        else path = Path.GetFullPath(path);
+        if (MarkdownImages.IsRemote(path) || new DriveInfo(Path.GetPathRoot(path)!).DriveType == DriveType.Network)
+            throw new ImageSourceException("网络图片未加载");
+        return path;
+    }
+}
+
+internal sealed class MarkdownImageView : Grid
+{
+    private readonly MarkdownImageReference reference;
+    private readonly string? sourcePath;
+    private readonly MarkdownImageBudget budget;
+    private readonly Image image = new() { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+    private readonly bool allowed;
+    private CancellationTokenSource? loading;
+    private RichTextBox? host;
+    private bool finished;
+
+    internal MarkdownImageView(MarkdownImageReference reference, string? sourcePath, MarkdownImageBudget budget)
+    {
+        this.reference = reference;
+        this.sourcePath = sourcePath;
+        this.budget = budget;
+        allowed = budget.TakeControl();
+        HorizontalAlignment = HorizontalAlignment.Left;
+        string alt = reference.Alt.Length > 160 ? reference.Alt[..160] + "…" : reference.Alt;
+        AutomationProperties.SetName(image, string.IsNullOrWhiteSpace(alt) ? "Markdown 图片" : alt);
+        AutomationProperties.SetName(this, "Markdown 图片：" + alt);
+        status.Text = allowed ? "图片加载中：" + alt : "图片未显示：本篇图片超过 32 张";
+        status.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+        image.Visibility = Visibility.Collapsed;
+        Children.Add(image);
+        Children.Add(status);
+        Loaded += OnLoaded;
+        Unloaded += (_, _) =>
+        {
+            loading?.Cancel();
+            if (host is not null) host.SizeChanged -= HostSizeChanged;
+            host = null;
+        };
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs args)
+    {
+        if (host is null)
+        {
+            for (DependencyObject? parent = this; parent is not null;)
+            {
+                if (parent is RichTextBox box) { host = box; host.SizeChanged += HostSizeChanged; break; }
+                parent = parent is FrameworkContentElement content ? content.Parent :
+                    LogicalTreeHelper.GetParent(parent) ?? (parent is Visual ? VisualTreeHelper.GetParent(parent) : null);
+            }
+        }
+        InvalidateMeasure();
+        if (!allowed || finished || loading is { IsCancellationRequested: false }) return;
+        using var request = new CancellationTokenSource();
+        loading = request;
+        try
+        {
+            using var result = await MarkdownImageLoader.LoadAsync(reference.Target, sourcePath, budget, request.Token);
+            if (request.IsCancellationRequested || !ReferenceEquals(loading, request)) return;
+            // Loaded can also be raised by a host without a DispatcherSynchronizationContext.
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (request.IsCancellationRequested || !ReferenceEquals(loading, request)) return;
+                finished = true;
+                if (result.Bitmap is not null)
+                {
+                    image.Source = result.Bitmap;
+                    result.Accept();
+                    image.Visibility = Visibility.Visible;
+                    status.Visibility = Visibility.Collapsed;
+                }
+                else status.Text = "图片加载失败：" + result.Error;
+                InvalidateMeasure();
+            });
+        }
+        catch (OperationCanceledException) { }
+        finally { if (ReferenceEquals(loading, request)) loading = null; }
+    }
+
+    private void HostSizeChanged(object sender, SizeChangedEventArgs args) => InvalidateMeasure();
+
+    protected override Size MeasureOverride(Size constraint)
+    {
+        double width = double.IsFinite(constraint.Width) ? Math.Max(1, constraint.Width) : 680;
+        if (host is { ActualWidth: > 0 })
+        {
+            double available = host.ActualWidth - host.Document.PagePadding.Left - host.Document.PagePadding.Right - 24;
+            width = Math.Min(width, Math.Max(1, available));
+        }
+        if (image.Source is BitmapSource bitmap)
+        {
+            image.Width = Math.Min(width, bitmap.PixelWidth);
+            image.Height = image.Width * bitmap.PixelHeight / bitmap.PixelWidth;
+        }
+        status.MaxWidth = width;
+        return base.MeasureOverride(new Size(width, constraint.Height));
     }
 }

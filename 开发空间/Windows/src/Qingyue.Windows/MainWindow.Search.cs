@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using Qingyue.Core;
 
@@ -12,6 +13,21 @@ public partial class MainWindow
     private string matchedText = "";
     private int matchIndex = -1;
     private long completedGeneration = -1;
+
+    private void TrackTextCommandTarget(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not TextBoxBase input || EditMenu is null) return;
+        foreach (var item in EditMenu.Items.OfType<MenuItem>())
+            if (item.Command is not null) item.CommandTarget = input;
+    }
+
+    private void SearchCommandCanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        // Enabled text commands are handled by the input before reaching this
+        // boundary. Disabled ones must not fall back to the document focus scope.
+        e.CanExecute = false;
+        e.Handled = true;
+    }
 
     private void ShowSearch(bool replace)
     {
@@ -52,6 +68,13 @@ public partial class MainWindow
             if (generation != searchGeneration || CurrentTab != tab || reading != (tab.IsReading && tab.Rendered is not null)) return;
             matches = result; matchedText = text; completedGeneration = generation;
             SearchCount.Text = result.Count == 0 ? "没有匹配" : $"{result.Count:N0} 处匹配";
+            if (result.Count > 0)
+            {
+                int caret = reading ? tab.Rendered!.OffsetAt(tab.Preview.Selection.Start)
+                    : SourceOffset(tab, tab.Editor.CaretIndex);
+                matchIndex = Enumerable.Range(0, result.Count).FirstOrDefault(i => result[i].Start >= caret, 0);
+                SelectMatch(tab, result[matchIndex], focus: false);
+            }
         }
         catch (Exception ex)
         {
@@ -76,19 +99,20 @@ public partial class MainWindow
         SearchCount.Text = $"{matchIndex + 1:N0} / {matches.Count:N0}";
     }
 
-    private static void SelectMatch(EditorTab tab, SearchMatch match)
+    private static void SelectMatch(EditorTab tab, SearchMatch match, bool focus = true)
     {
         if (tab.IsReading && tab.Rendered is not null)
         {
             var start = tab.Rendered.PointerAt(match.Start);
             tab.Preview.Selection.Select(start, tab.Rendered.PointerAt(match.Start + match.Length));
             tab.DispatcherBringIntoView(start);
-            tab.Preview.Focus();
+            if (focus) tab.Preview.Focus();
         }
         else
         {
             int start = EditorOffset(tab, match.Start), end = EditorOffset(tab, match.Start + match.Length);
-            tab.Editor.Select(start, end - start); ScrollToCaret(tab); tab.Editor.Focus();
+            tab.Editor.Select(start, end - start); ScrollToCaret(tab);
+            if (focus) tab.Editor.Focus();
         }
     }
 

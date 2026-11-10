@@ -74,10 +74,12 @@ public partial class MainWindow
         StructureButton.Content = structured ? "返回编辑" : "JSON 结构";
         MarkdownButton.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
         bool markdown = RefreshMarkdownPresentation(tab);
-        MarkdownButton.Content = markdown ? "关闭预览" : "MD 预览";
+        MarkdownButton.Content = markdown ? "关闭分屏" : "分屏编辑";
         PresentationHint.Text = structured ? "只读结构 · 点击箭头折叠层级，返回编辑修改原文"
             : markdown ? "左侧编辑 · 右侧预览 · 橙色未保存 / 绿色已保存"
-            : tab.Kind == TextKind.Markdown ? "MD · 标题与语法分色 · 可开启右侧预览"
+            : tab.Kind == TextKind.Markdown ? tab.IsReading
+                ? "Markdown 预览 · 点击“返回编辑”修改原文 · Ctrl+F 查找"
+                : "Markdown 编辑 · 点击“阅读模式”预览 · 可选分屏编辑"
             : tab.Kind is TextKind.Json or TextKind.Jsonc ? "JSON · 字段 / 字符串 / 数值分色"
             : "双击选片段 · 三击选整行";
     }

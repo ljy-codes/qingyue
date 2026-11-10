@@ -19,13 +19,18 @@ namespace Qingyue.Windows;
 public sealed class MarkdownPreview : RichTextBox
 {
     private readonly double readingWidth;
+    private readonly string? sourcePath;
+    private readonly bool includeDiagramSource;
 
-    public MarkdownPreview(string text, double fontSize, double readingWidth)
+    public MarkdownPreview(string text, double fontSize, double readingWidth, string? sourcePath = null,
+        bool includeDiagramSource = false)
     {
         ArgumentNullException.ThrowIfNull(text);
         if (!double.IsFinite(fontSize) || fontSize <= 0) throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0) throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
+        this.sourcePath = sourcePath;
+        this.includeDiagramSource = includeDiagramSource;
         FontSize = fontSize;
         FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
         IsReadOnly = true;
@@ -63,9 +68,10 @@ public sealed class MarkdownPreview : RichTextBox
         catch (Exception error) when (error is RegexMatchTimeoutException or ArgumentException or
             FormatException or OverflowException or InvalidOperationException or IndexOutOfRangeException)
         {
-            // No parser in the fallback path, and no reuse of the previous document:
-            // even an incomplete or rejected edit must show the current source.
-            document = new FlowDocument(new Paragraph(new Run(text)) { Margin = new Thickness(0) })
+            // Keep the current edit readable even if formatting fails. Image destinations,
+            // especially long data URIs, must never become hundreds of thousands of glyphs.
+            string safeText = MarkdownImages.Extract(text).FallbackText(text);
+            document = new FlowDocument(new Paragraph(new Run(safeText)) { Margin = new Thickness(0) })
             {
                 FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
                 ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left
@@ -73,13 +79,25 @@ public sealed class MarkdownPreview : RichTextBox
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         }
         Document = document;
-        IsDocumentEnabled = document.Blocks.OfType<BlockUIContainer>().Any();
+        IsDocumentEnabled = document.Blocks.OfType<BlockUIContainer>().Any() || HasImages(document);
         UpdatePadding();
     }
 
     private FlowDocument BuildDocument(string text)
     {
-        var model = ReadingModel.Build(text, TextKind.Markdown);
+        // Extract destinations before Core's length fallback, so a long embedded PNG is
+        // represented by a short private token, never by hundreds of thousands of text glyphs.
+        var images = MarkdownImages.Extract(text);
+        string projected = images.Text;
+        var model = ReadingModel.Build(projected, TextKind.Markdown);
+        // Navigation belongs to the host's original model, whose image labels have the
+        // real alt length. Private image tokens are only used to construct the document.
+        IReadOnlyDictionary<int, ReadingBlock>? sourceBlocks = null;
+        if (images.References.Count > 0)
+        {
+            try { sourceBlocks = ReadingModel.Build(text, TextKind.Markdown).Blocks.ToDictionary(b => b.SourceStart); }
+            catch (RegexMatchTimeoutException) { /* Keep the safe projected rendering. */ }
+        }
         // Do not decorate the mapped reader's live Runs. This document is private to the
         // preview, and its temporary renderer/map is deliberately never exposed or reused.
         var document = new RenderedReading(model, renderMermaid: false).Document;
@@ -88,33 +106,46 @@ public sealed class MarkdownPreview : RichTextBox
         var paragraphs = document.Blocks.Cast<Paragraph>().ToArray();
         var diagramBudget = new MermaidBlock.Budget();
         DocumentList? list = null;
+        int displayStart = 0;
         for (int i = 0; i < model.Blocks.Count; i++)
         {
-            var block = model.Blocks[i];
+            var parsedBlock = model.Blocks[i];
+            var block = images.OriginalRange(parsedBlock) with
+            {
+                Text = images.RestoreLabels(parsedBlock.Text), DisplayStart = displayStart
+            };
+            if (sourceBlocks?.TryGetValue(block.SourceStart, out var original) == true &&
+                original.Kind == block.Kind && original.SourceLength == block.SourceLength)
+                block = original;
+            displayStart = block.DisplayStart + block.Text.Length + 1;
             var paragraph = paragraphs[i];
+            paragraph.Tag = block;
             RenderedReading.StyleBlock(paragraph, block, FontSize);
-            string source = text.Substring(block.SourceStart, block.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
+            string source = projected.Substring(parsedBlock.SourceStart, parsedBlock.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
             if (MermaidBlock.IsMermaid(block))
             {
                 if (diagramBudget.TakeBlock(block))
                 {
                     document.Blocks.InsertBefore(paragraph, new BlockUIContainer(
-                        MermaidBlock.Create(block, FontSize, budget: diagramBudget))
+                        MermaidBlock.Create(block, FontSize, sourceBelow: includeDiagramSource, budget: diagramBudget))
                     {
+                        Tag = block,
                         Margin = new Thickness(0, 8, 0, 18)
                     });
-                    document.Blocks.Remove(paragraph);
+                    if (!includeDiagramSource) document.Blocks.Remove(paragraph);
                 }
                 else if (diagramBudget.LimitNotice() is { } notice)
                     document.Blocks.InsertBefore(paragraph, notice);
             }
             else if (block.Kind == ReadingBlockKind.Table)
             {
-                document.Blocks.InsertBefore(paragraph, TablePreview(block.Text));
+                var table = TablePreview(parsedBlock.Text, images);
+                table.Tag = block;
+                document.Blocks.InsertBefore(paragraph, table);
                 document.Blocks.Remove(paragraph);
             }
             else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
-                DecorateInline(paragraph, InlineSource(source, block.Kind), block.Text);
+                DecorateInline(paragraph, InlineSource(source, block.Kind), parsedBlock.Text, images);
 
             if (block.Kind == ReadingBlockKind.ListItem)
             {
@@ -190,9 +221,9 @@ public sealed class MarkdownPreview : RichTextBox
 
     [Flags]
     private enum InlineFormat { None = 0, Code = 1, Strong = 2, Emphasis = 4, Strike = 8, Link = 16, Image = 32 }
-    private readonly record struct Fragment(string Text, InlineFormat Format);
+    private readonly record struct Fragment(string Text, InlineFormat Format, string? ImageKey = null);
 
-    private static void DecorateInline(Paragraph paragraph, string source, string expected)
+    private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images)
     {
         var fragments = new List<Fragment>();
         ParseInline(source, fragments);
@@ -202,6 +233,11 @@ public sealed class MarkdownPreview : RichTextBox
         paragraph.Inlines.Clear();
         foreach (var fragment in fragments)
         {
+            if (fragment.ImageKey is { } key && images.TryGet(key, out var reference))
+            {
+                AppendImage(paragraph, reference, images);
+                continue;
+            }
             var run = new Run(fragment.Text);
             var format = fragment.Format;
             if (format.HasFlag(InlineFormat.Strong)) run.FontWeight = FontWeights.Bold;
@@ -233,9 +269,10 @@ public sealed class MarkdownPreview : RichTextBox
             if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
             else if (match.Value.StartsWith("![", StringComparison.Ordinal))
             {
-                output.Add(new("[图片：", format | InlineFormat.Image));
-                ParseInline(match.Groups[1].Value, output, format | InlineFormat.Image, depth + 1);
-                output.Add(new("]", format | InlineFormat.Image));
+                var title = new List<Fragment>();
+                ParseInline(match.Groups[1].Value, title, format | InlineFormat.Image, depth + 1);
+                output.Add(new("[图片：" + string.Concat(title.Select(f => f.Text)) + "]", format | InlineFormat.Image,
+                    match.Groups[1].Value));
             }
             else if (match.Value[0] == '[') ParseInline(match.Groups[2].Value, output, format | InlineFormat.Link, depth + 1);
             else if (match.Value[0] == '`') output.Add(new(match.Groups[3].Value, format | InlineFormat.Code));
@@ -254,7 +291,40 @@ public sealed class MarkdownPreview : RichTextBox
         if (cursor < text.Length) output.Add(new(text[cursor..], format));
     }
 
-    private Table TablePreview(string text)
+    private void AppendImage(Paragraph paragraph, MarkdownImageReference reference, MarkdownImages images)
+    {
+        if (reference.IsRemote)
+        {
+            var label = new Run(images.Caption(reference)) { ToolTip = "网络图片未加载" };
+            label.SetResourceReference(TextElement.ForegroundProperty, "MutedBrush");
+            paragraph.Inlines.Add(label);
+        }
+        else
+        {
+            paragraph.Inlines.Add(new InlineUIContainer(new MarkdownImageView(reference, sourcePath, images.Budget))
+            {
+                BaselineAlignment = BaselineAlignment.Center
+            });
+            // Keep a real selectable label for the authoritative model's [图片：alt]
+            // text, including table cells and list items.
+            var label = new Run(images.Caption(reference)) { FontSize = Math.Max(11, FontSize * .8) };
+            label.SetResourceReference(TextElement.ForegroundProperty, "MutedBrush");
+            paragraph.Inlines.Add(label);
+        }
+    }
+
+    private static bool HasImages(FlowDocument document) =>
+        document.Blocks.Any(ContainsImages);
+
+    private static bool ContainsImages(Block block) => block switch
+    {
+        Paragraph paragraph => paragraph.Inlines.Any(inline => inline is InlineUIContainer),
+        DocumentList list => list.ListItems.Any(item => item.Blocks.Any(ContainsImages)),
+        Table table => table.RowGroups.Any(group => group.Rows.Any(row => row.Cells.Any(cell => cell.Blocks.Any(ContainsImages)))),
+        _ => false
+    };
+
+    private Table TablePreview(string text, MarkdownImages images)
     {
         var rows = text.Split('\n').Select(line => line.Split('\t')).ToArray();
         var table = new Table { CellSpacing = 0, Margin = new Thickness(0, 8, 0, 18), FontSize = FontSize * .9 };
@@ -275,7 +345,19 @@ public sealed class MarkdownPreview : RichTextBox
             }
             foreach (string value in rows[index])
             {
-                var cell = new TableCell(new Paragraph(new Run(value)) { Margin = new Thickness(0) })
+                var paragraph = new Paragraph { Margin = new Thickness(0) };
+                int cursor = 0;
+                foreach (var reference in images.References)
+                {
+                    string marker = "[图片：" + reference.Key + "]";
+                    int at = value.IndexOf(marker, cursor, StringComparison.Ordinal);
+                    if (at < 0) continue;
+                    paragraph.Inlines.Add(new Run(value[cursor..at]));
+                    AppendImage(paragraph, reference, images);
+                    cursor = at + marker.Length;
+                }
+                paragraph.Inlines.Add(new Run(value[cursor..]));
+                var cell = new TableCell(paragraph)
                 {
                     Padding = new Thickness(12, 8, 12, 8), BorderThickness = new Thickness(0, 0, 1, 1)
                 };

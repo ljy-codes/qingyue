@@ -25,7 +25,7 @@ foreach (var token in MarkdownSyntax.Tokens(editorLine))
 
 - `ReadingModel` 与 `VisibleText` 完全不改；原阅读渲染器继续每块一个 Run，`PointerAt/OffsetAt` 实现不改。
 - 只有独立预览拆分行内 Run、使用 WPF List/Table；该预览不暴露源/显示映射，也不应作为编辑导航映射使用。
-- 行内语法跟随既有轻量 ReadingModel，不承诺完整 CommonMark/GFM。应用行内格式前核对可见文字，遇到差异直接保留模型文字。超过模型 20 万 UTF-16 阈值时继续退回原文。
+- 行内语法跟随既有轻量 ReadingModel，不承诺完整 CommonMark/GFM。应用行内格式前核对可见文字，遇到差异直接保留模型文字。超过模型 50 万正文 UTF-16 阈值时继续退回原文，内嵌图片数据单独计限。
 - 单行 token API 无围栏上下文：可识别围栏行，内部代码行的跨行状态由调用方负责。Setext 标题依赖相邻行，不由单行 token API 推断。
 - 图片只保留模型占位文字，链接是带样式的 Run，不创建可导航 Hyperlink，也不渲染 HTML。
 - 0 起点有序列表使用原始文字标记，避免 WPF 的 StartIndex 正整数限制改变内容或抛异常。

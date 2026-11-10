@@ -1,5 +1,106 @@
 # Windows 验收记录
 
+## 2026-11-10｜WIN-BUILD4-READING｜0.2.0 构建 4
+
+范围为 Windows Markdown 默认全宽预览、真实图片、自动查找定位、单实例打开及外部文件更新。
+源码基线 `e3eb393`，仅修改 Windows 工程及相应说明。没有数据库、Redis、MQ 或外部服务；
+沿用原生 .NET 10/WPF，无新增第三方 NuGet、浏览器运行时或网络图片请求。
+
+最终 `scripts/test.ps1` 正常权限执行退出 **0**，Release 构建 **0 警告、0 错误**：
+
+| 验证 | 结果 | 主要覆盖 |
+| --- | --- | --- |
+| 文件 / 文本 / 编辑 / 位置 | 25/25、34/34、30/30、5/5 | 原子保存、ACL、编码、换行、撤销、格式化及大文本索引 |
+| 既有 WPF 窗口流程 | 159 项通过 | 标签、保存状态、主题、分屏、搜索、JSON、Mermaid 及历史回归 |
+| Markdown / 时序图解析 / 绘图 | 17/17、28/28、14/14 | 表格、列表、源码回退、中文、箭头及资源预算 |
+| 新阅读与查找 | 42 项通过 | 打开即全宽、首次加载真实焦点、首次和连续查询真实绘制高亮、搜索撤销和编辑菜单隔离、富表格/列表精确选择、输入不抢焦点、源码不变、50 万边界与畸形输入 |
+| 图片通用 / 含真实文档专项 | 19/19、26/26 | 冻结位图、中文空格及编码路径、图前图后/图注选择、内嵌图、异常与资源上限 |
+| 真实双进程及 IPC | 15/15 | 多路径转发、初始化排队、六进程冷启动、最小化恢复、隔离、超限/断连/取消及退出重建 |
+| 外部文件同步 | 78 项通过 | 实际 SelectTab/Activated、旧结果淘汰、dirty 保护、编码/BOM/混合换行、选区/滚动与搜索焦点 |
+| 阅读指针审计 | 0 失败 | 原始单 Run、Unicode 和显示/源文位置映射 |
+
+完整日志：`开发空间/Windows/artifacts/windows-build4-verified-tests.log`；
+实际文档专项：`windows-build4-image-samples.log`。真实资料只读，副本与图片保存在已忽略的 artifacts；
+没有将业务正文或图片提交仓库。专项解码验证中，01/03/04 的原件及无 `images` 目录的逐字节副本均取得原尺寸 PNG，
+02 无图文档正常打开。60 万字符内嵌图片仍保留富表格、列表和图表，不把 Base64 当正文绘制。
+
+本轮失败与修补过程保留，不把旧结果计为最终通过：
+
+- 沙箱文件原子替换与 ACL 受限，改在正常 Windows 权限下复验，没有修改安全保存逻辑。
+- 集成回归发现阅读中打开分屏的赋值顺序问题，修正后既有窗口流程通过。
+- 独立审查发现 Mermaid 源码定位、后台刷新搜索焦点、行内代码/畸形 alt/CR 换行限额问题；
+  新增回归后修复。列表选择曾带出 WPF 项目符号，改用无文字内联边界保留原 marker 与 Run。
+- 大量未闭合图片语法曾造成平方级扫描；修复为单次推进。图片回归以独立子进程、3 秒硬上限验证
+  三组 70 万字符以上输入，最终扫描合计 17 ms；仅为本机样本，不是普遍性能保证。
+- 首轮统一入口以 `dotnet test.dll` 启动，而多进程测试子进程遗漏自身程序集路径，导致 8/15。
+  修正测试宿主参数，最终同一统一入口 15/15，生产启动逻辑无需为此改动。
+- 已安装版首次桌面验收另发现首次搜索选区虽正确但未绘制，按 F3 才可见。新增“首次预览加载后真实键盘焦点”
+  断言稳定失败；修正 `EnterReading` 在控件加载后单次补焦点，且检查当前标签、内容及用户焦点未变化。
+  后台刷新 `focus=false` 不走此路径。随后最终桌面复验仍发现首次空选区失焦后不绘制，
+  增加检查实际 `CaretElement` 绘图而非只检查 Selection 的回归，先得到稳定失败。
+  将搜索栏设为独立焦点范围，保留文档逻辑焦点与高亮绘制层，搜索框持有键盘焦点；
+  首次与连续查询实际绘图通过，阅读回归扩至 38 项。对应红绿日志为
+  `windows-build4-selection-drawing-red.log` / `windows-build4-selection-drawing-green.log`，
+  完整回归及交付包以此修复后的最后一次为准。
+- 独立焦点范围的审查发现搜索框撤销耗尽会回退撤销正文。以真实 `CanExecute` 后执行路径复现失败，
+  在搜索栏命令绑定边界停止不可执行编辑命令的回退，并将编辑菜单目标跟随当前文本输入控件。
+  去掉绑定时同一用例再次失败，恢复后 42 项通过；菜单全选作用于查询，关闭搜索后目标恢复正文。
+  红绿日志：`windows-build4-search-command-red.log` / `windows-build4-search-command-green.log`。
+  早期测试曾直接执行禁用命令，绕过真实键盘的可执行性判断，已改正；没有为此增加焦点来回切换。
+- 本机验收辅助脚本的中文 UTF-8 未带 BOM，Windows PowerShell 5.1 无法解析，首次派发没有启动安装。
+  为该忽略目录内脚本补 BOM 后，在实际 5.1 解析器确认 0 错误再执行；没有修改产品安装器。
+- 独立只读审查的 P2 均已修补并复核，无剩余 P1/P2；最终通过结论来自主控实际运行。
+
+主要文件与影响范围（以下实现文件均在 `开发空间/Windows/src/`）：
+
+| 文件 | 原因与兼容性 |
+| --- | --- |
+| `Qingyue.Windows/App.xaml.cs`、`SingleInstanceChannel.cs` | 第二次打开转发路径，沿用资料目录 Mutex 身份；消息有界、完成才回执 |
+| `Qingyue.Windows/MainWindow.Reading.cs`、`MainWindow.Markdown.cs`、`ReadingRenderer.Markdown.cs` | Markdown 首次磁盘打开全宽阅读，编辑及可选分屏保留；恢复会话尊重原模式 |
+| `Qingyue.Windows/MarkdownPreview.cs`、`ReadingRenderer.cs`、`RichDocumentMap.cs` | 本地/内嵌 PNG 真图、后台解码与富文本导航，不改文件原文 |
+| `Qingyue.Core/PreviewLimits.cs`、`ReadingModel.cs` | 50 万正文预算，图片负载另计；超限原文降级 |
+| `Qingyue.Windows/MainWindow.Search.cs`、`EditorTab.cs` | 自动选择当前匹配、失焦仍高亮，保持搜索输入与撤销栈 |
+| `Qingyue.Core/DocumentFile.cs`、`ExternalFileRefresh.cs`、`Qingyue.Windows/MainWindow.ExternalChanges.cs` | 进程内版本校验后原地接纳；不改变会话快照格式、安全保存与磁盘冲突检查 |
+| `MainWindow.xaml.cs`、`MainWindow.Formatting.cs`、`MainWindow.xaml` | 真实窗口钩子与预览/编辑/分屏入口提示 |
+| 版本配置、解决方案、`scripts/test.ps1` 与新增测试项目 | 版本统一为 0.2.0.4，并纳入常规回归入口 |
+
+兼容与边界：Mac 未修改，既有草稿与会话无需迁移。单文件仍限 50 MiB；正文上限为 500,000
+UTF-16 单元，完整 data 图片负载不计正文。内嵌目前支持 `data:image/png;base64,`；
+本地 PNG/JPEG 等位图由 WIC 解码。单图 16 MiB、3200 万原始像素/单边 32768，解码最长边 4096；
+单篇最多 32 张、64 MiB 图片数据/4800 万解码像素，缺失/损坏/超限有提示。
+远程、UNC 和网络驱动器来源不加载。图片不是完整 CommonMark/GFM 承诺。
+切换标签或激活时检查文件；存在本地未保存修改时保留并提示，删除/占用下次事件重试，
+没有持续监控所有后台文件。编码变更后仍以原安全读写规则为准。
+
+最终交付及本机升级已完成，以下均为命令隔离修复后的包。264 个载荷文件与 ZIP 逐个 SHA256 一致；
+原位升级至 `D:\Program File\Qingyue`，安装器退出 0，耗时 7,683 ms。
+EXE、DLL、卸载器均为 0.2.0.4，真实 HKCU 登记和桌面/开始菜单快捷方式通过。
+144 个历史清单外文件原样保留；真实用户资料的 3 个文件及 `Drafts` 目录不变，
+摘要 `5254AEA50F32250794EDB8F962C7F44AC3FD6490A4424FE7D0D57AF1D679123F`。
+
+已安装版使用独立资料目录进行实际桌面验收：第二次启动的两个文件参数均进入原窗口；
+磁盘 Markdown 默认全宽预览，本地红蓝 PNG 与不依赖 `images` 目录的内嵌 PNG 均可见真实像素。
+首次查询“全宽”未按 F3 即出现蓝色高亮，改查“搜索”后自动滚动并高亮列表文字，焦点仍在搜索框；
+Ctrl+R 返回带原始语法的编辑视图，文件保持已保存状态。正常关闭后进程与窗口消失，
+再次核对全部安装文件、历史文件、用户资料和两个交付包，均与安装记录一致。
+
+| 产物 | 字节 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.2.0-Windows构建4-x64-setup.exe` | 43,677,483 | `05381940B4F5374215C9D4E43DD18C734CFEE2F57FE585E6024A08BCE52DF9F6` |
+| `交付产品/轻阅-0.2.0-Windows构建4-x64.zip` | 62,187,334 | `16BE00CE5F0D25731BFAD353E174551CCF4C0D78B4EE9E93AE6A5360E5DCED73` |
+| `交付产品/轻阅-Windows-x64` | 138,965,136 | 264 文件，与 ZIP 逐个一致 |
+
+Windows 工程下的最终证据：
+
+- `artifacts/windows-build4-package-checks.json`、`windows-build4-local-gui-checks.json`、`windows-build4-final-delivery.json`。
+- 安装：`artifacts/installer/build4-local-install-20261110-111335-423-6a2be3667eae4d33a7c1a019abe5fa0e-result.json`。
+- 隔离启动：`artifacts/installer/build4-local-smoke-20261110-111419-810-926371ec1200458e8be6742f31187948-result.json`；
+  其 `launched-awaiting-cua` 仅表示启动，桌面完成结论见单独 GUI 及最终校验记录。
+
+安装器交互本轮不改，沿用路径选择、真实进度、默认保留资料与显式彻底清理行为，不重复无关卸载矩阵。
+源码、测试及说明通过 `feat/windows-client` 同步；安装 EXE 和 ZIP 保存在本地交付目录，未发布 GitHub Release。
+安装包仍未签名；完整 CommonMark/GFM、多系统/DPI/IME 和屏幕阅读器未全面验收。
+
 ## 2026-11-09｜WIN-BUILD3-MERMAID｜0.2.0 构建 3
 
 范围为 Windows 的有限 Mermaid 时序图支持。用户粘贴的是完整 Markdown，

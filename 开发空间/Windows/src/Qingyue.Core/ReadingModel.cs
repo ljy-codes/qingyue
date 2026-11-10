@@ -6,7 +6,6 @@ namespace Qingyue.Core;
 
 public sealed class ReadingModel
 {
-    private const int MaximumRichLength = 200_000;
     private const int MaximumHeadings = 500;
     private readonly string source;
     private readonly bool identity;
@@ -26,7 +25,7 @@ public sealed class ReadingModel
     public static ReadingModel Build(string text, TextKind kind)
     {
         ArgumentNullException.ThrowIfNull(text);
-        if (text.Length > MaximumRichLength)
+        if (!PreviewLimits.CanRender(text, kind))
             return Raw(text, []);
         if (kind != TextKind.Markdown)
             return Raw(text, ExtractHeadings(text, kind));

@@ -16,6 +16,11 @@ public sealed class DocumentFile
     private string? _baselineDigest;
     private bool _hadBom;
     private bool _wasSaved;
+    private TextCodec _codec = TextCodec.Utf8;
+    private LineEnding _lineEnding = LineEnding.Lf;
+    // Process-local only: snapshots keep their existing format. This also detects
+    // edit/undo and identical saves while an external read is in flight.
+    internal long ChangeVersion { get; private set; }
     // Mixed endings cannot be reconstructed from normalized snapshot text.
     private byte[]? _originalMixedBytes;
 
@@ -29,10 +34,24 @@ public sealed class DocumentFile
     public string Text
     {
         get => _text;
-        set => _text = Normalize(value ?? throw new ArgumentNullException(nameof(value)));
+        set
+        {
+            var text = Normalize(value ?? throw new ArgumentNullException(nameof(value)));
+            if (string.Equals(_text, text, StringComparison.Ordinal)) return;
+            _text = text;
+            ChangeVersion++;
+        }
     }
-    public TextCodec Codec { get; set; } = TextCodec.Utf8;
-    public LineEnding LineEnding { get; set; } = LineEnding.Lf;
+    public TextCodec Codec
+    {
+        get => _codec;
+        set { if (_codec != value) { _codec = value; ChangeVersion++; } }
+    }
+    public LineEnding LineEnding
+    {
+        get => _lineEnding;
+        set { if (_lineEnding != value) { _lineEnding = value; ChangeVersion++; } }
+    }
     public bool IsDirty => !string.Equals(Text, _baselineText, StringComparison.Ordinal)
         || Codec != _baselineCodec || LineEnding != _baselineLineEnding;
 
@@ -122,7 +141,7 @@ public sealed class DocumentFile
     public void Rename(string name)
     {
         ValidateName(name);
-        if (Path is null) { SuggestedName = name; return; }
+        if (Path is null) { SuggestedName = name; ChangeVersion++; return; }
         var source = Path;
         var target = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(source)!, name);
         if (string.Equals(source, target, StringComparison.Ordinal)) return;
@@ -157,6 +176,7 @@ public sealed class DocumentFile
             }
             Path = target;
             SuggestedName = null;
+            ChangeVersion++;
         }
         catch (UnauthorizedAccessException ex) { throw new IOException("重命名失败：访问被拒绝，编辑内容已保留。", ex); }
         catch (IOException ex) when (ex is not FileConflictException)
@@ -165,6 +185,27 @@ public sealed class DocumentFile
 
     public DocumentSnapshot CaptureSnapshot() => new(1, Id, Path, SuggestedName, Text,
         Codec, LineEnding, _baselineText, _baselineCodec, _baselineLineEnding, _baselineDigest, _hadBom, _wasSaved);
+
+    // Must run on the document's owning thread. The replacement was safely opened on
+    // a worker; transfer its raw mixed-ending bytes as well as its digest/BOM baseline.
+    internal bool TryAcceptExternalVersion(DocumentSnapshot expected, long version, DocumentFile replacement)
+    {
+        if (ChangeVersion != version || CaptureSnapshot() != expected || IsDirty || !_wasSaved
+            || Path is null || replacement.Path is null || !SamePath(Path, replacement.Path)
+            || !replacement._wasSaved || replacement.IsDirty) return false;
+        _text = replacement._text;
+        _codec = replacement._codec;
+        _lineEnding = replacement._lineEnding;
+        _baselineText = replacement._baselineText;
+        _baselineCodec = replacement._baselineCodec;
+        _baselineLineEnding = replacement._baselineLineEnding;
+        _baselineDigest = replacement._baselineDigest;
+        _hadBom = replacement._hadBom;
+        _wasSaved = replacement._wasSaved;
+        _originalMixedBytes = replacement._originalMixedBytes;
+        ChangeVersion++;
+        return true;
+    }
 
     public static DocumentFile Restore(DocumentSnapshot snapshot)
     {
@@ -204,6 +245,7 @@ public sealed class DocumentFile
         _hadBom = bom;
         _wasSaved = true;
         _originalMixedBytes = LineEnding == LineEnding.Mixed ? bytes : null;
+        ChangeVersion++;
     }
 
     private byte[] EncodeForSave(out bool bom)

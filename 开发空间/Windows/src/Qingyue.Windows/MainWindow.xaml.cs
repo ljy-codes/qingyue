@@ -36,6 +36,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializeEditingInteractions();
         InitializeMarkdownPreview();
+        InitializeExternalChanges();
         TabStrip.ItemsSource = tabs;
         KindCombo.ItemsSource = Enum.GetValues<TextKind>();
         CodecCombo.ItemsSource = Enum.GetValues<TextCodec>();
@@ -86,6 +87,7 @@ public partial class MainWindow : Window
         if (tabs.Count == 0) NewDocument();
         initialized = true;
         RefreshCurrent();
+        QueueExternalRefresh(CurrentTab);
     }
 
     private EditorTab AddDocument(DocumentFile file)
@@ -128,6 +130,7 @@ public partial class MainWindow : Window
         if (!tabs.Contains(tab)) return;
         TabStrip.SelectedItem = tab;
         RefreshCurrent();
+        QueueExternalRefresh(tab);
     }
 
     private static string Normalize(string value) => value.Replace("\r\n", "\n").Replace('\r', '\n');
@@ -199,7 +202,7 @@ public partial class MainWindow : Window
         updatingControls = false;
         StatusText.Text = $"{(tab.IsReading ? "阅读" : "编辑")} · {tab.File.Text.Length:N0} 字符" +
             (tab.File.IsDirty ? " · 未保存" : " · 已保存") +
-            (tab.File.Text.Length > 200_000 && tab.IsReading ? " · 大文档原文阅读" : "") +
+            (!PreviewLimits.CanRender(tab.File.Text, tab.Kind) && tab.IsReading ? " · 超过 50 万正文字符，原文阅读" : "") +
             (tab.File.Path is null ? " · 未命名文档" : " · " + tab.File.Path);
         Title = tab.File.Title + (tab.File.IsDirty ? " *" : "") + " · 轻阅";
         RefreshPresentation(tab);
@@ -220,7 +223,11 @@ public partial class MainWindow : Window
 
     private void TabChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (e.Source == TabStrip) RefreshCurrent();
+        if (e.Source == TabStrip)
+        {
+            RefreshCurrent();
+            QueueExternalRefresh(CurrentTab);
+        }
     }
 
     private async void WindowDrop(object sender, DragEventArgs e)
@@ -258,7 +265,12 @@ public partial class MainWindow : Window
                     if (duplicate is not null) { SelectTab(duplicate); return; }
                     if (tabs.Count >= 200) { Notify("最多同时打开 200 个标签。"); return; }
                     var empty = tabs.Count == 1 && tabs[0].IsEmpty ? tabs[0] : null;
-                    AddDocument(file);
+                    var opened = AddDocument(file);
+                    if (opened.Kind == TextKind.Markdown)
+                    {
+                        EnterReading(opened, 0);
+                        RefreshCurrent();
+                    }
                     if (empty is not null) tabs.Remove(empty);
                     AddRecent(fullPath);
                 }

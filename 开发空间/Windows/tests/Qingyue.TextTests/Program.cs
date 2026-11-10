@@ -367,7 +367,7 @@ var tests = new List<(string Name, Action Run)>
     }),
     ("reading/fallback and heading cap", () =>
     {
-        var input = "# 标题\n" + new string('文', 200_001);
+        var input = "# 标题\n" + new string('文', 500_001);
         var model = Build(input, TextKind.Markdown);
         Equal(input, model.VisibleText);
         Equal(2, model.SourceToDisplay(2));
@@ -420,7 +420,7 @@ var tests = new List<(string Name, Action Run)>
         Equal(8, outline[1].SourceStart);
         Equal(8, outline[1].DisplayStart);
         Equal("a|b\t代码", Build("| a\\|b | `代码` |\n| --- | --- |", TextKind.Markdown).Blocks.Single().Text);
-        Check(Build("# h\n" + new string('文', 199_996), TextKind.Markdown).Headings.Count == 1, "20 万以内应富文本");
+        Check(Build("# h\n" + new string('文', 499_996), TextKind.Markdown).Headings.Count == 1, "50 万以内应富文本");
     })
 };
 

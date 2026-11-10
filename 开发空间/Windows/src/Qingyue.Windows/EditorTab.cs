@@ -56,6 +56,7 @@ public sealed class EditorTab : INotifyPropertyChanged
             Padding = new Thickness(18, 20, 24, 24),
             FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI"),
             FontSize = 15, UndoLimit = 200, IsUndoEnabled = true,
+            IsInactiveSelectionHighlightEnabled = true,
             VerticalContentAlignment = VerticalAlignment.Top
         };
         Editor.IsUndoEnabled = false;
@@ -66,11 +67,14 @@ public sealed class EditorTab : INotifyPropertyChanged
             IsReadOnly = true, IsDocumentEnabled = true, BorderThickness = new Thickness(0),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            IsUndoEnabled = false, Padding = new Thickness(0)
+            IsUndoEnabled = false, Padding = new Thickness(0),
+            IsInactiveSelectionHighlightEnabled = true
         };
         System.Windows.Automation.AutomationProperties.SetName(Preview, "只读阅读视图");
         Preview.SetResourceReference(Control.BackgroundProperty, "EditorBrush");
         Preview.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        Preview.SetResourceReference(RichTextBox.SelectionBrushProperty, "AccentBrush");
+        Editor.SetResourceReference(TextBox.SelectionBrushProperty, "AccentBrush");
         EditorSurface = new Grid();
         EditorSurface.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         EditorSurface.ColumnDefinitions.Add(new ColumnDefinition());

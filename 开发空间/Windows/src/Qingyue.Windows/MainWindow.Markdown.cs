@@ -7,7 +7,6 @@ namespace Qingyue.Windows;
 
 public partial class MainWindow
 {
-    private const int MarkdownPreviewLimit = 200_000;
     private readonly DispatcherTimer markdownTimer = new() { Interval = TimeSpan.FromMilliseconds(280) };
     private EditorTab? markdownTab;
     private Grid? markdownSplit;
@@ -23,7 +22,7 @@ public partial class MainWindow
         {
             markdownTimer.Stop();
             if (CurrentTab is { } tab && tab == markdownTab && !tab.IsReading &&
-                tab.Kind == TextKind.Markdown && tab.File.Text.Length <= MarkdownPreviewLimit)
+                tab.Kind == TextKind.Markdown && PreviewLimits.CanRender(tab.File.Text, tab.Kind))
                 UpdateMarkdownPreview(tab);
         };
         Closed += (_, _) => markdownTimer.Stop();
@@ -39,14 +38,14 @@ public partial class MainWindow
         }
         else
         {
-            if (tab.File.Text.Length > MarkdownPreviewLimit)
+            if (!PreviewLimits.CanRender(tab.File.Text, tab.Kind))
             {
-                Notify("MD 分屏预览支持 20 万字符以内的文档。当前文档可继续在编辑区查看完整原文。");
+                Notify("MD 分屏预览支持 50 万正文字符，内嵌图片数据单独计限。当前文档可继续查看完整原文。");
                 return;
             }
+            if (tab.IsReading) ToggleReading();
             markdownTab = tab;
             markdownText = null;
-            if (tab.IsReading) ToggleReading();
         }
         RefreshCurrent();
         tab.Editor.Focus();
@@ -60,7 +59,7 @@ public partial class MainWindow
     private bool RefreshMarkdownPresentation(EditorTab tab)
     {
         bool enabled = markdownTab == tab && !tab.IsReading && tab.Kind == TextKind.Markdown &&
-            tab.File.Text.Length <= MarkdownPreviewLimit;
+            PreviewLimits.CanRender(tab.File.Text, tab.Kind);
         if (!enabled)
         {
             markdownTimer.Stop();
@@ -84,7 +83,7 @@ public partial class MainWindow
         {
             markdownFont = settings.FontSize;
             markdownWidth = settings.ReadingWidth;
-            markdownPreview = new MarkdownPreview(tab.File.Text, settings.FontSize + 1, settings.ReadingWidth);
+            markdownPreview = new MarkdownPreview(tab.File.Text, settings.FontSize + 1, settings.ReadingWidth, tab.File.Path);
             markdownPreviewHost!.Content = markdownPreview;
             markdownText = tab.File.Text;
         }
