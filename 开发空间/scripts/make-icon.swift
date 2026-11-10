@@ -25,35 +25,11 @@ func paintIcon(pixels: Int) throws -> Data {
     }
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = context
-    context.cgContext.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-    color(0x11141A).setFill()
-    NSBezierPath(roundedRect: NSRect(x: 36, y: 36, width: 952, height: 952), xRadius: 210, yRadius: 210).fill()
-
-    color(0x253A63).setFill()
-    NSBezierPath(roundedRect: NSRect(x: 233, y: 191, width: 580, height: 628), xRadius: 62, yRadius: 62).fill()
-    color(0x4782FF).setFill()
-    NSBezierPath(roundedRect: NSRect(x: 207, y: 218, width: 580, height: 628), xRadius: 62, yRadius: 62).fill()
-
-    color(0xEDF1F8).setFill()
-    NSBezierPath(roundedRect: NSRect(x: 274, y: 288, width: 446, height: 493), xRadius: 22, yRadius: 22).fill()
-    color(0xC3D4FA).setFill()
-    NSBezierPath(rect: NSRect(x: 274, y: 288, width: 22, height: 493)).fill()
-
-    let bookmark = NSBezierPath()
-    bookmark.move(to: NSPoint(x: 605, y: 781))
-    bookmark.line(to: NSPoint(x: 662, y: 781))
-    bookmark.line(to: NSPoint(x: 662, y: 653))
-    bookmark.line(to: NSPoint(x: 633.5, y: 678))
-    bookmark.line(to: NSPoint(x: 605, y: 653))
-    bookmark.close()
-    color(0x4782FF).setFill()
-    bookmark.fill()
-
-    color(0x5B6F96).setFill()
-    let strokes: [(CGFloat, CGFloat)] = [(634, 222), (551, 315), (468, 315), (385, 222)]
-    for (y, width) in strokes {
-        NSBezierPath(roundedRect: NSRect(x: 333, y: y, width: width, height: 22), xRadius: 11, yRadius: 11).fill()
-    }
+    let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Windows/src/Qingyue.Windows/Assets/Qingyue-512.png")
+    guard let image = NSImage(contentsOf: source) else { throw NSError(domain: "QingyueSharedIcon", code: 1) }
+    context.imageInterpolation = .high
+    image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels), from: .zero, operation: .copy, fraction: 1)
     NSGraphicsContext.restoreGraphicsState()
     guard let png = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "LightReaderIcon", code: 2)

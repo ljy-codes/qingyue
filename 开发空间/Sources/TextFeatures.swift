@@ -3,6 +3,7 @@ import Foundation
 
 enum TextKind: String, CaseIterable {
     case plain, json, jsonc, yaml, ini, markdown, xml
+    case javascript, typescript, python, java, csharp, sql, html, css, go, rust, shell, powershell, toml, csv
 
     var label: String {
         switch self {
@@ -13,6 +14,20 @@ enum TextKind: String, CaseIterable {
         case .ini: return "INI / 配置"
         case .markdown: return "Markdown"
         case .xml: return "XML"
+        case .javascript: return "JavaScript"
+        case .typescript: return "TypeScript"
+        case .python: return "Python"
+        case .java: return "Java"
+        case .csharp: return "C#"
+        case .sql: return "SQL"
+        case .html: return "HTML"
+        case .css: return "CSS"
+        case .go: return "Go"
+        case .rust: return "Rust"
+        case .shell: return "Shell"
+        case .powershell: return "PowerShell"
+        case .toml: return "TOML"
+        case .csv: return "CSV"
         }
     }
 
@@ -20,13 +35,27 @@ enum TextKind: String, CaseIterable {
         let ext = url?.pathExtension.lowercased() ?? ""
         let name = url?.lastPathComponent.lowercased() ?? ""
         switch ext {
-        case "txt", "log", "csv", "tsv": return .plain
+        case "txt", "log": return .plain
+        case "csv", "tsv": return .csv
         case "json": return .json
         case "jsonc": return .jsonc
         case "yml", "yaml": return .yaml
         case "md", "markdown", "mdown", "mkd": return .markdown
-        case "ini", "conf", "cfg", "properties", "env", "toml": return .ini
-        case "xml", "plist", "svg", "html", "htm": return .xml
+        case "ini", "conf", "cfg", "properties", "env": return .ini
+        case "toml": return .toml
+        case "xml", "plist", "svg": return .xml
+        case "html", "htm": return .html
+        case "js", "mjs", "cjs", "jsx": return .javascript
+        case "ts", "tsx": return .typescript
+        case "py", "pyw": return .python
+        case "java": return .java
+        case "cs": return .csharp
+        case "sql": return .sql
+        case "css", "scss", "less": return .css
+        case "go": return .go
+        case "rs": return .rust
+        case "sh", "bash", "zsh", "fish": return .shell
+        case "ps1", "psm1", "psd1": return .powershell
         default: break
         }
         if name == ".env" || name.hasPrefix(".env.") { return .ini }
@@ -136,7 +165,7 @@ enum TextFeatures {
             regex(#"\b[A-Za-z_:][A-Za-z0-9_:.-]*(?=[ \t]*=)"#, color: palette.key)
             regex(#"\"[^\"]*\"|'[^']*'"#, color: palette.string)
             regex(#"(?s)<!--.*?(?:-->|$)"#, color: palette.comment)
-        case .plain: break
+        default: break
         }
     }
 
@@ -209,6 +238,7 @@ enum TextFeatures {
         while index < sourceLines.count {
             let sourceStart = sourceLines[index].range.location
             let displayStart = output.length
+            var blockKind = "paragraph"
             // The renderer deliberately records block ranges rather than
             // pretending that removed Markdown punctuation maps character-wise.
             // `index` points to the first unconsumed line when this scope exits,
@@ -217,6 +247,7 @@ enum TextFeatures {
                 if output.length > displayStart {
                     let sourceEnd = index < sourceLines.count ? sourceLines[index].range.location : (text as NSString).length
                     let sourceRange = NSRange(location: sourceStart, length: max(0, sourceEnd - sourceStart))
+                    output.addAttribute(NSAttributedString.Key("qingyue.blockKind"), value: blockKind, range: NSRange(location: displayStart, length: output.length - displayStart))
                     output.addAttribute(NSAttributedString.Key("qingyue.sourceRange"), value: NSValue(range: sourceRange),
                                         range: NSRange(location: displayStart, length: output.length - displayStart))
                 }
@@ -239,6 +270,7 @@ enum TextFeatures {
                 }
             }
             if fence != nil {
+                blockKind = "code"
                 var attrs = base
                 attrs[.font] = codeFont
                 attrs[.foregroundColor] = palette.string
@@ -247,15 +279,18 @@ enum TextFeatures {
                 index += 1; continue
             }
             if let table = table(at: index, in: sourceLines) {
+                blockKind = "table"
                 appendTable(table.rows, alignments: table.alignments, to: output, base: base, palette: palette, codeFont: codeFont, fontSize: fontSize)
                 output.append(NSAttributedString(string: "\n", attributes: base))
                 index = table.end; continue
             } else if let heading = headingTitle(line.text) {
+                blockKind = "heading"
                 var attrs = base
                 attrs[.font] = NSFont.systemFont(ofSize: fontSize + CGFloat(max(1, 5 - heading.level)) * 2, weight: .semibold)
                 attrs[.foregroundColor] = palette.accent
                 output.append(inline(heading.title, attributes: attrs, palette: palette, codeFont: codeFont))
             } else if let level = setextLevel(at: index, in: sourceLines) {
+                blockKind = "heading"
                 var attrs = base
                 attrs[.font] = NSFont.systemFont(ofSize: fontSize + (level == 1 ? 8 : 6), weight: .semibold)
                 attrs[.foregroundColor] = palette.accent
@@ -271,6 +306,7 @@ enum TextFeatures {
                 var attrs = base; attrs[.font] = NSFont.systemFont(ofSize: 5); attrs[.paragraphStyle] = style
                 output.append(NSAttributedString(string: "\u{200B}\n", attributes: attrs)); index += 1; continue
             } else if trimmed.hasPrefix(">") {
+                blockKind = "quote"
                 var attrs = base
                 attrs[.foregroundColor] = palette.muted
                 let style = paragraph.mutableCopy() as! NSMutableParagraphStyle
@@ -313,9 +349,28 @@ enum TextFeatures {
         let text = line.trimmingCharacters(in: .whitespaces)
         let units = Array(text.utf16)
         var cells: [String] = [], start = 0, index = 0, hasPipe = false, lastPipe = -1
+        var codeTicks = 0
         while index < units.count {
             if units[index] == 92 { index += min(2, units.count - index); continue }
-            if units[index] == 124 {
+            if units[index] == 96 {
+                var end = index
+                while end < units.count && units[end] == 96 { end += 1 }
+                let count = end - index
+                if codeTicks == 0 {
+                    // Treat as a code span only if a matching closing run exists.
+                    var probe = end
+                    while probe < units.count {
+                        if units[probe] == 96 {
+                            var next = probe
+                            while next < units.count && units[next] == 96 { next += 1 }
+                            if next - probe == count { codeTicks = count; break }
+                            probe = next
+                        } else { probe += 1 }
+                    }
+                } else if count == codeTicks { codeTicks = 0 }
+                index = end; continue
+            }
+            if units[index] == 124 && codeTicks == 0 {
                 cells.append(String(decoding: units[start..<index], as: UTF16.self).trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\\|", with: "|"))
                 start = index + 1; hasPipe = true; lastPipe = index
             }
@@ -337,7 +392,7 @@ enum TextFeatures {
         var alignments: [NSTextAlignment] = []
         for cell in separators {
             let dashes = cell.dropFirst(cell.hasPrefix(":") ? 1 : 0).dropLast(cell.hasSuffix(":") ? 1 : 0)
-            guard dashes.count >= 3, dashes.allSatisfy({ $0 == "-" }) else { return nil }
+            guard dashes.count >= 1, dashes.allSatisfy({ $0 == "-" }) else { return nil }
             alignments.append(cell.hasSuffix(":") ? (cell.hasPrefix(":") ? .center : .right) : .left)
         }
         var rows = [header], end = index + 2
@@ -364,10 +419,17 @@ enum TextFeatures {
         let table = NSTextTable(); table.numberOfColumns = alignments.count
         table.layoutAlgorithm = .fixedLayoutAlgorithm; table.collapsesBorders = true
         table.setContentWidth(100, type: .percentageValueType)
+        // Give descriptive columns more room while bounding skew. Equal-width
+        // allocation makes paths dominate narrow columns in real README tables.
+        let weights = (0..<alignments.count).map { column -> CGFloat in
+            let longest = rows.map { column < $0.count ? $0[column].count : 0 }.max() ?? 1
+            return sqrt(CGFloat(min(100, max(4, longest))))
+        }
+        let totalWeight = max(1, weights.reduce(0, +))
         for (rowIndex, row) in rows.enumerated() {
             for (column, cell) in row.enumerated() {
                 let block = NSTextTableBlock(table: table, startingRow: rowIndex, rowSpan: 1, startingColumn: column, columnSpan: 1)
-                block.setContentWidth(100 / CGFloat(alignments.count), type: .percentageValueType)
+                block.setContentWidth(100 * weights[column] / totalWeight, type: .percentageValueType)
                 block.setWidth(6, type: .absoluteValueType, for: .padding)
                 block.setWidth(0.5, type: .absoluteValueType, for: .border)
                 block.setBorderColor(palette.muted.withAlphaComponent(0.35))
@@ -438,6 +500,15 @@ enum TextFeatures {
             } else if let alt = value(1) {
                 content = alt.isEmpty ? "〔图片〕" : "〔图片：\(alt)〕"
                 attrs[.foregroundColor] = palette.muted
+                let complete = ns.substring(with: match.range)
+                if let start = complete.range(of: "](") {
+                    var reference = String(complete[start.upperBound...].dropLast()).trimmingCharacters(in: .whitespaces)
+                    if reference.hasPrefix("<"), let end = reference.firstIndex(of: ">") { reference = String(reference[reference.index(after: reference.startIndex)..<end]) }
+                    else if let title = reference.range(of: #"[ \t]+["'].*["']$"#, options: .regularExpression) { reference = String(reference[..<title.lowerBound]) }
+                    attrs[NSAttributedString.Key("qingyue.imageReference")] = reference
+                    attrs[NSAttributedString.Key("qingyue.imageAlt")] = alt
+                    attrs[NSAttributedString.Key("qingyue.imageID")] = match.range.location
+                }
             } else if let label = value(2), let address = value(3) {
                 content = label
                 attrs[.foregroundColor] = palette.accent

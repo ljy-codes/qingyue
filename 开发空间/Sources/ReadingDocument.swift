@@ -17,7 +17,7 @@ struct ReadingHeading {
 /// offsets. Pixel scroll positions can therefore be replaced by source anchors.
 struct ReadingDocument {
     static let sourceRangeAttribute = NSAttributedString.Key("qingyue.sourceRange")
-    static let richTextLimit = 200_000
+    static let richTextLimit = 500_000
     private static let headingLimit = 500
 
     let attributedText: NSAttributedString
@@ -102,6 +102,25 @@ struct ReadingDocument {
         return ReadingDocument(attributedText: NSAttributedString(attributedString: rendered), segments: mapped,
                                headings: nodes.map { ReadingHeading(title: $0.title, sourceRange: $0.range, displayRange: $0.range) },
                                sourceText: source, identityMapping: true)
+    }
+
+    /// Rebuild block positions after attachments or native diagrams replace
+    /// placeholders. Source ranges remain authoritative; source text never changes.
+    func replacingPresentation(_ attributed: NSAttributedString) -> ReadingDocument {
+        if identityMapping {
+            return ReadingDocument(attributedText: attributed, segments: segments, headings: headings, sourceText: sourceText, identityMapping: true)
+        }
+        var mapped: [ReadingSegment] = []
+        attributed.enumerateAttribute(Self.sourceRangeAttribute, in: NSRange(location: 0, length: attributed.length)) { value, display, _ in
+            guard let raw = (value as? NSValue)?.rangeValue, raw.location != NSNotFound,
+                  raw.location >= 0, raw.location <= sourceText.length, raw.length >= 0,
+                  raw.length <= sourceText.length - raw.location else { return }
+            mapped.append(ReadingSegment(sourceRange: raw, displayRange: display))
+        }
+        let base = ReadingDocument(attributedText: attributed, segments: mapped, headings: [], sourceText: sourceText, identityMapping: false)
+        let nodes = headings.map { ReadingHeading(title: $0.title, sourceRange: $0.sourceRange,
+                                                 displayRange: base.displayRange(forSourceOffset: $0.sourceRange.location)) }
+        return ReadingDocument(attributedText: attributed, segments: mapped, headings: nodes, sourceText: sourceText, identityMapping: false)
     }
 
     private static func safeOffset(_ offset: Int, in text: NSString) -> Int {

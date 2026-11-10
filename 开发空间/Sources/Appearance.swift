@@ -20,8 +20,8 @@ struct ReaderTheme {
     var selection: NSColor { NSColor(hex: dark ? 0x284674 : 0xDBE7FF) }
     var palette: EditorPalette {
         EditorPalette(background: editor, foreground: text, muted: muted, accent: accent,
-                      string: NSColor(hex: dark ? 0x9FCB9B : 0x387545),
-                      number: NSColor(hex: dark ? 0xD7ABEB : 0x8652A8),
+                      string: NSColor(hex: dark ? 0xD7BA7D : 0x8A4B1A),
+                      number: NSColor(hex: dark ? 0x8ED8BC : 0x21775B),
                       comment: muted, key: NSColor(hex: dark ? 0x85B9EF : 0x246CAB))
     }
 }
@@ -183,6 +183,7 @@ final class EditorTextView: NSTextView {
 }
 
 final class LineNumberRuler: NSRulerView {
+    var lineMarks: [Int: Bool] = [:]
     weak var editor: NSTextView?
     var ink = NSColor.secondaryLabelColor
     var background = NSColor.windowBackgroundColor
@@ -255,6 +256,10 @@ final class LineNumberRuler: NSRulerView {
                 y = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
             }
             let label = NSAttributedString(string: "\(i + 1)", attributes: attrs)
+            if let saved = lineMarks[i + 1] {
+                (saved ? NSColor.systemGreen : NSColor.systemOrange).setFill()
+                NSRect(x: 1, y: y + inset.y - visible.minY, width: 4, height: max(12, editor.font?.pointSize ?? 14)).fill()
+            }
             let point = NSPoint(x: ruleThickness - label.size().width - 10, y: y + inset.y - visible.minY + 1)
             label.draw(at: point)
             i += 1
