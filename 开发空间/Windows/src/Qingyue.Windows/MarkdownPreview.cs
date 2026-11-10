@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Qingyue.Core;
 using DocumentList = System.Windows.Documents.List;
 
@@ -22,11 +23,17 @@ public sealed class MarkdownPreview : RichTextBox
     private double readingWidth;
     private readonly string? sourcePath;
     private readonly bool includeDiagramSource;
+    private string? renderedText;
 
     public MarkdownPreview(string text, double fontSize, double readingWidth, string? sourcePath = null,
         bool includeDiagramSource = false)
+        : this(fontSize, readingWidth, sourcePath, includeDiagramSource)
     {
-        ArgumentNullException.ThrowIfNull(text);
+        Update(text);
+    }
+
+    private MarkdownPreview(double fontSize, double readingWidth, string? sourcePath, bool includeDiagramSource)
+    {
         if (!double.IsFinite(fontSize) || fontSize <= 0) throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0) throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
@@ -48,14 +55,19 @@ public sealed class MarkdownPreview : RichTextBox
         AutomationProperties.SetName(this, "Markdown 格式预览");
         SizeChanged += (_, _) => UpdatePadding();
         Loaded += (_, _) => UpdatePadding();
-        Update(text);
     }
 
     /// <summary>
     /// Synchronously replaces the preview; recoverable parsing/formatting failures show the
     /// original text. Null arguments and calls outside the UI thread remain contract errors.
     /// </summary>
-    public void Update(string text) => Update(text, BuildDocument);
+    public void Update(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        VerifyAccess();
+        if (string.Equals(text, renderedText, StringComparison.Ordinal)) return;
+        Update(text, BuildDocument);
+    }
 
     /// <summary>
     /// Reflow the existing document and synchronize local type styles without
@@ -80,7 +92,8 @@ public sealed class MarkdownPreview : RichTextBox
         ArgumentNullException.ThrowIfNull(buildDocument);
         VerifyAccess();
         FlowDocument document;
-        try { document = buildDocument(text); }
+        bool formatted = false;
+        try { document = buildDocument(text); formatted = true; }
         catch (Exception error) when (error is RegexMatchTimeoutException or ArgumentException or
             FormatException or OverflowException or InvalidOperationException or IndexOutOfRangeException)
         {
@@ -95,36 +108,90 @@ public sealed class MarkdownPreview : RichTextBox
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         }
         Document = document;
+        // Do not cache a transient parser fallback: a later identical update can recover.
+        renderedText = formatted ? text : null;
         IsDocumentEnabled = document.Blocks.OfType<BlockUIContainer>().Any() || HasImages(document);
         UpdatePadding();
     }
 
     private FlowDocument BuildDocument(string text)
     {
+        var prepared = Prepare(text, null, CancellationToken.None);
+        var document = CreateDocument();
+        foreach (var _ in BuildBlocks(document, prepared, CancellationToken.None)) { }
+        return document;
+    }
+
+    internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
+        string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
+    {
+        var builder = new MarkdownPreview(fontSize, readingWidth, sourcePath, includeDiagramSource: true);
+        // No WPF object escapes to the worker. Only the image projection and pure
+        // ReadingModel parsing run there; the original model is supplied by the host.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        token.ThrowIfCancellationRequested();
+        var prepared = await Task.Run(() => Prepare(text, model, token), token);
+        token.ThrowIfCancellationRequested();
+        var document = builder.CreateDocument();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        int blocks = 0;
+        foreach (var _ in builder.BuildBlocks(document, prepared, token))
+        {
+            if (++blocks % 16 != 0 && elapsed.ElapsedMilliseconds < 8) continue;
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            token.ThrowIfCancellationRequested();
+            elapsed.Restart();
+        }
+        token.ThrowIfCancellationRequested();
+        return document;
+    }
+
+    private sealed record PreparedMarkdown(MarkdownImages Images, ReadingModel Model,
+        IReadOnlyDictionary<int, ReadingBlock>? SourceBlocks);
+
+    private static PreparedMarkdown Prepare(string text, ReadingModel? originalModel, CancellationToken token)
+    {
         // Extract destinations before Core's length fallback, so a long embedded PNG is
         // represented by a short private token, never by hundreds of thousands of text glyphs.
-        var images = MarkdownImages.Extract(text);
-        string projected = images.Text;
-        var model = ReadingModel.Build(projected, TextKind.Markdown);
+        var images = MarkdownImages.Extract(text, token);
+        token.ThrowIfCancellationRequested();
+        var model = images.References.Count == 0 && originalModel is not null
+            ? originalModel : ReadingModel.Build(images.Text, TextKind.Markdown);
+        token.ThrowIfCancellationRequested();
         // Navigation belongs to the host's original model, whose image labels have the
         // real alt length. Private image tokens are only used to construct the document.
         IReadOnlyDictionary<int, ReadingBlock>? sourceBlocks = null;
         if (images.References.Count > 0)
         {
-            try { sourceBlocks = ReadingModel.Build(text, TextKind.Markdown).Blocks.ToDictionary(b => b.SourceStart); }
+            try { sourceBlocks = (originalModel ?? ReadingModel.Build(text, TextKind.Markdown)).Blocks.ToDictionary(b => b.SourceStart); }
             catch (RegexMatchTimeoutException) { /* Keep the safe projected rendering. */ }
         }
-        // Do not decorate the mapped reader's live Runs. This document is private to the
-        // preview, and its temporary renderer/map is deliberately never exposed or reused.
-        var document = new RenderedReading(model, renderMermaid: false).Document;
-        document.FontSize = FontSize;
-        document.LineHeight = FontSize * 1.75;
-        var paragraphs = document.Blocks.Cast<Paragraph>().ToArray();
+        token.ThrowIfCancellationRequested();
+        return new(images, model, sourceBlocks);
+    }
+
+    private FlowDocument CreateDocument()
+    {
+        var document = new FlowDocument
+        {
+            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
+            ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left,
+            PagePadding = new Thickness(36, 28, 36, 60)
+        };
+        document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
+        return document;
+    }
+
+    private IEnumerable<int> BuildBlocks(FlowDocument document, PreparedMarkdown prepared, CancellationToken token)
+    {
+        var (images, model, sourceBlocks) = prepared;
+        string projected = images.Text;
         var diagramBudget = new MermaidBlock.Budget();
         DocumentList? list = null;
         int displayStart = 0;
         for (int i = 0; i < model.Blocks.Count; i++)
         {
+            token.ThrowIfCancellationRequested();
             var parsedBlock = model.Blocks[i];
             var block = images.OriginalRange(parsedBlock) with
             {
@@ -134,8 +201,9 @@ public sealed class MarkdownPreview : RichTextBox
                 original.Kind == block.Kind && original.SourceLength == block.SourceLength)
                 block = original;
             displayStart = block.DisplayStart + block.Text.Length + 1;
-            var paragraph = paragraphs[i];
-            paragraph.Tag = block;
+            var paragraph = new Paragraph(new Run(block.Text))
+            { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
+            document.Blocks.Add(paragraph);
             RenderedReading.StyleBlock(paragraph, block, FontSize);
             string source = projected.Substring(parsedBlock.SourceStart, parsedBlock.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
             if (MermaidBlock.IsMermaid(block))
@@ -155,7 +223,7 @@ public sealed class MarkdownPreview : RichTextBox
             }
             else if (block.Kind == ReadingBlockKind.Table)
             {
-                var table = TablePreview(parsedBlock.Text, images);
+                var table = TablePreview(parsedBlock.Text, source, images);
                 table.Tag = block;
                 document.Blocks.InsertBefore(paragraph, table);
                 document.Blocks.Remove(paragraph);
@@ -199,8 +267,9 @@ public sealed class MarkdownPreview : RichTextBox
                 list.ListItems.Add(new ListItem(paragraph));
             }
             else list = null;
+            yield return i;
         }
-        return document;
+        if (document.Blocks.Count == 0) document.Blocks.Add(new Paragraph(new Run("")));
     }
 
     private void UpdatePadding() => RenderedReading.ApplyPageLayout(this, readingWidth);
@@ -312,10 +381,13 @@ public sealed class MarkdownPreview : RichTextBox
         }
         else
         {
-            paragraph.Inlines.Add(new InlineUIContainer(new MarkdownImageView(reference, sourcePath, images.Budget))
-            {
-                BaselineAlignment = BaselineAlignment.Center
-            });
+            if (MarkdownImageView.Create(reference, sourcePath, images.Budget) is { } view)
+                paragraph.Inlines.Add(new InlineUIContainer(view) { BaselineAlignment = BaselineAlignment.Center });
+            else if (images.Budget.TakeLimitNotice())
+                paragraph.Inlines.Add(new InlineUIContainer(new TextBlock
+                {
+                    Text = "图片未显示：本篇图片超过 32 张", FontSize = 13
+                }));
             // Keep a real selectable label for the authoritative model's [图片：alt]
             // text, including table cells and list items.
             var label = new Run(images.Caption(reference));
@@ -336,9 +408,12 @@ public sealed class MarkdownPreview : RichTextBox
         _ => false
     };
 
-    private Table TablePreview(string text, MarkdownImages images)
+    private Table TablePreview(string text, string source, MarkdownImages images)
     {
         var rows = text.Split('\n').Select(line => line.Split('\t')).ToArray();
+        var sourceLines = source.Split('\n');
+        var sourceRows = sourceLines.Where((_, index) => index != 1).Select(TableCells).ToArray();
+        var separators = sourceLines.Length > 1 ? TableCells(sourceLines[1]) : [];
         var table = new Table { CellSpacing = 0, Margin = new Thickness(0, 8, 0, 18), FontSize = FontSize * .9 };
         table.SetResourceReference(Block.BorderBrushProperty, "BorderBrush");
         table.BorderThickness = new Thickness(1, 1, 0, 0);
@@ -357,18 +432,12 @@ public sealed class MarkdownPreview : RichTextBox
             int column = 0;
             foreach (string value in rows[index])
             {
-                var paragraph = new Paragraph { Margin = new Thickness(0) };
-                int cursor = 0;
-                foreach (var reference in images.References)
-                {
-                    string marker = "[图片：" + reference.Key + "]";
-                    int at = value.IndexOf(marker, cursor, StringComparison.Ordinal);
-                    if (at < 0) continue;
-                    paragraph.Inlines.Add(new Run(value[cursor..at]));
-                    AppendImage(paragraph, reference, images);
-                    cursor = at + marker.Length;
-                }
-                paragraph.Inlines.Add(new Run(value[cursor..]));
+                var paragraph = new Paragraph(new Run(images.RestoreLabels(value))) { Margin = new Thickness(0) };
+                if (index < sourceRows.Length && sourceRows[index].Length == rows[index].Length)
+                    DecorateInline(paragraph, sourceRows[index][column], value, images);
+                string separator = column < separators.Length ? separators[column] : "";
+                paragraph.TextAlignment = separator.EndsWith(':')
+                    ? separator.StartsWith(':') ? TextAlignment.Center : TextAlignment.Right : TextAlignment.Left;
                 var cell = new TableCell(paragraph)
                 {
                     Padding = new Thickness(12, 8, 12, 8), BorderThickness = new Thickness(0, 0, 1, 1)
@@ -383,7 +452,42 @@ public sealed class MarkdownPreview : RichTextBox
         }
         foreach (double weight in weights)
             table.Columns.Add(new TableColumn { Width = new GridLength(weight, GridUnitType.Star) });
+        ReaderTableWindow.Attach(table);
         return table;
+    }
+
+    // Match Core's cell boundaries (escaped pipes and backtick runs), then decorate
+    // only when the resulting visible text agrees with the authoritative TSV cell.
+    private static string[] TableCells(string line)
+    {
+        string value = line.Trim();
+        int start = value.StartsWith('|') ? 1 : 0, end = value.Length;
+        if (end > start && value[end - 1] == '|')
+        {
+            int slashes = 0;
+            for (int j = end - 2; j >= start && value[j] == '\\'; j--) slashes++;
+            if (slashes % 2 == 0) end--;
+        }
+        var cells = new List<string>();
+        int cellStart = start, ticks = 0;
+        for (int i = start; i < end; i++)
+        {
+            if (value[i] == '\\') { i++; continue; }
+            if (value[i] == '`')
+            {
+                int run = 1;
+                while (i + run < end && value[i + run] == '`') run++;
+                ticks = ticks == run ? 0 : ticks == 0 ? run : ticks;
+                i += run - 1;
+            }
+            else if (value[i] == '|' && ticks == 0)
+            {
+                cells.Add(value[cellStart..i].Trim());
+                cellStart = i + 1;
+            }
+        }
+        cells.Add(value[cellStart..end].Trim());
+        return cells.ToArray();
     }
 
     private const double MinTableColumnWeight = 10;

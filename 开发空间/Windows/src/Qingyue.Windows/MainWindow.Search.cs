@@ -31,6 +31,7 @@ public partial class MainWindow
 
     private void ShowSearch(bool replace)
     {
+        RememberSearchOrigin();
         if (CurrentTab is { } current) ExitStructureForEditing(current);
         if (replace && CurrentTab?.IsReading == true) ToggleReading();
         SearchPanel.Visibility = Visibility.Visible;
@@ -45,7 +46,7 @@ public partial class MainWindow
     private void SearchKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) { MoveSearch(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -1 : 1); e.Handled = true; }
-        if (e.Key == Key.Escape) { SearchPanel.Visibility = Visibility.Collapsed; FocusDocument(); e.Handled = true; }
+        if (e.Key == Key.Escape) { HideSearch(); e.Handled = true; }
     }
 
     private async void QueueSearch()

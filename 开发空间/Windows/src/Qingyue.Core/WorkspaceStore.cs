@@ -18,6 +18,8 @@ public sealed class WorkspaceStore
     private readonly string _root;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private long _clearGeneration;
+    private bool _recoveryPrepared;
+    private readonly HashSet<string> _unopenedDrafts = new(StringComparer.OrdinalIgnoreCase);
     // Encoding hints are metadata only; clean file contents always come from disk.
     private sealed record StoredSession(int Version, List<WorkspaceEntry> Entries, Guid? ActiveId, Dictionary<Guid, TextCodec>? Codecs);
     private string SessionPath => System.IO.Path.Combine(_root, "Session.json");
@@ -31,14 +33,19 @@ public sealed class WorkspaceStore
 
     // Copy before the first await, while the caller still owns the supplied lists.
     // Snapshot records and their strings are immutable.
-    public Task<WorkspaceSaveResult> SaveAsync(WorkspaceSession session, IReadOnlyList<DocumentSnapshot> drafts)
+    public Task<WorkspaceSaveResult> SaveAsync(WorkspaceSession session, IReadOnlyList<DocumentSnapshot> drafts) =>
+        SaveAsync(session, drafts, Array.Empty<Guid>());
+
+    public Task<WorkspaceSaveResult> SaveAsync(WorkspaceSession session, IReadOnlyList<DocumentSnapshot> drafts,
+        IReadOnlyCollection<Guid> openedDocumentIds)
     {
         long generation = Interlocked.Read(ref _clearGeneration);
         try
         {
             var copy = session with { Entries = session.Entries.ToList() };
             var snapshots = drafts.ToArray();
-            return SaveCoreAsync(copy, snapshots, generation);
+            var opened = openedDocumentIds.Concat(copy.Entries.Select(e => e.Id)).ToHashSet();
+            return SaveCoreAsync(copy, snapshots, opened, generation);
         }
         catch (Exception ex) when (ex is ArgumentException or NullReferenceException or InvalidOperationException)
         {
@@ -46,7 +53,8 @@ public sealed class WorkspaceStore
         }
     }
 
-    private async Task<WorkspaceSaveResult> SaveCoreAsync(WorkspaceSession session, DocumentSnapshot[] snapshots, long generation)
+    private async Task<WorkspaceSaveResult> SaveCoreAsync(WorkspaceSession session, DocumentSnapshot[] snapshots,
+        HashSet<Guid> openedDocumentIds, long generation)
     {
         await _gate.WaitAsync().ConfigureAwait(false);
         try
@@ -55,7 +63,7 @@ public sealed class WorkspaceStore
             {
                 if (generation != Interlocked.Read(ref _clearGeneration))
                     return new WorkspaceSaveResult(DateTimeOffset.UtcNow, []);
-                return SaveLocked(session, snapshots);
+                return SaveLocked(session, snapshots, openedDocumentIds);
             }).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
@@ -65,6 +73,25 @@ public sealed class WorkspaceStore
     {
         await _gate.WaitAsync().ConfigureAwait(false);
         try { return await Task.Run(LoadLocked).ConfigureAwait(false); }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Protect drafts that this window has not opened, independently of session
+    /// restoration and recovery preferences. Enumerate names only, including drafts
+    /// above the load budget; inability to prepare must prevent subsequent autosaves.
+    /// </summary>
+    public async Task PrepareRecoveryAsync()
+    {
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_recoveryPrepared) return;
+            var paths = await Task.Run(() => Directory.Exists(DraftsPath)
+                ? Directory.GetFiles(DraftsPath, "*.json") : Array.Empty<string>()).ConfigureAwait(false);
+            _unopenedDrafts.UnionWith(paths);
+            _recoveryPrepared = true;
+        }
         finally { _gate.Release(); }
     }
 
@@ -94,6 +121,7 @@ public sealed class WorkspaceStore
                 if (session.ActiveId is not null && session.Entries.All(e => e.Id != session.ActiveId)) session = session with { ActiveId = null };
                 Directory.CreateDirectory(_root);
                 AtomicWrite(SessionPath, SessionBytes(session, codecs), null);
+                _unopenedDrafts.Clear();
                 if (Directory.Exists(DraftsPath))
                     foreach (var file in Directory.EnumerateFiles(DraftsPath, "*.json")) File.Delete(file);
             }).ConfigureAwait(false);
@@ -103,7 +131,7 @@ public sealed class WorkspaceStore
         finally { _gate.Release(); }
     }
 
-    private WorkspaceSaveResult SaveLocked(WorkspaceSession session, DocumentSnapshot[] snapshots)
+    private WorkspaceSaveResult SaveLocked(WorkspaceSession session, DocumentSnapshot[] snapshots, HashSet<Guid> openedDocumentIds)
     {
         var errors = new List<string>();
         var committed = new List<(string Target, string? Backup)>();
@@ -153,10 +181,12 @@ public sealed class WorkspaceStore
             }
             AtomicWrite(SessionPath, sessionBytes, null);
             sessionCommitted = true;
+            foreach (var id in openedDocumentIds) _unopenedDrafts.Remove(DraftPath(id));
             // Old drafts are removed only after the new session is durable.
             var retained = payloads.Select(p => p.Id).ToHashSet();
             foreach (var path in Directory.EnumerateFiles(DraftsPath, "*.json"))
-                if (!Guid.TryParse(System.IO.Path.GetFileNameWithoutExtension(path), out var id) || !retained.Contains(id))
+                if (!_unopenedDrafts.Contains(path)
+                    && (!Guid.TryParse(System.IO.Path.GetFileNameWithoutExtension(path), out var id) || !retained.Contains(id)))
                     TryCleanup(path, errors);
         }
         catch (Exception ex) when (IsDataError(ex))
@@ -226,9 +256,16 @@ public sealed class WorkspaceStore
                         var snapshot = ReadJson<DocumentSnapshot>(path, MaximumDraftBytes)
                             ?? throw new InvalidDataException("草稿内容为空。");
                         if (snapshot.Id != id || drafts.ContainsKey(id)) throw new InvalidDataException("草稿 ID 不匹配或重复。");
-                        if (entryById.TryGetValue(id, out var metadata) && !PathsEqual(metadata.Path, snapshot.Path))
-                            throw new InvalidDataException("草稿路径与会话元数据不一致。");
                         var file = DocumentFile.Restore(snapshot);
+                        if (entryById.TryGetValue(id, out var metadata) && !PathsEqual(metadata.Path, snapshot.Path))
+                        {
+                            // A process can stop after committing a renamed draft but
+                            // before committing Session.json. Recover the valid body,
+                            // without trusting either path or acquiring write authority.
+                            file = RestorePathless(file);
+                            if (metadata.RecoverDraft)
+                                warnings.Add("草稿路径与会话元数据不一致，已恢复为无路径副本：" + file.Title);
+                        }
                         drafts.Add(id, file);
                         totalBytes += length;
                     }
@@ -280,18 +317,21 @@ public sealed class WorkspaceStore
             {
                 // No second dirty document receives authority over the same disk path.
                 var originalName = file.Title;
-                file = DocumentFile.Restore(file.CaptureSnapshot() with
-                {
-                    Path = null, SuggestedName = originalName, WasSaved = false,
-                    BaselineDigest = null, BaselineText = "", BaselineCodec = TextCodec.Utf8,
-                    BaselineLineEnding = LineEnding.Lf, HadBom = false
-                });
+                file = RestorePathless(file);
                 entry = entry with { Path = null };
                 warnings.Add("重复路径已恢复为独立未命名副本：" + originalName);
             }
             result.Add(new RestoredDocument(entry with { Path = file.Path }, file));
         }
     }
+
+    private static DocumentFile RestorePathless(DocumentFile file) =>
+        DocumentFile.Restore(file.CaptureSnapshot() with
+        {
+            Path = null, SuggestedName = file.Title, WasSaved = false,
+            BaselineDigest = null, BaselineText = "", BaselineCodec = TextCodec.Utf8,
+            BaselineLineEnding = LineEnding.Lf, HadBom = false
+        });
 
     private WorkspaceSession? ReadSession(out Dictionary<Guid, TextCodec> codecs)
     {

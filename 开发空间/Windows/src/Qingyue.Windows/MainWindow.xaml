@@ -27,6 +27,7 @@
         <MenuItem Header="另存为…" InputGestureText="Ctrl+Shift+S" Tag="saveAs" Click="MenuAction"/>
         <MenuItem Header="保存全部" InputGestureText="Ctrl+Alt+S" Tag="saveAll" Click="MenuAction"/>
         <MenuItem Header="重命名…" InputGestureText="F2" Tag="rename" Click="MenuAction"/>
+        <MenuItem Header="导出自包含 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
         <MenuItem Header="按编码重新打开">
           <MenuItem Header="UTF-8" Tag="reopen:Utf8" Click="MenuAction"/>
           <MenuItem Header="UTF-8 BOM" Tag="reopen:Utf8Bom" Click="MenuAction"/>
@@ -51,6 +52,14 @@
         <MenuItem Header="复制" Command="ApplicationCommands.Copy"/>
         <MenuItem Header="粘贴" Command="ApplicationCommands.Paste"/>
         <MenuItem Header="全选" Command="ApplicationCommands.SelectAll"/>
+        <MenuItem Header="Markdown 复制">
+          <MenuItem Header="复制全文（富文本与图片）" Tag="copyReading" Click="MenuAction"/>
+          <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
+          <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
+          <Separator/>
+          <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
+          <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
+        </MenuItem>
         <Separator/>
         <MenuItem Header="检查当前文档" Tag="validate" Click="MenuAction"/>
         <MenuItem Header="格式化 / 整理文本" Tag="format" Click="MenuAction" InputGestureText="Ctrl+Alt+F"/>
@@ -62,6 +71,7 @@
         <MenuItem Header="上一个" InputGestureText="Shift+F3" Tag="previous" Click="MenuAction"/>
         <MenuItem Header="跳转行…" InputGestureText="Ctrl+G" Tag="goto" Click="MenuAction"/>
         <MenuItem Header="文档目录" InputGestureText="Ctrl+Shift+O" Tag="outline" Click="MenuAction"/>
+        <MenuItem Header="返回跳转前位置" InputGestureText="Alt+←" Tag="returnPosition" Click="MenuAction"/>
       </MenuItem>
       <MenuItem Header="视图(_V)">
         <MenuItem Header="阅读 / 编辑" InputGestureText="Ctrl+R" Tag="reading" Click="MenuAction"/>
@@ -87,6 +97,7 @@
       </MenuItem>
       <MenuItem Header="帮助(_H)">
         <MenuItem Header="Windows 使用说明" Tag="help" Click="MenuAction"/>
+        <MenuItem Header="打开与阅读诊断…" Tag="diagnostics" Click="MenuAction"/>
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>
@@ -193,17 +204,38 @@
         </Grid>
       </Border>
       <Grid Grid.Column="1">
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
           <WrapPanel VerticalAlignment="Center">
             <Button x:Name="FormatButton" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button x:Name="StructureButton" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
             <Button x:Name="MarkdownButton" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
             <Button x:Name="CopyReadingButton" Content="复制全文（含图片）" Tag="copyReading" Click="MenuAction" Margin="0,0,14,0" Visibility="Collapsed" ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
+            <Menu x:Name="CopyOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0" VerticalAlignment="Center">
+              <MenuItem Header="复制 / 导出 ▾">
+                <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
+                <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
+                <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
+                <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
+                <Separator/>
+                <MenuItem Header="导出 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
+              </MenuItem>
+            </Menu>
+            <Button x:Name="ReturnPositionButton" Content="返回位置" Tag="returnPosition" Click="MenuAction" Margin="0,0,8,0" IsEnabled="False" ToolTip="返回目录跳转前的阅读位置 · Alt+←"/>
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
           </WrapPanel>
         </Border>
-        <ContentControl x:Name="DocumentHost" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+        <Border x:Name="OperationPanel" Grid.Row="1" Visibility="Collapsed" Padding="14,8" Background="{DynamicResource PanelBrush}">
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+              <TextBlock x:Name="OperationLabel" Text="正在读取文件" FontSize="12" Margin="0,0,0,6"/>
+              <ProgressBar x:Name="OperationProgress" Height="4" IsIndeterminate="True" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="文档加载进度"/>
+            </StackPanel>
+            <Button Grid.Column="1" Content="取消" Tag="cancelLoading" Click="MenuAction" AutomationProperties.Name="取消加载"/>
+          </Grid>
+        </Border>
+        <ContentControl x:Name="DocumentHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
       </Grid>
     </Grid>
     <Border Grid.Row="5" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,7">

@@ -1,0 +1,10 @@
+<Project>
+  <Import Project="../../Directory.Build.props" />
+  <PropertyGroup>
+    <RecoveryBuildFlavor Condition="'$(RecoveryCoreOnly)' == 'true'">core</RecoveryBuildFlavor>
+    <RecoveryBuildFlavor Condition="'$(RecoveryCoreOnly)' != 'true'">wpf</RecoveryBuildFlavor>
+    <RecoveryWindowsSource Condition="'$(RecoveryWindowsSource)' == ''">$(MSBuildThisFileDirectory)../../src/Qingyue.Windows</RecoveryWindowsSource>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../artifacts/recovery-v030/build/$(RecoveryBuildFlavor)/obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../artifacts/recovery-v030/build/$(RecoveryBuildFlavor)/bin/</BaseOutputPath>
+  </PropertyGroup>
+</Project>

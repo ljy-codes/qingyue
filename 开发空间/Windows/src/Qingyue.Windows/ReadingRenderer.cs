@@ -47,13 +47,20 @@ public sealed partial class RenderedReading
                 else if (diagramBudget.LimitNotice() is { } notice) Document.Blocks.Add(notice);
             }
             if (images is not null && block.Kind != ReadingBlockKind.Code)
-                foreach (var reference in images.References)
-                    if (reference.Start >= block.SourceStart && reference.Start < (long)block.SourceStart + block.SourceLength &&
-                        !reference.IsRemote)
-                        Document.Blocks.Add(new BlockUIContainer(new MarkdownImageView(reference, sourcePath, images.Budget))
-                        {
-                            Tag = block, Margin = new Thickness(0, 8, 0, 12)
-                        });
+                foreach (var reference in images.InSourceRange(block.SourceStart, block.SourceLength))
+                    if (!reference.IsRemote)
+                    {
+                        if (MarkdownImageView.Create(reference, sourcePath, images.Budget) is { } view)
+                            Document.Blocks.Add(new BlockUIContainer(view)
+                            {
+                                Tag = block, Margin = new Thickness(0, 8, 0, 12)
+                            });
+                        else if (images.Budget.TakeLimitNotice())
+                            Document.Blocks.Add(new BlockUIContainer(new TextBlock
+                            {
+                                Text = "图片未显示：本篇图片超过 32 张", FontSize = 13
+                            }) { Tag = block, Margin = new Thickness(0, 8, 0, 12) });
+                    }
             Document.Blocks.Add(paragraph);
         }
         if (runs.Count == 0)
@@ -271,8 +278,8 @@ public sealed partial class RenderedReading
     }
 }
 
-// Kept in this compilation unit because the existing Markdown and WPF audit harnesses
-// link ReadingRenderer.cs directly. No changes to their projects or entry points needed.
+// Image projection and loading stay with the renderer for source-link harnesses;
+// interactive hosts also include ReaderImageWindow.cs and ReaderTableWindow.cs.
 internal sealed record MarkdownImageReference(int Start, int Length, string Alt, string Target,
     string Key, int ProjectedStart, int ProjectedLength)
 {
@@ -286,12 +293,18 @@ internal sealed class MarkdownImages
     internal MarkdownImageBudget Budget { get; } = new();
     private readonly Dictionary<string, MarkdownImageReference> byKey;
     private readonly Dictionary<string, string> captions = new(StringComparer.Ordinal);
+    private readonly string markerPrefix;
+    private readonly int[] sourceDeltas;
 
     private MarkdownImages(string text, List<MarkdownImageReference> references)
     {
         Text = text;
         References = references;
         byKey = references.ToDictionary(r => r.Key, StringComparer.Ordinal);
+        markerPrefix = references.Count == 0 ? "" : "[图片：" + references[0].Key[..^1];
+        sourceDeltas = new int[references.Count + 1];
+        for (int i = 0; i < references.Count; i++)
+            sourceDeltas[i + 1] = sourceDeltas[i] + references[i].Length - references[i].ProjectedLength;
     }
 
     internal bool TryGet(string key, out MarkdownImageReference reference) => byKey.TryGetValue(key, out reference!);
@@ -306,13 +319,22 @@ internal sealed class MarkdownImages
 
     internal string RestoreLabels(string text)
     {
-        foreach (var reference in References)
+        if (References.Count == 0) return text;
+        StringBuilder? restored = null;
+        int cursor = 0, scan = 0;
+        while ((scan = text.IndexOf(markerPrefix, scan, StringComparison.Ordinal)) >= 0)
         {
-            string marker = "[图片：" + reference.Key + "]";
-            if (text.Contains(marker, StringComparison.Ordinal))
-                text = text.Replace(marker, Caption(reference), StringComparison.Ordinal);
+            int end = text.IndexOf(']', scan + markerPrefix.Length);
+            if (end < 0) break;
+            if (byKey.TryGetValue(text[(scan + 4)..end], out var reference))
+            {
+                restored ??= new StringBuilder(text.Length);
+                restored.Append(text, cursor, scan - cursor).Append(Caption(reference));
+                cursor = end + 1;
+            }
+            scan = end + 1;
         }
-        return text;
+        return restored is null ? text : restored.Append(text, cursor, text.Length - cursor).ToString();
     }
 
     internal string FallbackText(string source)
@@ -329,25 +351,40 @@ internal sealed class MarkdownImages
         return output.Append(source, cursor, source.Length - cursor).ToString();
     }
 
-    internal ReadingBlock OriginalRange(ReadingBlock block) => block with
+    internal ReadingBlock OriginalRange(ReadingBlock block)
     {
-        SourceStart = OriginalOffset(block.SourceStart),
-        SourceLength = OriginalOffset(block.SourceStart + block.SourceLength) - OriginalOffset(block.SourceStart)
-    };
+        int start = OriginalOffset(block.SourceStart);
+        return block with { SourceStart = start, SourceLength = OriginalOffset(block.SourceStart + block.SourceLength) - start };
+    }
 
     private int OriginalOffset(int offset)
     {
-        int delta = 0;
-        foreach (var reference in References)
+        int low = 0, high = References.Count - 1;
+        while (low <= high)
         {
-            if (offset <= reference.ProjectedStart) break;
-            if (offset < reference.ProjectedStart + reference.ProjectedLength) return reference.Start;
-            delta += reference.Length - reference.ProjectedLength;
+            int middle = low + (high - low) / 2;
+            if (References[middle].ProjectedStart <= offset) low = middle + 1;
+            else high = middle - 1;
         }
-        return offset + delta;
+        if (high >= 0 && offset < References[high].ProjectedStart + References[high].ProjectedLength)
+            return References[high].Start;
+        return offset + sourceDeltas[low];
     }
 
-    internal static MarkdownImages Extract(string source)
+    internal IEnumerable<MarkdownImageReference> InSourceRange(int start, int length)
+    {
+        int low = 0, high = References.Count;
+        while (low < high)
+        {
+            int middle = low + (high - low) / 2;
+            if (References[middle].Start < start) low = middle + 1;
+            else high = middle;
+        }
+        for (int i = low; i < References.Count && References[i].Start < (long)start + length; i++)
+            yield return References[i];
+    }
+
+    internal static MarkdownImages Extract(string source, CancellationToken token = default)
     {
         var references = new List<MarkdownImageReference>();
         StringBuilder? projected = null;
@@ -356,6 +393,7 @@ internal sealed class MarkdownImages
         char fenceMarker = '\0';
         while (lineStart < source.Length)
         {
+            token.ThrowIfCancellationRequested();
             int lineEnd = source.AsSpan(lineStart).IndexOfAny('\r', '\n');
             lineEnd = lineEnd < 0 ? source.Length : lineStart + lineEnd;
             int next = lineEnd;
@@ -380,6 +418,7 @@ internal sealed class MarkdownImages
             {
                 for (int i = lineStart; i < lineEnd; i++)
                 {
+                    if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
                     if (source[i] == '\\') { i++; continue; }
                     if (source[i] == '`')
                     {
@@ -481,8 +520,10 @@ internal sealed class MarkdownImages
 internal sealed class MarkdownImageBudget
 {
     private int count;
+    private bool limitNotice;
     private long bytes, pixels;
     internal bool TakeControl() => ++count <= 32;
+    internal bool TakeLimitNotice() => !limitNotice && (limitNotice = true);
     internal bool Reserve(long imageBytes, long imagePixels)
     {
         lock (this)
@@ -632,26 +673,28 @@ internal sealed class MarkdownImageView : Grid
     private readonly MarkdownImageBudget budget;
     private readonly Image image = new() { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
-    private readonly bool allowed;
     private CancellationTokenSource? loading;
     private RichTextBox? host;
     private bool finished;
 
-    internal MarkdownImageView(MarkdownImageReference reference, string? sourcePath, MarkdownImageBudget budget)
+    internal static MarkdownImageView? Create(MarkdownImageReference reference, string? sourcePath, MarkdownImageBudget budget) =>
+        budget.TakeControl() ? new MarkdownImageView(reference, sourcePath, budget) : null;
+
+    private MarkdownImageView(MarkdownImageReference reference, string? sourcePath, MarkdownImageBudget budget)
     {
         this.reference = reference;
         this.sourcePath = sourcePath;
         this.budget = budget;
-        allowed = budget.TakeControl();
         HorizontalAlignment = HorizontalAlignment.Left;
         string alt = reference.Alt.Length > 160 ? reference.Alt[..160] + "…" : reference.Alt;
         AutomationProperties.SetName(image, string.IsNullOrWhiteSpace(alt) ? "Markdown 图片" : alt);
         AutomationProperties.SetName(this, "Markdown 图片：" + alt);
-        status.Text = allowed ? "图片加载中：" + alt : "图片未显示：本篇图片超过 32 张";
+        status.Text = "图片加载中：" + alt;
         status.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         image.Visibility = Visibility.Collapsed;
         Children.Add(image);
         Children.Add(status);
+        ReaderImageWindow.Attach(this, image, alt);
         Loaded += OnLoaded;
         Unloaded += (_, _) =>
         {
@@ -673,7 +716,7 @@ internal sealed class MarkdownImageView : Grid
             }
         }
         InvalidateMeasure();
-        if (!allowed || finished || loading is { IsCancellationRequested: false }) return;
+        if (finished || loading is { IsCancellationRequested: false }) return;
         using var request = new CancellationTokenSource();
         loading = request;
         try

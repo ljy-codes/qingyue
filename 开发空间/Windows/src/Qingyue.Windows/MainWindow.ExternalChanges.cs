@@ -207,7 +207,12 @@ public partial class MainWindow
                         Math.Clamp(readingEnd, 0, tab.File.Text.Length), readingDisplayEnd)));
         }
         else tab.Editor.IsReadOnly = false;
-        RefreshCurrent();
+        // Rebinding the outline can restore its selected index and raise
+        // OutlineSelected. This is a refresh, not a navigation request.
+        bool wasFollowingOutline = followingOutline;
+        followingOutline = true;
+        try { RefreshCurrent(); }
+        finally { followingOutline = wasFollowingOutline; }
         if (markdown is not null && ReferenceEquals(markdown, markdownPreview) && markdownTab == tab)
         {
             markdownTimer.Stop();

@@ -55,12 +55,14 @@ public partial class MainWindow : Window
             if (result.Errors.Count > 0) StatusText.Text = "恢复草稿保存失败：" + result.Errors[0];
         };
         Closing += WindowClosing;
+        Closing += (_, _) => CancelLoading();
         SizeChanged += (_, _) => UpdateReadingWidths();
     }
 
     public async Task InitializeAsync()
     {
         if (initialized) return;
+        await PrepareRecoveryAsync();
         if (restoreSession && settings.RestoreSession)
         {
             try
@@ -72,10 +74,16 @@ public partial class MainWindow : Window
                     tab.RecoverDraft = restored.Entry.RecoverDraft;
                     tab.AutomaticKind = restored.Entry.AutomaticKind;
                     tab.Kind = tab.AutomaticKind ? TextServices.DetectKind(tab.File.Path ?? tab.File.SuggestedName, tab.File.Text) : restored.Entry.Kind;
-                    tab.SourceAnchor = Math.Clamp(restored.Entry.SourceAnchor, 0, tab.Editor.Text.Length);
-                    tab.Editor.Select(Math.Clamp(restored.Entry.SelectionStart, 0, tab.Editor.Text.Length),
-                        Math.Clamp(restored.Entry.SelectionLength, 0, tab.Editor.Text.Length - Math.Clamp(restored.Entry.SelectionStart, 0, tab.Editor.Text.Length)));
-                    if (restored.Entry.IsReading) EnterReading(tab, restored.Entry.SourceAnchor);
+                    tab.SourceAnchor = Math.Clamp(restored.Entry.SourceAnchor, 0, tab.File.Text.Length);
+                    int selectionStart = EditorOffset(tab, restored.Entry.SelectionStart);
+                    int selectionEnd = EditorOffset(tab, (int)Math.Min(tab.File.Text.Length,
+                        (long)restored.Entry.SelectionStart + restored.Entry.SelectionLength));
+                    tab.Editor.Select(selectionStart, Math.Max(0, selectionEnd - selectionStart));
+                    if (restored.Entry.IsReading)
+                    {
+                        await EnterReadingAsync(tab, restored.Entry.SourceAnchor, focus: false);
+                        RestoreReadingViewport(tab, restored.Entry);
+                    }
                 }
                 var active = tabs.FirstOrDefault(t => t.File.Id == result.ActiveId);
                 if (active is not null) SelectTab(active);
@@ -115,6 +123,7 @@ public partial class MainWindow : Window
         tab.Preview.SelectionChanged += (_, _) => { if (CurrentTab == tab) RefreshLocation(); };
         tab.Preview.Loaded += (_, _) => UpdateReadingWidth(tab);
         tab.Preview.SizeChanged += (_, _) => UpdateReadingWidth(tab);
+        AttachReadingNavigation(tab);
         ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading);
         tabs.Add(tab);
         SelectTab(tab);
@@ -156,7 +165,9 @@ public partial class MainWindow : Window
         ReleaseClosedPresentations();
         DetachMarkdownEditor();
         if (CurrentTab is not { } tab) { DocumentHost.Content = null; return; }
+        NavigationTabChanging(tab);
         DocumentHost.Content = tab.IsReading && tab.Rendered is not null ? tab.Preview : tab.EditorSurface;
+        ReturnPositionButton.IsEnabled = tab.ReturnAnchor is not null;
         ReadingButton.Content = tab.Kind == TextKind.Markdown
             ? tab.IsReading ? "编辑原文" : "返回预览"
             : tab.IsReading ? "返回编辑" : "阅读模式";
@@ -253,36 +264,52 @@ public partial class MainWindow : Window
 
     public async Task OpenPathsAsync(IEnumerable<string> paths)
     {
-        foreach (var path in paths.Take(200))
+        string[] requested = paths.Take(200).ToArray();
+        await openGate.WaitAsync();
+        try
         {
-            string fullPath;
-            try { fullPath = Path.GetFullPath(path); }
-            catch (Exception ex) { Notify("无法打开路径：" + ex.Message); continue; }
-            var existing = tabs.FirstOrDefault(t => string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase));
-            if (existing is not null) { SelectTab(existing); continue; }
-            try
+            using var operation = BeginLoading("正在读取文件");
+            for (int index = 0; index < requested.Length; index++)
             {
-                var file = await Task.Run(() => DocumentFile.Open(fullPath));
-                void Add()
+                operation.Token.ThrowIfCancellationRequested();
+                string fullPath;
+                try { fullPath = Path.GetFullPath(requested[index]); }
+                catch (Exception ex) { Notify("无法打开路径：" + ex.Message); continue; }
+                var existing = tabs.FirstOrDefault(t => string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null) { operation.Tab = null; SelectTab(existing); continue; }
+                try
                 {
+                    operation.Tab = null;
+                    operation.Stage($"正在读取文件（{index + 1}/{requested.Length}）");
+                    var file = await Task.Run(() => DocumentFile.Open(fullPath), operation.Token).WaitAsync(operation.Token);
+                    operation.Token.ThrowIfCancellationRequested();
+                    // An OS file-open request may arrive while a modal dialog is active.
+                    // Complete the publication only when the dialog has returned.
+                    if (modalDepth > 0)
+                    {
+                        pendingOpen.Enqueue(() => _ = OpenPathsAsync([fullPath]));
+                        continue;
+                    }
                     if (approvedShutdown || exitInProgress) return;
                     var duplicate = tabs.FirstOrDefault(t => string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase));
-                    if (duplicate is not null) { SelectTab(duplicate); return; }
-                    if (tabs.Count >= 200) { Notify("最多同时打开 200 个标签。"); return; }
+                    if (duplicate is not null) { SelectTab(duplicate); continue; }
+                    if (tabs.Count >= 200) { Notify("最多同时打开 200 个标签。"); continue; }
                     var empty = tabs.Count == 1 && tabs[0].IsEmpty ? tabs[0] : null;
                     var opened = AddDocument(file);
-                    if (opened.Kind == TextKind.Markdown)
-                    {
-                        EnterReading(opened, 0);
-                        RefreshCurrent();
-                    }
                     if (empty is not null) tabs.Remove(empty);
                     AddRecent(fullPath);
+                    if (opened.Kind == TextKind.Markdown)
+                    {
+                        await EnterReadingAsync(opened, 0, existingOperation: operation);
+                        if (CurrentTab == opened) RefreshCurrent();
+                    }
                 }
-                if (modalDepth > 0) pendingOpen.Enqueue(Add); else Add();
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { Notify($"无法打开“{Path.GetFileName(fullPath)}”：\n{ex.Message}"); }
             }
-            catch (Exception ex) { Notify($"无法打开“{Path.GetFileName(fullPath)}”：\n{ex.Message}"); }
         }
+        catch (OperationCanceledException) { StatusText.Text = "已取消打开，已加载的正文与编辑仍保留。"; }
+        finally { openGate.Release(); }
     }
 
     private T Modal<T>(Func<T> action)
@@ -374,6 +401,7 @@ public partial class MainWindow : Window
     {
         var old = tab.File.Path;
         tab.File.Rename(name);
+        OnRecoveryPathRenamed(old, tab.File.Path);
         if (old is not null) settings.Recent.RemoveAll(p => string.Equals(p, old, StringComparison.OrdinalIgnoreCase));
         if (tab.File.Path is not null) AddRecent(tab.File.Path);
         bool kindChanged = RefreshAutomaticKind(tab);

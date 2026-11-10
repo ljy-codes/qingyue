@@ -1,4 +1,5 @@
 using System.Windows.Documents;
+using System.Windows.Threading;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
@@ -12,14 +13,41 @@ internal sealed class RichDocumentMap
     private readonly int length;
 
     public RichDocumentMap(FlowDocument document, ReadingModel model)
+        : this(document, model.VisibleText.Length)
+    {
+        foreach (var _ in Initialize(model, CancellationToken.None)) { }
+    }
+
+    private RichDocumentMap(FlowDocument document, int length)
     {
         this.document = document;
-        length = model.VisibleText.Length;
-        var cursors = new Dictionary<ReadingBlock, int>();
+        this.length = length;
+    }
+
+    internal static async Task<RichDocumentMap> CreateAsync(FlowDocument document, ReadingModel model,
+        CancellationToken token)
+    {
+        document.VerifyAccess();
+        var map = new RichDocumentMap(document, model.VisibleText.Length);
+        foreach (var _ in map.Initialize(model, token))
+        {
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            token.ThrowIfCancellationRequested();
+        }
+        return map;
+    }
+
+    private IEnumerable<int> Initialize(ReadingModel model, CancellationToken token)
+    {
+        // ReadingBlock is a record containing the entire block Text. Its value hash
+        // rescans that text for every Run; cursors belong to the tagged instance.
+        var cursors = new Dictionary<ReadingBlock, int>(ReferenceEqualityComparer.Instance);
         int fallbackCursor = 0;
+        int batch = 0;
         var elements = Elements(document.Blocks).ToArray();
         foreach (var paragraph in elements.Select(e => e.Element.ContentStart.Paragraph).OfType<Paragraph>().Distinct().ToArray())
         {
+            token.ThrowIfCancellationRequested();
             // WPF TextRange.Text walks backwards over opening elements and includes
             // the list marker at the first Run. An empty inline edge stops that walk
             // without adding characters or changing the visible marker. Prepare all
@@ -27,9 +55,12 @@ internal sealed class RichDocumentMap
             if (paragraph.Parent is ListItem listItem && listItem.Blocks.FirstBlock == paragraph &&
                 paragraph.Inlines.FirstInline is { } first && first is not Span { Inlines.Count: 0 })
                 paragraph.Inlines.InsertBefore(first, new Span());
+            if (++batch % 128 == 0) yield return batch;
         }
         foreach (var (element, block) in elements)
         {
+            token.ThrowIfCancellationRequested();
+            if (++batch % 128 == 0) yield return batch;
             if (element is not Run run)
             {
                 if (block is not null) segments.Add(new(block.DisplayStart, 0, element.ContentStart));

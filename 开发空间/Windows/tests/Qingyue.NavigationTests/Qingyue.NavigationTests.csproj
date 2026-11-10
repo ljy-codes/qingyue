@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(NavigationWindowsSource)' == ''">
+    <ProjectReference Include="../../src/Qingyue.Windows/Qingyue.Windows.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(NavigationWindowsSource)' != ''">
+    <ProjectReference Include="../../src/Qingyue.Core/Qingyue.Core.csproj" />
+    <Compile Include="$(NavigationWindowsSource)/*.cs" Exclude="$(NavigationWindowsSource)/App.xaml.cs" Link="Windows/%(Filename)%(Extension)" />
+    <Page Include="$(NavigationWindowsSource)/MainWindow.xaml" Link="MainWindow.xaml" />
+    <Page Include="$(NavigationWindowsSource)/Theme.xaml" Link="Theme.xaml" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue.png" Link="Assets/Qingyue.png" />
+  </ItemGroup>
+</Project>

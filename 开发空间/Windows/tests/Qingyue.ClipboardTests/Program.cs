@@ -14,8 +14,8 @@ using Qingyue.Core;
 using Qingyue.Windows;
 using DocumentList = System.Windows.Documents.List;
 
-// In-memory STA controls and synthetic IDataObjects only. No Window, Application,
-// system clipboard, user's documents, or network endpoint is accessed by this harness.
+// Synthetic IDataObjects and isolated window fixtures only. No system clipboard,
+// user's documents/profile, or network endpoint is accessed by this harness.
 internal static class Program
 {
     private static int passed, failed;
@@ -46,6 +46,8 @@ internal static class Program
         Test("disabled empty drag and nested text input copy keep defaults", DefaultBehavior);
         Test("pending and excessive images have explicit placeholders without URI access", MissingAndLimitedImages);
         Test("oversized selected text falls back atomically to native formats", TextLimit);
+        SharingChecks.Run(Test);
+        MainWindowSharingChecks.Run(Test);
         Console.WriteLine($"Clipboard checks: {passed}/{passed + failed} passed");
         return failed == 0 ? 0 : 1;
     }

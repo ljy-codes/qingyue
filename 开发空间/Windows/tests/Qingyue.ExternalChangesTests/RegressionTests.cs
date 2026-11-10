@@ -198,6 +198,10 @@ internal static partial class Program
         tab.Preview.ScrollToVerticalOffset(240);
         await Idle(window);
         vertical = tab.Preview.VerticalOffset;
+        var outline = (ListBox)window.FindName("OutlineList");
+        Check(outline.SelectedIndex == 0, "刷新前滚动已自动选中目录，覆盖重绑选中项的回归条件");
+        var returnAnchor = tab.ReturnAnchor;
+        double returnDelta = tab.ReturnDelta;
         File.WriteAllText(path, text.Replace("Old", "New"));
         window.QueueExternalRefresh(tab);
         await WaitFor(() => tab.Reading?.Headings.FirstOrDefault()?.Title == "New title", "阅读预览和目录以新磁盘内容重建");
@@ -210,6 +214,13 @@ internal static partial class Program
             $"roundtrip={tab.Reading.DisplayToSource(tab.Reading.SourceToDisplay(startSource))}:" +
             $"{tab.Reading.DisplayToSource(tab.Reading.SourceToDisplay(endSource))})");
         Check(Math.Abs(tab.Preview.VerticalOffset - vertical) < 2, "阅读滚动位置保留");
+        Check(tab.ReturnAnchor == returnAnchor && tab.ReturnDelta == returnDelta,
+            "目录重绑不会被当作用户导航记录返回位置");
+        outline.SelectedItem = null;
+        outline.SelectedItem = tab.Reading.Headings[0];
+        Check(tab.Rendered.OffsetAt(tab.Preview.Selection.Start) == 0
+            && tab.Preview.Selection.IsEmpty && tab.ReturnAnchor is not null,
+            "外部刷新结束后用户仍可通过目录正常导航");
         window.ToggleReading();
         Check(!tab.IsReading && !tab.Editor.IsReadOnly && tab.Editor.Text.Contains("New title"), "刷新后可正常返回编辑");
 

@@ -15,7 +15,9 @@ public partial class MainWindow
         if (tab.IsReading)
         {
             if (markdownTab == tab) markdownTab = null;
-            int offset = CurrentSourceAnchor(tab);
+            CaptureReadingViewport(tab);
+            tab.ViewportGeneration++;
+            int offset = tab.ViewportAnchor ?? CurrentSourceAnchor(tab);
             tab.SourceAnchor = offset;
             tab.IsReading = false;
             tab.Editor.IsReadOnly = false;
@@ -24,7 +26,14 @@ public partial class MainWindow
             tab.Editor.Focus();
             ScrollToCaret(tab);
         }
-        else EnterReading(tab);
+        else
+        {
+            int anchor = EditingViewportAnchor(tab);
+            tab.ViewportAnchor = anchor;
+            tab.ViewportDelta = 0;
+            EnterReading(tab, anchor);
+            RestoreReadingViewport(tab, anchor, tab.ViewportDelta);
+        }
         RefreshCurrent();
     }
 
@@ -36,17 +45,40 @@ public partial class MainWindow
     private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true)
     {
         tab.SourceAnchor = Math.Clamp(sourceAnchor ?? CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
-        tab.Reading = ReadingModel.Build(tab.File.Text, tab.Kind);
+        if (CanReuseReading(tab))
+        {
+            PublishReading(tab, tab.Reading!, tab.Rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
+            return;
+        }
+        var model = ReadingModel.Build(tab.File.Text, tab.Kind);
+        var rendered = PreviewLimits.CanRender(tab.File.Text, tab.Kind)
+            ? tab.Kind == TextKind.Markdown
+                ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
+                : new RenderedReading(model, sourcePath: tab.File.Path)
+            : null;
+        PublishReading(tab, model, rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
+    }
+
+    private static bool CanReuseReading(EditorTab tab) =>
+        tab.Reading is not null && tab.RenderedText == tab.File.Text && tab.RenderedKind == tab.Kind
+        && tab.RenderedPath == tab.File.Path && (tab.Rendered is not null || !PreviewLimits.CanRender(tab.File.Text, tab.Kind));
+
+    private void PublishReading(EditorTab tab, ReadingModel model, RenderedReading? rendered, string text,
+        string? path, TextKind kind, int anchor, bool focus)
+    {
+        tab.SourceAnchor = anchor;
+        tab.Reading = model;
+        tab.Rendered = rendered;
+        tab.RenderedText = text;
+        tab.RenderedPath = path;
+        tab.RenderedKind = kind;
         tab.IsReading = true;
-        if (PreviewLimits.CanRender(tab.File.Text, tab.Kind))
+        if (rendered is not null)
         {
             tab.Editor.IsReadOnly = false;
-            tab.Rendered = tab.Kind == TextKind.Markdown
-                ? RenderedReading.Markdown(tab.Reading, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
-                : new RenderedReading(tab.Reading, sourcePath: tab.File.Path);
-            tab.Preview.Document = tab.Rendered.Document;
+            tab.Preview.Document = rendered.Document;
             UpdateReadingWidth(tab);
-            var pointer = tab.Rendered.PointerAt(tab.Reading.SourceToDisplay(tab.SourceAnchor));
+            var pointer = rendered.PointerAt(model.SourceToDisplay(tab.SourceAnchor));
             tab.Preview.Selection.Select(pointer, pointer);
             if (CurrentTab == tab)
             {
@@ -91,7 +123,9 @@ public partial class MainWindow
 
     private void OutlineSelected(object sender, SelectionChangedEventArgs e)
     {
+        if (followingOutline) return;
         if (OutlineList.SelectedItem is not ReadingHeading heading || CurrentTab is not { } tab) return;
+        RememberReadingPosition(tab);
         if (tab.IsReading && tab.Rendered is not null)
         {
             var pointer = tab.Rendered.PointerAt(heading.DisplayStart);
@@ -170,9 +204,14 @@ public partial class MainWindow
 
 internal static class ReadingViewExtensions
 {
-    public static void DispatcherBringIntoView(this EditorTab tab, System.Windows.Documents.TextPointer pointer) =>
+    public static void DispatcherBringIntoView(this EditorTab tab, System.Windows.Documents.TextPointer pointer)
+    {
+        var expected = tab.Rendered;
+        long generation = ++tab.ViewportGeneration;
         tab.Preview.Dispatcher.BeginInvoke(() =>
         {
-            pointer.Paragraph?.BringIntoView();
+            if (tab.IsReading && ReferenceEquals(tab.Rendered, expected) && tab.ViewportGeneration == generation
+                && tab.Preview.IsLoaded) pointer.Paragraph?.BringIntoView();
         }, System.Windows.Threading.DispatcherPriority.Loaded);
+    }
 }

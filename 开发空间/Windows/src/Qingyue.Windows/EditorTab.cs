@@ -28,6 +28,14 @@ public sealed class EditorTab : INotifyPropertyChanged
     public bool AutomaticKind { get; set; } = true;
     public TextKind Kind { get; set; }
     public int SourceAnchor { get; set; }
+    internal int? ViewportAnchor { get; set; }
+    internal double ViewportDelta { get; set; }
+    internal long ViewportGeneration { get; set; }
+    internal string? RenderedText { get; set; }
+    internal string? RenderedPath { get; set; }
+    internal TextKind RenderedKind { get; set; }
+    internal int? ReturnAnchor { get; set; }
+    internal double ReturnDelta { get; set; }
     public string DisplayTitle => File.Title + (File.IsDirty && !IsEmpty ? "  •" : "");
     public bool IsEmpty => File.Path is null && File.Text.Length == 0
         && (File.SuggestedName is null || automaticallyNamed && File.SuggestedName == automaticName);

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TargetFramework Condition="'$(RecoveryCoreOnly)' != 'true'">net10.0-windows</TargetFramework>
+    <UseWPF Condition="'$(RecoveryCoreOnly)' != 'true'">true</UseWPF>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <DefineConstants Condition="'$(RecoveryCoreOnly)' == 'true'">$(DefineConstants);RECOVERY_CORE_ONLY</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Compile Include="Program.cs;CoreScenarios.cs" />
+    <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(RecoveryCoreOnly)' != 'true'">
+    <Compile Include="WpfScenarios.cs" />
+    <Compile Include="$(RecoveryWindowsSource)/*.cs" Exclude="$(RecoveryWindowsSource)/App.xaml.cs" Link="Windows/%(Filename)%(Extension)" />
+    <Page Include="$(RecoveryWindowsSource)/MainWindow.xaml" Link="MainWindow.xaml" />
+    <Page Include="$(RecoveryWindowsSource)/Theme.xaml" Link="Theme.xaml" />
+    <Resource Include="$(RecoveryWindowsSource)/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" />
+    <Resource Include="$(RecoveryWindowsSource)/Assets/Qingyue.png" Link="Assets/Qingyue.png" />
+  </ItemGroup>
+</Project>

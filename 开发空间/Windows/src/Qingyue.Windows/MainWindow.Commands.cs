@@ -31,6 +31,7 @@ public partial class MainWindow
         Bind(Key.F2, ModifierKeys.None, "rename");
         Bind(Key.F3, ModifierKeys.None, "next");
         Bind(Key.F3, ModifierKeys.Shift, "previous");
+        Bind(Key.Left, ModifierKeys.Alt, "returnPosition");
         Bind(Key.Tab, ModifierKeys.Control, "nextTab");
         Bind(Key.Tab, ModifierKeys.Control | ModifierKeys.Shift, "previousTab");
         Bind(Key.OemPlus, ModifierKeys.Control, "fontUp");
@@ -71,7 +72,10 @@ public partial class MainWindow
                     if (tabs.Count == 0) NewDocument();
                     break;
                 case "quit": Close(); break;
-                case "reading": ToggleReading(); break;
+                case "reading": await ToggleReadingAsync(); break;
+                case "cancelLoading": CancelLoading(); break;
+                case "diagnostics": ShowOperationDiagnostics(); break;
+                case "returnPosition": ReturnToReadingPosition(); break;
                 case "sidebar": ToggleSidebar(); break;
                 case "focus": ToggleFocus(); break;
                 case "wrap": settings.Wrap = !settings.Wrap; ApplyEditorSettings(); break;
@@ -81,7 +85,7 @@ public partial class MainWindow
                 case "fontDown": settings.FontSize = Math.Max(10, settings.FontSize - 1); ApplyEditorSettings(); break;
                 case "find": ShowSearch(false); break;
                 case "replace": ShowSearch(true); break;
-                case "hideFind": SearchPanel.Visibility = Visibility.Collapsed; FocusDocument(); break;
+                case "hideFind": HideSearch(); break;
                 case "next": MoveSearch(1); break;
                 case "previous": MoveSearch(-1); break;
                 case "replaceOne": ReplaceOne(); break;
@@ -119,7 +123,12 @@ public partial class MainWindow
                     break;
                 case "structure": ToggleStructure(); break;
                 case "markdownPreview": ToggleMarkdownPreview(); break;
-                case "copyReading": CopyReadingDocument(); break;
+                case "copyReading": await ShareReadingWithProgressAsync(false); break;
+                case "copyPlain": CopyReadingPlainText(); break;
+                case "copyMarkdown": CopyReadingMarkdown(); break;
+                case "copyCodeBlock": CopyReadingCodeBlock(); break;
+                case "copyTable": CopyReadingTable(); break;
+                case "exportHtml": await ShareReadingWithProgressAsync(true); break;
                 case "drafts": await ShowDraftSettingsAsync(); break;
                 case "help":
                     Modal(() => Dialogs.CreateHelp(this, false).ShowDialog());

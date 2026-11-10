@@ -16,8 +16,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.2.0-Windows构建5-x64.zip`
-及 `交付产品/轻阅-0.2.0-Windows构建5-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.3.0-Windows构建1-x64.zip`
+及 `交付产品/轻阅-0.3.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -36,6 +36,9 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.ClipboardTests`：结构化富文本、UTF-8 剪贴板偏移、局部选区及内嵌图片；使用合成数据，不读取系统剪贴板。
 - `tests/Qingyue.InstanceTests`：真实多进程启动转发、激活和单实例通信。
 - `tests/Qingyue.ExternalChangesTests`：磁盘刷新、未保存保护、异步竞态和视图状态。
+- `tests/Qingyue.NavigationTests`：打开取消、真实视口、查找返回与目录跳转。
+- `tests/Qingyue.RecoveryTests`：未加载草稿保护、改名中断和退出冻结。
+- `tests/Qingyue.ReaderExperienceTests`：图片窗口、表格对齐、展开阅读及资源边界。
 
 构建 3 支持 `mermaid` 围栏中的离线 `sequenceDiagram`，不引入 WebView 或脚本运行时。
 语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。

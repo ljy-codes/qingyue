@@ -15,20 +15,25 @@ public partial class MainWindow
 
     public async Task<WorkspaceSaveResult> PersistWorkspaceAsync()
     {
-        // Capture UI-owned state before crossing any await. File I/O is serialized by WorkspaceStore.
+        try { await PrepareRecoveryAsync(); }
+        catch (Exception ex)
+        {
+            return new WorkspaceSaveResult(DateTimeOffset.UtcNow, ["恢复草稿准备失败，原有数据仍保留：" + ex.Message]);
+        }
+        // Capture UI-owned state before the save await. File I/O is serialized by WorkspaceStore.
         var retained = tabs.Where(t => !discardedAtExit.Contains(t.File.Id) && !t.IsEmpty).ToArray();
-        var entries = retained.Select(t => new WorkspaceEntry(
-            t.File.Id, t.File.Path, t.IsReading,
-            t.IsReading && t.Rendered is not null && t.Reading is not null
-                ? t.Reading.DisplayToSource(t.Rendered.OffsetAt(t.Preview.Selection.Start)) : SourceOffset(t, t.Editor.CaretIndex),
-            SourceOffset(t, t.Editor.SelectionStart),
-            SourceOffset(t, t.Editor.SelectionStart + t.Editor.SelectionLength) - SourceOffset(t, t.Editor.SelectionStart),
-            CanRecover(t), t.AutomaticKind, t.Kind)).ToList();
+        var entries = retained.Select(t => CaptureWorkspaceEntry(t) with
+        {
+            RecoverDraft = CanRecover(t),
+            SelectionStart = SourceOffset(t, t.Editor.SelectionStart),
+            SelectionLength = SourceOffset(t, t.Editor.SelectionStart + t.Editor.SelectionLength)
+                - SourceOffset(t, t.Editor.SelectionStart)
+        }).ToList();
         var snapshots = retained.Where(t => CanRecover(t) && (t.File.IsDirty || t.File.Path is null))
             .Select(t => t.File.CaptureSnapshot()).ToArray();
         var activeId = entries.Any(e => e.Id == CurrentTab?.File.Id) ? CurrentTab?.File.Id : entries.LastOrDefault()?.Id;
         var session = new WorkspaceSession(1, entries, activeId);
-        var result = await workspace.SaveAsync(session, snapshots);
+        var result = await workspace.SaveAsync(session, snapshots, openedRecoveryDocuments);
         try
         {
             if (WindowState == WindowState.Normal) { settings.Width = Width; settings.Height = Height; }
@@ -47,8 +52,10 @@ public partial class MainWindow
         e.Cancel = true;
         if (exitInProgress || modalDepth > 0) return;
         exitInProgress = true; persistTimer.Stop();
+        Action? restoreEditing = null;
         try
         {
+            restoreEditing = FreezeRecoveryWorkspace();
             foreach (var tab in tabs.Where(t => t.File.IsDirty && !t.IsEmpty).ToArray())
             {
                 var choice = Modal(() => Dialogs.CloseChoice(this, tab.File.Title, CanRecover(tab)));
@@ -62,11 +69,19 @@ public partial class MainWindow
                 return;
             }
             approvedShutdown = true; Close();
+            // Another Closing handler may cancel the final close.
+            if (IsVisible) approvedShutdown = false;
+        }
+        catch (Exception ex)
+        {
+            approvedShutdown = false;
+            Notify("退出未完成，窗口和编辑内容仍保留。\n" + ex.Message);
         }
         finally
         {
             if (!approvedShutdown)
             {
+                restoreEditing?.Invoke();
                 discardedAtExit.Clear(); exitInProgress = false; SchedulePersist();
             }
         }

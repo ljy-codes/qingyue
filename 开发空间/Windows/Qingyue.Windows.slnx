@@ -13,6 +13,9 @@
   <Project Path="tests/Qingyue.ClipboardTests/Qingyue.ClipboardTests.csproj" />
   <Project Path="tests/Qingyue.InstanceTests/Qingyue.InstanceTests.csproj" />
   <Project Path="tests/Qingyue.ExternalChangesTests/Qingyue.ExternalChangesTests.csproj" />
+  <Project Path="tests/Qingyue.NavigationTests/Qingyue.NavigationTests.csproj" />
+  <Project Path="tests/Qingyue.RecoveryTests/Qingyue.RecoveryTests.csproj" />
+  <Project Path="tests/Qingyue.ReaderExperienceTests/Qingyue.ReaderExperienceTests.csproj" />
   <Project Path="tests/Qingyue.FileTests/TextPositionTests/TextPositionTests.csproj" />
   <Project Path="tests/Qingyue.TextTests/Audit/WpfAudit.csproj" />
 </Solution>

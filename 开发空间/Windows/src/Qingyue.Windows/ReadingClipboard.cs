@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -7,15 +8,37 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using System.Xml.Linq;
 using Qingyue.Core;
 using DocumentList = System.Windows.Documents.List;
 
 namespace Qingyue.Windows;
 
-public sealed record ReadingClipboardResult(DataObject Data, int EmbeddedImages, int OmittedImages);
+public sealed record ReadingImageReport(int Embedded, int Pending, int Failed, int Unsupported, int Limited)
+{
+    public bool HasUnrenderedImages { get; init; }
+    public int Omitted => Pending + Failed + Unsupported + Limited;
+    public bool Incomplete => Omitted > 0 || HasUnrenderedImages;
+    public string Description => string.Join("；", new[]
+    {
+        Pending > 0 ? $"{Pending} 张图片尚未加载" : null,
+        Failed > 0 ? $"{Failed} 张图片加载失败" : null,
+        Unsupported > 0 ? $"{Unsupported} 张图片不是受支持的已缓存图片" : null,
+        Limited > 0 ? $"{Limited} 张图片超出资源上限" : null,
+        HasUnrenderedImages ? "本篇图片超过 32 张，部分图片因资源限制未加载，未包含在本次内容中" : null
+    }.Where(s => s is not null));
+}
+
+public sealed record ReadingImageWaitProgress(int PendingImages, TimeSpan Elapsed);
+
+public sealed record ReadingClipboardResult(DataObject Data, int EmbeddedImages, int OmittedImages)
+{
+    public ReadingImageReport Images { get; init; } = new(EmbeddedImages, OmittedImages, 0, 0, 0);
+}
 
 public static class ReadingClipboard
 {
@@ -25,6 +48,139 @@ public static class ReadingClipboard
     private const int MaximumNativeBytes = 64 * 1024 * 1024;
     private static readonly ConditionalWeakTable<RichTextBox, Registration> Registrations = new();
     private static readonly ConditionalWeakTable<IDataObject, SelectionPayload> PreparedCopies = new();
+
+    public static DataObject CreateMarkdownData(string markdown)
+    {
+        ArgumentNullException.ThrowIfNull(markdown);
+        if (markdown.Length > DocumentFile.MaximumSize) throw new IOException("Markdown 超过 50 MiB 内容上限。");
+        return TextData(markdown);
+    }
+
+    public static DataObject CreatePlainTextData(RichTextBox preview)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        preview.VerifyAccess();
+        string text = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text;
+        if (text.Length > MaximumText) throw new IOException("阅读正文超过 50 万字符复制上限。");
+        return TextData(text);
+    }
+
+    private static DataObject TextData(string text)
+    {
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, text, false);
+        data.SetData(DataFormats.Text, text, false);
+        return data;
+    }
+
+    public static ReadingClipboardResult? CreateCurrentCodeBlockData(RichTextBox preview) =>
+        CreateCurrentBlockData(preview, code: true);
+
+    public static ReadingClipboardResult? CreateCurrentTableData(RichTextBox preview) =>
+        CreateCurrentBlockData(preview, code: false);
+
+    private static Block? CurrentBlock(RichTextBox preview, bool code)
+    {
+        preview.VerifyAccess();
+        Block? Find(TextPointer pointer)
+        {
+            for (DependencyObject? parent = pointer.Parent; parent is FrameworkContentElement element; parent = element.Parent)
+                if (code ? element is Paragraph { Tag: ReadingBlock { Kind: ReadingBlockKind.Code } }
+                    : element is Table) return (Block)element;
+            return null;
+        }
+        var first = Find(preview.Selection.Start);
+        if (first is null) return null;
+        if (preview.Selection.IsEmpty) return first;
+        // End is exclusive. A selection ending exactly at the following block's
+        // insertion boundary still belongs to this block.
+        var end = preview.Selection.End.GetNextInsertionPosition(LogicalDirection.Backward);
+        return end is not null && ReferenceEquals(first, Find(end)) ? first : null;
+    }
+
+    private static ReadingClipboardResult? CreateCurrentBlockData(RichTextBox preview, bool code)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        var block = CurrentBlock(preview, code);
+        return block is null ? null : CreateData(preview.Document, new TextRange(block.ElementStart, block.ElementEnd));
+    }
+
+    /// <summary>Polls only generated local control state. Never starts an image load.</summary>
+    public static async Task WaitForImagesAsync(RichTextBox preview, CancellationToken cancellationToken = default,
+        IProgress<ReadingImageWaitProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        preview.VerifyAccess();
+        var guard = new DocumentGuard(preview);
+        var watch = Stopwatch.StartNew();
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int pending = await preview.Dispatcher.InvokeAsync(() =>
+                {
+                    guard.Verify();
+                    return CountPendingImages(guard.Document);
+                }, DispatcherPriority.Background, cancellationToken).Task.ConfigureAwait(false);
+                progress?.Report(new(pending, watch.Elapsed));
+                if (pending == 0 || watch.Elapsed >= TimeSpan.FromSeconds(5))
+                {
+                    await preview.Dispatcher.InvokeAsync(guard.Verify, DispatcherPriority.Background, cancellationToken)
+                        .Task.ConfigureAwait(false);
+                    return;
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Max(1, Math.Min(250, 5000 - watch.Elapsed.TotalMilliseconds))),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally { await preview.Dispatcher.InvokeAsync(guard.Dispose).Task.ConfigureAwait(false); }
+    }
+
+    public static async Task<ReadingClipboardResult?> CreateFullDocumentDataAsync(RichTextBox preview,
+        CancellationToken cancellationToken = default, IProgress<ReadingImageWaitProgress>? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        preview.VerifyAccess();
+        var guard = new DocumentGuard(preview);
+        try
+        {
+            await WaitForImagesAsync(preview, cancellationToken, progress).ConfigureAwait(false);
+            return await preview.Dispatcher.InvokeAsync(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                guard.Verify();
+                return CreateFullDocumentData(preview);
+            }, DispatcherPriority.Background, cancellationToken).Task.ConfigureAwait(false);
+        }
+        finally { await preview.Dispatcher.InvokeAsync(guard.Dispose).Task.ConfigureAwait(false); }
+    }
+
+    internal sealed class DocumentGuard : IDisposable
+    {
+        private readonly RichTextBox preview;
+        private bool changed;
+        internal FlowDocument Document { get; }
+        internal DocumentGuard(RichTextBox preview)
+        {
+            preview.VerifyAccess();
+            this.preview = preview;
+            Document = preview.Document;
+            preview.TextChanged += Changed;
+        }
+        private void Changed(object sender, TextChangedEventArgs e) => changed = true;
+        internal void Verify()
+        {
+            preview.VerifyAccess();
+            if (changed || !ReferenceEquals(preview.Document, Document))
+                throw new InvalidOperationException("阅读内容已更新，请重新复制或导出。");
+        }
+        public void Dispose()
+        {
+            preview.VerifyAccess();
+            preview.TextChanged -= Changed;
+        }
+    }
 
     /// <summary>
     /// Adds HTML to WPF's existing copy data. Does not copy, focus or select anything.
@@ -41,6 +197,7 @@ public static class ReadingClipboard
         {
             registration = new Registration(enabled);
             Registrations.Add(preview, registration);
+            InstallBlockMenu(preview, registration);
             DataObject.AddSettingDataHandler(preview, (_, e) =>
             {
                 if (e.Format != DataFormats.Xaml || e.IsDragDrop || !ReferenceEquals(e.OriginalSource, preview)
@@ -86,11 +243,15 @@ public static class ReadingClipboard
     {
         ArgumentNullException.ThrowIfNull(preview);
         preview.VerifyAccess();
+        return CreateData(preview.Document, new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd));
+    }
+
+    private static ReadingClipboardResult? CreateData(FlowDocument document, TextRange range)
+    {
         try
         {
-            var range = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd);
             var export = new Export(range);
-            string html = export.Html(preview.Document);
+            string html = export.Html(document);
             // Serialize a detached, whitelisted document. Original image wrappers can
             // be Grids, which WPF's RTF writer does not treat as image objects.
             var safeRange = export.RichRange();
@@ -100,7 +261,7 @@ public static class ReadingClipboard
             data.SetData(DataFormats.Html, html, false);
             data.SetData(DataFormats.Rtf, CreateRtf(safeRange), false);
             data.SetData(DataFormats.XamlPackage, CreatePackage(safeRange), false);
-            return new(data, export.EmbeddedImages, export.OmittedImages);
+            return new(data, export.EmbeddedImages, export.OmittedImages) { Images = export.Images };
         }
         catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
@@ -108,6 +269,55 @@ public static class ReadingClipboard
     private sealed class Registration(Func<bool> enabled)
     {
         internal Func<bool> Enabled = enabled;
+    }
+
+    private static void InstallBlockMenu(RichTextBox preview, Registration registration)
+    {
+        if (preview.ContextMenu is null)
+        {
+            preview.ContextMenu = new ContextMenu();
+            preview.ContextMenu.Items.Add(new MenuItem { Header = "复制", Command = ApplicationCommands.Copy, CommandTarget = preview });
+            preview.ContextMenu.Items.Add(new MenuItem { Header = "全选", Command = ApplicationCommands.SelectAll, CommandTarget = preview });
+        }
+        preview.ContextMenu.Items.Add(new Separator());
+        MenuItem Add(string title, bool code)
+        {
+            var item = new MenuItem { Header = title };
+            item.Click += (_, _) =>
+            {
+                try
+                {
+                    var result = CreateCurrentBlockData(preview, code);
+                    if (result is null) throw new IOException("当前选区不在同一个目标块内，或内容超出复制上限。");
+                    Clipboard.SetDataObject(result.Data, true);
+                    if (result.Images.Incomplete) MessageBox.Show(result.Images.Description + "。已保留明确占位符。", "复制图片未完整");
+                }
+                catch (Exception ex) when (IsExportFailure(ex))
+                { MessageBox.Show(ex.Message, "复制未完成"); }
+            };
+            preview.ContextMenu.Items.Add(item);
+            return item;
+        }
+        var codeItem = Add("复制当前代码块", true);
+        var tableItem = Add("复制当前表格", false);
+        preview.ContextMenu.Opened += (_, _) =>
+        {
+            codeItem.IsEnabled = registration.Enabled() && CurrentBlock(preview, true) is not null;
+            tableItem.IsEnabled = registration.Enabled() && CurrentBlock(preview, false) is not null;
+        };
+    }
+
+    internal sealed record HtmlSnapshot(string Fragment, ReadingImageReport Images);
+
+    internal static HtmlSnapshot? CreateHtmlSnapshot(RichTextBox preview)
+    {
+        preview.VerifyAccess();
+        try
+        {
+            var export = new Export(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd));
+            return new(export.Fragment(preview.Document), export.Images);
+        }
+        catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
 
     private sealed record SelectionPayload(string Html, string? Rtf, MemoryStream? Package);
@@ -147,6 +357,53 @@ public static class ReadingClipboard
 
     private sealed class ExportLimitException : IOException;
     private sealed record ExportedImage(BitmapImage Bitmap, int Width, int Height);
+    private enum ImageState { Ready, Pending, Failed, Unsupported, Limited }
+
+    private static ImageState ImageStatus(Image image, UIElement? wrapper)
+    {
+        if (image.Source is BitmapImage { IsFrozen: true, IsDownloading: false,
+            CacheOption: BitmapCacheOption.OnLoad, UriSource: null } && image.Visibility == Visibility.Visible)
+            return ImageState.Ready;
+        if (image.Source is not null) return ImageState.Unsupported;
+        int visited = 0;
+        string? Status(UIElement? child, int depth = 0)
+        {
+            if (++visited > MaximumElements || depth > MaximumDepth) throw new ExportLimitException();
+            if (child is TextBlock text) return text.Text.StartsWith("图片加载失败", StringComparison.Ordinal)
+                || text.Text.StartsWith("图片未显示", StringComparison.Ordinal) ? text.Text : null;
+            if (child is Panel panel)
+                foreach (UIElement nested in panel.Children)
+                    if (Status(nested, depth + 1) is { } found) return found;
+            return child is Border border ? Status(border.Child, depth + 1) : null;
+        }
+        string? status = Status(wrapper);
+        if (status?.StartsWith("图片加载失败", StringComparison.Ordinal) == true) return ImageState.Failed;
+        if (status is not null) return ImageState.Limited;
+        return ImageState.Pending;
+    }
+
+    private static int CountPendingImages(FlowDocument document)
+    {
+        int count = 0, visited = 0;
+        void Walk(DependencyObject element, int depth, UIElement? wrapper = null)
+        {
+            if (++visited > MaximumElements || depth > MaximumDepth)
+                throw new IOException("阅读内容超过结构上限，无法准备图片。");
+            if (element is Image image)
+            {
+                if (ImageStatus(image, wrapper) == ImageState.Pending) count++;
+                return;
+            }
+            // Only inspect generated logical children. No URI/source dereference,
+            // visual template expansion, reflection, measure, focus or selection.
+            foreach (object child in LogicalTreeHelper.GetChildren(element))
+                if (child is DependencyObject nested)
+                    Walk(nested, depth + 1, element is InlineUIContainer or BlockUIContainer
+                        ? nested as UIElement : wrapper);
+        }
+        Walk(document, 0);
+        return count;
+    }
 
     private sealed class LimitedStream(int maximum) : MemoryStream
     {
@@ -182,6 +439,10 @@ public static class ReadingClipboard
         private long imagePixels;
         internal int EmbeddedImages { get; private set; }
         internal int OmittedImages { get; private set; }
+        private int pendingImages, failedImages, unsupportedImages, limitedImages;
+        private bool hasUnrenderedImages;
+        internal ReadingImageReport Images => new(EmbeddedImages, pendingImages, failedImages, unsupportedImages, limitedImages)
+            { HasUnrenderedImages = hasUnrenderedImages };
         internal List<XElement> Elements { get; } = [];
 
         internal TextRange RichRange()
@@ -193,9 +454,7 @@ public static class ReadingClipboard
 
         internal string Html(FlowDocument document)
         {
-            foreach (Block block in document.Blocks)
-                if (Block(block, 0) is { } element) Elements.Add(element);
-            string fragment = "<div>" + string.Concat(Elements.Select(e => e.ToString(SaveOptions.DisableFormatting))) + "</div>";
+            string fragment = Fragment(document);
             const string prefix = "<html><head><meta charset=\"utf-8\" /></head><body><!--StartFragment-->";
             const string suffix = "<!--EndFragment--></body></html>";
             const string format = "Version:1.0\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\n"
@@ -207,6 +466,15 @@ public static class ReadingClipboard
             if (total > MaximumHtmlBytes) throw new ExportLimitException();
             return string.Format(CultureInfo.InvariantCulture, format, header, total, start, end)
                 + prefix + fragment + suffix;
+        }
+
+        internal string Fragment(FlowDocument document)
+        {
+            foreach (Block block in document.Blocks)
+                if (Block(block, 0) is { } element) Elements.Add(element);
+            string fragment = "<div>" + string.Concat(Elements.Select(e => e.ToString(SaveOptions.DisableFormatting))) + "</div>";
+            if (Encoding.UTF8.GetByteCount(fragment) > MaximumHtmlBytes) throw new ExportLimitException();
+            return fragment;
         }
 
         private void Visit(int depth)
@@ -393,10 +661,21 @@ public static class ReadingClipboard
         private XElement? ImageContent(UIElement? child, int depth)
         {
             Image? image = FindImage(child, depth);
-            if (image is null) return null;
+            if (image is null)
+            {
+                // The renderer uses one plain notice after its image-control
+                // budget is exhausted. Preserve it without inventing a count.
+                if (child is TextBlock { Text: "图片未显示：本篇图片超过 32 张" })
+                {
+                    hasUnrenderedImages = true;
+                    return new XElement("span", "[图片未包含：本篇图片超过 32 张]");
+                }
+                return null;
+            }
+            var state = ImageStatus(image, child);
             // Do not dereference URIs, metadata paths, lazy frames, or other image
             // sources. This is exactly the cached source produced by our loader.
-            if (image?.Visibility == Visibility.Visible && image.Source is BitmapImage
+            if (state == ImageState.Ready && image.Source is BitmapImage
                 { IsFrozen: true, IsDownloading: false, CacheOption: BitmapCacheOption.OnLoad, UriSource: null } bitmap
                 && EmbeddedImages < MaximumImages && bitmap.PixelWidth is > 0 and <= 4096
                 && bitmap.PixelHeight is > 0 and <= 4096
@@ -412,6 +691,9 @@ public static class ReadingClipboard
                     encoder.Save(stream);
                     string alt = AutomationProperties.GetName(image);
                     if (alt.Length > 1024) alt = alt[..1024];
+                    if (alt.Contains("file:", StringComparison.OrdinalIgnoreCase) || alt.Contains(":/", StringComparison.Ordinal)
+                        || alt.Contains(":\\", StringComparison.Ordinal)
+                        || alt.Contains("\\\\", StringComparison.Ordinal) || alt.StartsWith('/')) alt = "图片";
                     double width = Math.Min(720, bitmap.PixelWidth);
                     if (double.IsFinite(image.ActualWidth) && image.ActualWidth > 0)
                         width = Math.Min(width, image.ActualWidth);
@@ -433,8 +715,22 @@ public static class ReadingClipboard
                 }
                 catch (Exception ex) when (IsExportFailure(ex)) { /* Explicit placeholder below. */ }
             }
+            switch (state)
+            {
+                case ImageState.Pending: pendingImages++; break;
+                case ImageState.Failed: failedImages++; break;
+                case ImageState.Unsupported: unsupportedImages++; break;
+                default: limitedImages++; break;
+            }
             OmittedImages++;
-            return new XElement("span", "[图片未复制：尚未加载或超过复制上限]");
+            string reason = state switch
+            {
+                ImageState.Pending => "尚未加载",
+                ImageState.Failed => "加载失败",
+                ImageState.Unsupported => "不支持的图片来源",
+                _ => "超过资源上限"
+            };
+            return new XElement("span", "[图片未包含：" + reason + "]");
         }
 
         private Image? FindImage(UIElement? element, int depth)

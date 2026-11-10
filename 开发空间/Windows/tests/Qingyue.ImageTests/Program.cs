@@ -422,7 +422,13 @@ internal static partial class Program
         File.WriteAllBytes(hugePixels, header);
         Check(Load(hugePixels).Error!.Contains("像素"), "没有拒绝超长边图片");
         var many = new MarkdownPreview(string.Join("\n\n", Enumerable.Repeat("![多图](" + DataUri + ")", 34)), 16, 680);
-        Check(Status(many.Document).Count(t => t.Contains("32 张")) == 2, "文档控件数量未限制");
+        // Overflow keeps selectable captions and one notice, without allocating
+        // another image/placeholder control for each reference past the budget.
+        Check(Images(many.Document).Count() == 32, "实际图片控件未限制为 32 张");
+        Check(Controls(many.Document.Blocks).Count() == 33, "超限引用仍在逐张构造占位控件");
+        Check(Status(many.Document).Count(t => t.Contains("32 张")) == 1, "缺少整篇唯一的超限提示");
+        Check(Text(many.Document).Split("[图片：多图]", StringSplitOptions.None).Length - 1 == 34,
+            "超限图片的可选图注丢失");
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         var task = MarkdownImageLoader.LoadAsync(DataUri, null, new MarkdownImageBudget(), canceled.Token);

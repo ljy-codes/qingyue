@@ -22,7 +22,12 @@ public sealed record DocumentSnapshot(
 public sealed record WorkspaceEntry(
     Guid Id, string? Path, bool IsReading, int SourceAnchor, int SelectionStart,
     int SelectionLength, bool RecoverDraft = true, bool AutomaticKind = true,
-    TextKind Kind = TextKind.Plain);
+    TextKind Kind = TextKind.Plain)
+{
+    // Missing in older sessions: fall back to SourceAnchor.
+    public int? ViewportAnchor { get; init; }
+    public double ViewportDelta { get; init; }
+}
 
 public sealed record WorkspaceSession(int Version, List<WorkspaceEntry> Entries, Guid? ActiveId);
 public sealed record RestoredDocument(WorkspaceEntry Entry, DocumentFile File);

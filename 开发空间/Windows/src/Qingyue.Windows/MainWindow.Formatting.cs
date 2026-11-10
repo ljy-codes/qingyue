@@ -77,6 +77,7 @@ public partial class MainWindow
         MarkdownButton.Content = markdown ? "关闭分屏" : "分屏编辑";
         CopyReadingButton.Visibility = tab.Kind == TextKind.Markdown &&
             (tab.IsReading && tab.Rendered is not null || markdown) ? Visibility.Visible : Visibility.Collapsed;
+        CopyOptionsMenu.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
         PresentationHint.Text = structured ? "只读结构 · 点击箭头折叠层级，返回编辑修改原文"
             : markdown ? "左侧编辑 · 右侧预览 · 橙色未保存 / 绿色已保存"
             : tab.Kind == TextKind.Markdown ? tab.IsReading

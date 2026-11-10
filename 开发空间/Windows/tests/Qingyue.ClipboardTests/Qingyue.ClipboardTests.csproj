@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Using Include="System.IO" />
-    <Compile Include="../../src/Qingyue.Windows/ReadingClipboard.cs" Link="ReadingClipboard.cs" />
-    <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
+    <ProjectReference Include="../../src/Qingyue.Windows/Qingyue.Windows.csproj" />
   </ItemGroup>
 </Project>

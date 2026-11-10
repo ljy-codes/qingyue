@@ -8,6 +8,8 @@
     <Compile Include="../../src/Qingyue.Windows/ReadingRenderer.cs" Link="ReadingRenderer.cs" />
     <Compile Include="../../src/Qingyue.Windows/ReadingRenderer.Markdown.cs" Link="ReadingRenderer.Markdown.cs" />
     <Compile Include="../../src/Qingyue.Windows/RichDocumentMap.cs" Link="RichDocumentMap.cs" />
+    <Compile Include="../../src/Qingyue.Windows/ReaderImageWindow.cs" Link="ReaderImageWindow.cs" />
+    <Compile Include="../../src/Qingyue.Windows/ReaderTableWindow.cs" Link="ReaderTableWindow.cs" />
     <Compile Include="../../src/Qingyue.Windows/MarkdownPreview.cs" Link="MarkdownPreview.cs" />
     <Compile Include="../../src/Qingyue.Windows/MarkdownSyntax.cs" Link="MarkdownSyntax.cs" />
     <Compile Include="../../src/Qingyue.Windows/MermaidBlock.cs" Link="MermaidBlock.cs" />
