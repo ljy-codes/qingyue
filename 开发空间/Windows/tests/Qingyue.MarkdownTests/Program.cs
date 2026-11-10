@@ -21,12 +21,27 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--table-audit")
+        {
+            // Read-only aggregate diagnostics; never print document text or image data.
+            string source = File.ReadAllText(args[1]);
+            var model = ReadingModel.Build(source, TextKind.Markdown);
+            var preview = new MarkdownPreview(source, 16, 680);
+            Console.WriteLine($"Table audit: characters={source.Length}; " +
+                $"modelTables={model.Blocks.Count(b => b.Kind == ReadingBlockKind.Table)}; " +
+                $"previewTables={preview.Document.Blocks.OfType<Table>().Count()}");
+            return 0;
+        }
         var tests = new (string Name, Action Run)[]
         {
             ("existing mapping and visible text", Mapping),
             ("block hierarchy and literal code", Blocks),
             ("preview inline styles and inert content", InlinePreview),
             ("preview lists and table grid", ListsAndTables),
+            ("preview one-dash table syntax", () => TableSyntaxCompatibility(1)),
+            ("preview two-dash table syntax", () => TableSyntaxCompatibility(2)),
+            ("preview three-dash table syntax", () => TableSyntaxCompatibility(3)),
+            ("preview incomplete table syntax stays text", IncompleteTableSyntax),
             ("preview update, width and font scale", Update),
             ("dynamic theme resource updates", Theme),
             ("editor token ranges and precedence", Tokens),
@@ -144,6 +159,44 @@ internal static class Program
         Check(lists.Any(l => l.MarkerStyle == TextMarkerStyle.None), "task keeps check mark");
         var zero = new MarkdownPreview("0) 零起点\n1) 下一项", 16, 680);
         Check(new TextRange(zero.Document.ContentStart, zero.Document.ContentEnd).Text.Contains("0) 零起点"), "zero ordered marker preserved");
+    }
+
+    private static void TableSyntaxCompatibility(int dashes)
+    {
+        string marker = new('-', dashes);
+        string source = $"before\n\n| A\\|B | C |\n| {marker} | :{marker}: |\n| x\\|y | `p|q` |\n\n# After";
+        var preview = new MarkdownPreview(source, 16, 680);
+        var tables = preview.Document.Blocks.OfType<Table>().ToArray();
+        Equal(1, tables.Length, $"{dashes}-dash separator produces a real WPF Table");
+        var table = tables.Single();
+        Equal(2, table.Columns.Count, "escaped pipes do not create extra columns");
+        var rows = table.RowGroups.Single().Rows;
+        Equal(2, rows.Count, "header and body row");
+        Equal("A|B", CellText(rows[0].Cells[0]), "escaped header pipe");
+        Equal("x|y", CellText(rows[1].Cells[0]), "escaped body pipe");
+        Equal("p|q", CellText(rows[1].Cells[1]), "code span pipe stays in its cell");
+        Equal(3, preview.Document.Blocks.Count, "paragraph and heading remain outside the table");
+        Equal("before", Text((Paragraph)preview.Document.Blocks.FirstBlock), "preceding paragraph");
+        Equal("After", Text((Paragraph)preview.Document.Blocks.LastBlock), "following heading");
+        Check(table.Tag is ReadingBlock { Kind: ReadingBlockKind.Table }, "table retains its reading block");
+    }
+
+    private static string CellText(TableCell cell) =>
+        new TextRange(cell.ContentStart, cell.ContentEnd).Text.TrimEnd('\r', '\n');
+
+    private static void IncompleteTableSyntax()
+    {
+        foreach (string source in new[]
+        {
+            "| A | B |", "| A | B |\n| -- | :", "| A | B |\n| : | --- |",
+            "| A | B |\n| --x | --- |", "| A | B |\n| -- | -- | -- |"
+        })
+        {
+            var preview = new MarkdownPreview(source, 16, 680);
+            Equal(0, preview.Document.Blocks.OfType<Table>().Count(), "incomplete/invalid separators stay text");
+            Check(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text.Contains("A | B"),
+                "invalid table keeps its content visible");
+        }
     }
 
     private static void Update()

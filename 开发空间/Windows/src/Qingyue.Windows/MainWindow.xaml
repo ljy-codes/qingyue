@@ -199,6 +199,7 @@
             <Button x:Name="FormatButton" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button x:Name="StructureButton" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
             <Button x:Name="MarkdownButton" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
+            <Button x:Name="CopyReadingButton" Content="复制全文（含图片）" Tag="copyReading" Click="MenuAction" Margin="0,0,14,0" Visibility="Collapsed" ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
           </WrapPanel>
         </Border>

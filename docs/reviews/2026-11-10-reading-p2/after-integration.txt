@@ -1,0 +1,34 @@
+Qingyue reading P2 headless behavior probe
+Timestamp: 2026-11-10T12:21:32.5754970+08:00
+Command: pwsh -NoProfile -STA -File "D:\专用工具\阅读器\qingyue\docs\reviews\2026-11-10-reading-p2\probe.ps1" -AssemblyDirectory "D:\专用工具\阅读器\qingyue\开发空间\Windows\tests\Qingyue.ReadingTests\bin\Release\net10.0-windows" -LogPath "D:\专用工具\阅读器\qingyue\docs\reviews\2026-11-10-reading-p2\after-integration.txt"
+Environment: PowerShell=7.6.9; .NET=10.0.14; OS=Microsoft Windows NT 10.0.26300.0; apartment=STA
+Assembly: D:\专用工具\阅读器\qingyue\开发空间\Windows\tests\Qingyue.ReadingTests\bin\Release\net10.0-windows\Qingyue.Core.dll; bytes=124416; modified=2026-11-10T12:16:45.9012975+08:00; SHA256=621F11FCC7148E818CE86F1A1BA6A052D4C0872B2C7394559F336CCA31F5FA74
+Assembly: D:\专用工具\阅读器\qingyue\开发空间\Windows\tests\Qingyue.ReadingTests\bin\Release\net10.0-windows\Qingyue.dll; bytes=535552; modified=2026-11-10T12:20:40.7076401+08:00; SHA256=A5A2163BDAEC44C98693679FD2C9667BEC15BFE73341941773962BDF64ECF50D
+PASS P2-full-font.body | before=16; actual=20; expected=20
+PASS P2-full-font.heading | before=32; actual=40; expected=40
+PASS P2-full-font.code | before=14.4; actual=18; expected=18
+PASS P2-full-font.table | before=14.4; actual=18; expected=18
+PASS P2-full-font.same-document | preserve FlowDocument identity
+PASS P2-full-font.source | synthetic source unchanged
+BEFORE split-width: scroll=800; selected=8; font=19; width=720
+AFTER split-width: scroll=800; selected=8; previewReplaced=False; documentReplaced=False
+PASS P2-split-width.same-preview | preserve control identity
+PASS P2-split-width.same-document | preserve FlowDocument identity
+PASS P2-split-width.selection | beforeLength=8; afterLength=8; beforeRange=1921..1929; afterRange=1921..1929
+PASS P2-split-width.scroll | before=800; after=800; tolerance=1 DIP
+PASS P2-split-width.source | synthetic source unchanged
+BEFORE split-font: scroll=800; selected=8; font=19; width=820
+AFTER split-font: scroll=800; selected=8; previewReplaced=False; documentReplaced=False
+PASS P2-split-font.same-preview | preserve control identity
+PASS P2-split-font.same-document | preserve FlowDocument identity
+PASS P2-split-font.selection | beforeLength=8; afterLength=8; beforeRange=1921..1929; afterRange=1921..1929
+PASS P2-split-font.scroll | before=800; after=800; tolerance=1 DIP
+PASS P2-split-font.source | synthetic source unchanged
+PASS P2-split-font.scale.body | before=20; actual=24; expected=24
+PASS P2-split-font.scale.heading | before=40; actual=48; expected=48
+PASS P2-split-font.scale.code | before=18; actual=21.6; expected=21.599999999999998
+PASS P2-split-font.scale.table | before=18; actual=21.6; expected=21.599999999999998
+PASS host.hidden | Window.Show was never called
+Context: DispatcherSynchronizationContext
+Host: profileWritten=False; visibleWindow=False; profile=C:\Users\nb-liuxinsheng\AppData\Local\Temp\qingyue-reading-p2-2ff55d6b-6d8b-4017-a639-5f283d1231b8
+RESULT: checks=21; behaviorFailures=0; exitCode=0 (0=green, 1=behavior red, 2=host error)

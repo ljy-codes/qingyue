@@ -34,7 +34,7 @@ public sealed partial class RenderedReading
         {
             var run = new Run(block.Text);
             runs.Add((block.DisplayStart, run));
-            var paragraph = new Paragraph(run) { Margin = new Thickness(0, 0, 0, 13) };
+            var paragraph = new Paragraph(run) { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
             StyleBlock(paragraph, block, Document.FontSize);
             if (renderMermaid && MermaidBlock.IsMermaid(block))
             {
@@ -42,7 +42,7 @@ public sealed partial class RenderedReading
                     Document.Blocks.Add(new BlockUIContainer(MermaidBlock.Create(block, Document.FontSize,
                         sourceBelow: true, budget: diagramBudget))
                     {
-                        Margin = new Thickness(0, 8, 0, 4)
+                        Tag = block, Margin = new Thickness(0, 8, 0, 4)
                     });
                 else if (diagramBudget.LimitNotice() is { } notice) Document.Blocks.Add(notice);
             }
@@ -116,6 +116,132 @@ public sealed partial class RenderedReading
                 paragraph.Margin = new Thickness(0, 16, 0, 20);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Apply the reading gutter once, after Document is attached to its host.
+    /// Call on the host's Loaded/SizeChanged as well as reading-width changes.
+    /// This only reflows the existing document; text and navigation stay intact.
+    /// </summary>
+    public void UpdateLayout(RichTextBox host, double readingWidth)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        if (!ReferenceEquals(host.Document, Document))
+            throw new ArgumentException("The host must contain this reading document.", nameof(host));
+        ApplyPageLayout(host, readingWidth);
+    }
+
+    /// <summary>
+    /// Update typography and the reading gutter in place. The host must already
+    /// contain Document. Selection pointers, mapping and decoded images stay valid.
+    /// </summary>
+    public void UpdatePresentation(RichTextBox host, double fontSize, double readingWidth)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        if (!ReferenceEquals(host.Document, Document))
+            throw new ArgumentException("The host must contain this reading document.", nameof(host));
+        ApplyPresentation(host, fontSize, readingWidth);
+    }
+
+    internal static void ApplyPresentation(RichTextBox host, double fontSize, double readingWidth)
+    {
+        host.VerifyAccess();
+        if (!double.IsFinite(fontSize) || fontSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(fontSize));
+        if (!double.IsFinite(readingWidth) || readingWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(readingWidth));
+        var document = host.Document;
+        double oldFontSize = document.FontSize;
+        bool fontChanged = oldFontSize != fontSize || document.LineHeight != fontSize * 1.75;
+        var oldPadding = document.PagePadding;
+        double vertical = host.VerticalOffset, horizontal = host.HorizontalOffset;
+        if (fontChanged)
+        {
+            document.FontSize = fontSize;
+            document.LineHeight = fontSize * 1.75;
+            foreach (var block in document.Blocks)
+                UpdateBlockPresentation(block, fontSize, fontSize / oldFontSize);
+        }
+        if (host.FontSize != fontSize) host.FontSize = fontSize;
+        ApplyPageLayout(host, readingWidth);
+        if (!fontChanged && oldPadding == document.PagePadding) return;
+        // Reflow before restoring offsets: WPF can otherwise bring the selected
+        // caret into view during formatting. No deferred callback can steal a
+        // subsequent user scroll. ScrollViewer clamps at the new document end.
+        host.UpdateLayout();
+        host.ScrollToHorizontalOffset(horizontal);
+        host.ScrollToVerticalOffset(vertical);
+        host.UpdateLayout();
+    }
+
+    private static readonly object ImageCaptionTag = new();
+
+    internal static void StyleImageCaption(Run caption, double fontSize)
+    {
+        caption.Tag = ImageCaptionTag;
+        caption.FontSize = Math.Max(11, fontSize * .8);
+    }
+
+    private static void UpdateBlockPresentation(Block block, double fontSize, double ratio)
+    {
+        switch (block)
+        {
+            case Paragraph paragraph:
+                if (paragraph.Tag is ReadingBlock source)
+                {
+                    var margin = paragraph.Margin;
+                    StyleBlock(paragraph, source, fontSize);
+                    // Rich lists put indentation on the outer List, not its paragraphs.
+                    if (paragraph.Parent is ListItem) paragraph.Margin = margin;
+                }
+                UpdateInlinePresentation(paragraph.Inlines, fontSize);
+                break;
+            case System.Windows.Documents.List list:
+                foreach (var item in list.ListItems)
+                    foreach (var child in item.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                break;
+            case Table table:
+                table.FontSize = fontSize * .9;
+                foreach (var group in table.RowGroups)
+                    foreach (var row in group.Rows)
+                        foreach (var cell in row.Cells)
+                            foreach (var child in cell.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                break;
+            case Section section:
+                foreach (var child in section.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                break;
+            case BlockUIContainer { Tag: ReadingBlock diagramSource, Child: FrameworkElement diagram }
+                when MermaidBlock.IsMermaid(diagramSource):
+                // The diagram's fonts and vector geometry were measured together.
+                // Scale both rather than rebuilding it or changing only the labels.
+                double scale = diagram.LayoutTransform is ScaleTransform transform ? transform.ScaleX : 1;
+                diagram.LayoutTransform = new ScaleTransform(scale * ratio, scale * ratio);
+                break;
+        }
+    }
+
+    private static void UpdateInlinePresentation(InlineCollection inlines, double fontSize)
+    {
+        foreach (var inline in inlines)
+        {
+            if (inline is Run run && ReferenceEquals(run.Tag, ImageCaptionTag))
+                StyleImageCaption(run, fontSize);
+            else if (inline is Span span) UpdateInlinePresentation(span.Inlines, fontSize);
+        }
+    }
+
+    internal static void ApplyPageLayout(RichTextBox host, double readingWidth)
+    {
+        if (!double.IsFinite(readingWidth) || readingWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(readingWidth));
+        // Control.Padding also shrinks the ScrollViewer outside PagePadding.
+        // Keeping both nonzero doubles the gutter, especially after maximizing.
+        if (host.Padding != new Thickness(0)) host.Padding = new Thickness(0);
+        // ViewportWidth can still refer to the previous arrange during resize.
+        double available = Math.Max(0, host.ActualWidth - host.BorderThickness.Left - host.BorderThickness.Right);
+        double margin = Math.Max(24, (available - readingWidth) / 2);
+        var padding = new Thickness(margin, 28, margin, 60);
+        if (host.Document.PagePadding != padding) host.Document.PagePadding = padding;
     }
 
     public TextPointer PointerAt(int offset)

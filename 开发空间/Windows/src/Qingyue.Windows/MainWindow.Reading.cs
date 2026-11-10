@@ -111,13 +111,7 @@ public partial class MainWindow
     private void UpdateReadingWidth(EditorTab tab)
     {
         if (tab.Rendered is null) return;
-        tab.Rendered.Document.FontSize = settings.FontSize + 1;
-        tab.Rendered.Document.LineHeight = (settings.FontSize + 1) * 1.75;
-        double available = Math.Max(300, DocumentHost.ActualWidth - 24);
-        double margin = Math.Max(24, (available - settings.ReadingWidth) / 2);
-        // RichTextBox transfers its Padding to the document when first loaded.
-        tab.Preview.Padding = new Thickness(margin, 28, margin, 60);
-        tab.Rendered.Document.PagePadding = tab.Preview.Padding;
+        tab.Rendered.UpdatePresentation(tab.Preview, settings.FontSize + 1, settings.ReadingWidth);
     }
 
     private void UpdateReadingWidths()

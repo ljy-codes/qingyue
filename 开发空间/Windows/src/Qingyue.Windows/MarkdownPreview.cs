@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Automation;
@@ -18,7 +19,7 @@ namespace Qingyue.Windows;
 /// </summary>
 public sealed class MarkdownPreview : RichTextBox
 {
-    private readonly double readingWidth;
+    private double readingWidth;
     private readonly string? sourcePath;
     private readonly bool includeDiagramSource;
 
@@ -55,6 +56,21 @@ public sealed class MarkdownPreview : RichTextBox
     /// original text. Null arguments and calls outside the UI thread remain contract errors.
     /// </summary>
     public void Update(string text) => Update(text, BuildDocument);
+
+    /// <summary>
+    /// Reflow the existing document and synchronize local type styles without
+    /// rebuilding text, images or selection. Later Update(text) uses these settings.
+    /// </summary>
+    public void UpdatePresentation(double fontSize, double readingWidth)
+    {
+        VerifyAccess();
+        if (!double.IsFinite(fontSize) || fontSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(fontSize));
+        if (!double.IsFinite(readingWidth) || readingWidth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(readingWidth));
+        this.readingWidth = readingWidth;
+        RenderedReading.ApplyPresentation(this, fontSize, readingWidth);
+    }
 
     // Keep failure handling at the document-building boundary; the delegate also lets the
     // independent harness reproduce parser timeouts without mutating shared parser state.
@@ -187,12 +203,7 @@ public sealed class MarkdownPreview : RichTextBox
         return document;
     }
 
-    private void UpdatePadding()
-    {
-        double available = Math.Max(0, ActualWidth);
-        double margin = Math.Max(24, (available - readingWidth) / 2);
-        Document.PagePadding = new Thickness(margin, 28, margin, 60);
-    }
+    private void UpdatePadding() => RenderedReading.ApplyPageLayout(this, readingWidth);
 
     private static readonly Regex TaskPattern = new(@"^\[([ xX])\][ \t]+",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
@@ -307,7 +318,8 @@ public sealed class MarkdownPreview : RichTextBox
             });
             // Keep a real selectable label for the authoritative model's [图片：alt]
             // text, including table cells and list items.
-            var label = new Run(images.Caption(reference)) { FontSize = Math.Max(11, FontSize * .8) };
+            var label = new Run(images.Caption(reference));
+            RenderedReading.StyleImageCaption(label, FontSize);
             label.SetResourceReference(TextElement.ForegroundProperty, "MutedBrush");
             paragraph.Inlines.Add(label);
         }
@@ -330,8 +342,7 @@ public sealed class MarkdownPreview : RichTextBox
         var table = new Table { CellSpacing = 0, Margin = new Thickness(0, 8, 0, 18), FontSize = FontSize * .9 };
         table.SetResourceReference(Block.BorderBrushProperty, "BorderBrush");
         table.BorderThickness = new Thickness(1, 1, 0, 0);
-        for (int column = 0; column < rows[0].Length; column++)
-            table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
+        var weights = Enumerable.Repeat(MinTableColumnWeight, rows[0].Length).ToArray();
         var group = new TableRowGroup();
         table.RowGroups.Add(group);
         for (int index = 0; index < rows.Length; index++)
@@ -343,6 +354,7 @@ public sealed class MarkdownPreview : RichTextBox
                 row.FontWeight = FontWeights.SemiBold;
                 row.SetResourceReference(TextElement.ForegroundProperty, "AccentTextBrush");
             }
+            int column = 0;
             foreach (string value in rows[index])
             {
                 var paragraph = new Paragraph { Margin = new Thickness(0) };
@@ -363,9 +375,40 @@ public sealed class MarkdownPreview : RichTextBox
                 };
                 cell.SetResourceReference(TableCell.BorderBrushProperty, "BorderBrush");
                 row.Cells.Add(cell);
+                if (column < weights.Length)
+                    weights[column] = Math.Max(weights[column], TableCellWeight(paragraph));
+                column++;
             }
             group.Rows.Add(row);
         }
+        foreach (double weight in weights)
+            table.Columns.Add(new TableColumn { Width = new GridLength(weight, GridUnitType.Star) });
         return table;
+    }
+
+    private const double MinTableColumnWeight = 10;
+    private const double MaxTableColumnWeight = 40;
+
+    private static double TableCellWeight(Paragraph paragraph)
+    {
+        // Approximate displayed width without measuring every glyph. Include room for
+        // cell padding; cap the scan as well as the weight so huge paths stay cheap.
+        // Star units retain narrow-screen reflow instead of imposing fixed pixel minima.
+        double weight = 4;
+        int scanned = 0;
+        foreach (Inline inline in paragraph.Inlines)
+        {
+            if (inline is InlineUIContainer) return MaxTableColumnWeight;
+            if (inline is not Run run) continue;
+            foreach (var rune in run.Text.EnumerateRunes())
+            {
+                if (++scanned > 128) return Math.Max(MinTableColumnWeight, weight);
+                if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or
+                    UnicodeCategory.EnclosingMark or UnicodeCategory.Format) continue;
+                weight += rune.Value >= 0x2e80 ? 2 : 1;
+                if (weight >= MaxTableColumnWeight) return MaxTableColumnWeight;
+            }
+        }
+        return Math.Max(MinTableColumnWeight, weight);
     }
 }

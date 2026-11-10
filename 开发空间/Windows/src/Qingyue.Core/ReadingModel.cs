@@ -112,7 +112,7 @@ public sealed class ReadingModel
     private static readonly Regex List = Pattern(@"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+(.*)$");
     private static readonly Regex Quote = Pattern(@"^ {0,3}>[ \t]?(.*)$");
     private static readonly Regex Task = Pattern(@"^\[([ xX])\][ \t]+(.*)$");
-    private static readonly Regex TableSeparator = Pattern(@"^:?-{3,}:?$");
+    private static readonly Regex TableSeparator = Pattern(@"^:?-+:?$");
     private static readonly Regex Chapter = Pattern(@"^(?:第[零〇一二三四五六七八九十百千万两0-9０-９]+[章节卷部篇回](?:.*)|[序终尾]章(?:.*)|Chapter[ \t]+[0-9]+(?:.*))$");
     private static readonly Regex IniSection = Pattern(@"^\[([^\]\r\n]+)\](?:[ \t]*[;#].*)?$");
     private static readonly Regex InlineToken = Pattern(

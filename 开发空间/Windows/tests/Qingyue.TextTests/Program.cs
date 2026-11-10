@@ -356,6 +356,74 @@ var tests = new List<(string Name, Action Run)>
         Check(Build(huge, TextKind.Markdown).Blocks.Where(b => b.Kind == ReadingBlockKind.Table)
             .All(b => b.Text.Split('\n').Sum(row => row.Split('\t').Length) <= 1024), "表格单元格上限");
     }),
+    ("reading/table accepts one-dash separators and alignment markers", () => VerifyTableSeparators(1)),
+    ("reading/table accepts two-dash separators and alignment markers", () => VerifyTableSeparators(2)),
+    ("reading/table accepts three-dash separators and alignment markers", () => VerifyTableSeparators(3)),
+    ("reading/table rejects malformed and incomplete separators", () =>
+    {
+        foreach (string invalid in new[] { "", ":", "::", "- -", "--x", "=-", "::--", "--::", @"\--" })
+        {
+            var model = Build($"| A | B |\n| {invalid} | --- |\n| x | y |", TextKind.Markdown);
+            Check(!model.Blocks.Any(b => b.Kind == ReadingBlockKind.Table), "非法分隔单元格不能识别为表格：" + invalid);
+        }
+        foreach (string input in new[]
+        {
+            "| A | B |", "| A | B |\n|", "| A | B |\n| :", "| A | B |\n| -- |",
+            "| A | B |\n| -- | :", "| A | B |\n| -- | -- | -- |",
+            "| A | B |\n\n| -- | -- |", "A | B\n---"
+        })
+            Check(!Build(input, TextKind.Markdown).Blocks.Any(b => b.Kind == ReadingBlockKind.Table),
+                "缺少分隔行、未完成单元格或列数不等不能识别为表格");
+    }),
+    ("reading/table escaped pipes and code pipes retain cell boundaries", () =>
+    {
+        const string input = "| A\\|B | C |\n| --- | --- |\n| x\\|y | tail\\|\n| `p|q` | z |\n| left\\\\| right |";
+        var model = Build(input, TextKind.Markdown);
+        Equal("A|B\tC\nx|y\ttail|\np|q\tz\nleft\\\tright", model.Blocks.Single().Text);
+        Equal(ReadingBlockKind.Table, model.Blocks.Single().Kind);
+        VerifyBlocks(model);
+    }),
+    ("reading/table column and cell count boundaries", () =>
+    {
+        foreach (int columns in new[] { 1, 32, 33 })
+        {
+            string input = "|" + string.Join("|", Enumerable.Repeat("H", columns)) + "|\n|" +
+                string.Join("|", Enumerable.Repeat("---", columns)) + "|";
+            var tables = Build(input, TextKind.Markdown).Blocks.Where(b => b.Kind == ReadingBlockKind.Table).ToArray();
+            Equal(columns <= 32 ? 1 : 0, tables.Length);
+            if (tables.Length == 1) Equal(columns, tables[0].Text.Split('\t').Length);
+        }
+        string atLimit = "| H |\n| --- |\n" + string.Concat(Enumerable.Repeat("| x |\n", 1023));
+        var table = Build(atLimit, TextKind.Markdown).Blocks.Single(b => b.Kind == ReadingBlockKind.Table);
+        Equal(1024, table.Text.Split('\n').Length);
+        Check(!Build(atLimit + "| overflow |\n", TextKind.Markdown).Blocks.Any(b => b.Kind == ReadingBlockKind.Table),
+            "1025 个单元格应退回，不能截断正文");
+    }),
+    ("reading/table mismatched body row ends table without losing source", () =>
+    {
+        const string input = "| A | B |\n| --- | --- |\n| x | y |\n| stop |\n| u | v |";
+        var model = Build(input, TextKind.Markdown);
+        Equal(2, model.Blocks.Count);
+        Equal(ReadingBlockKind.Table, model.Blocks[0].Kind);
+        Equal("A\tB\nx\ty", model.Blocks[0].Text);
+        Equal(ReadingBlockKind.Paragraph, model.Blocks[1].Kind);
+        Equal("| stop |\n| u | v |", model.Blocks[1].Text);
+        Equal(input.Length, model.Blocks[1].SourceStart + model.Blocks[1].SourceLength);
+        VerifyBlocks(model);
+    }),
+    ("reading/table adjacent paragraph empty body and block boundaries", () =>
+    {
+        const string input = "before\nA | B\n--- | :---:\n\n# After\n\n```\nliteral | value\n```";
+        var model = Build(input, TextKind.Markdown);
+        Equal(4, model.Blocks.Count);
+        Equal("before", model.Blocks[0].Text);
+        Equal(ReadingBlockKind.Table, model.Blocks[1].Kind);
+        Equal("A\tB", model.Blocks[1].Text);
+        Equal(ReadingBlockKind.Heading, model.Blocks[2].Kind);
+        Equal(ReadingBlockKind.Code, model.Blocks[3].Kind);
+        Equal("literal | value", model.Blocks[3].Text);
+        VerifyBlocks(model);
+    }),
     ("reading/fences interrupt tables and remain literal", () =>
     {
         const string input = "A | B\n--- | ---\n~~~text | info\n# hidden\n| literal | code |\n~~~\n# Visible";
@@ -485,6 +553,32 @@ static void VerifyBlocks(View model)
         Equal(start, block.DisplayStart);
         Equal(block.Text, model.VisibleText.Substring(block.DisplayStart, block.Text.Length));
         start += block.Text.Length + 1;
+    }
+}
+
+static void VerifyTableSeparators(int dashes)
+{
+    string marker = new('-', dashes);
+    foreach (var (leading, trailing) in new[] { ("| ", " |"), ("", ""), ("| ", ""), ("", " |") })
+    {
+        string input = $"{leading}A | B | C | D{trailing}\r\n" +
+            $"{leading}{marker} | :{marker} | {marker}: | :{marker}:{trailing}\r\n" +
+            $"{leading}a | b | c | d{trailing}";
+        var model = Build(input, TextKind.Markdown);
+        Check(model.Blocks.Count == 1 && model.Blocks[0].Kind == ReadingBlockKind.Table,
+            $"{dashes} 短横及左右/居中冒号应识别为一个表格（首尾管道可选）");
+        Equal("A\tB\tC\tD\na\tb\tc\td", model.Blocks[0].Text);
+        Equal(input.Length, model.Blocks[0].SourceLength);
+        VerifyBlocks(model);
+        int previous = -1;
+        for (int offset = 0; offset <= input.Length; offset++)
+        {
+            int display = model.SourceToDisplay(offset);
+            Check(display >= previous, "表格源到显示偏移应单调");
+            Boundary(model.VisibleText, display);
+            previous = display;
+        }
+        Equal(input.Length, model.DisplayToSource(model.VisibleText.Length));
     }
 }
 

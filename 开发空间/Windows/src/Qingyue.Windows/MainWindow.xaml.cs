@@ -113,6 +113,9 @@ public partial class MainWindow : Window
         };
         tab.Editor.SelectionChanged += (_, _) => { if (CurrentTab == tab) RefreshLocation(); };
         tab.Preview.SelectionChanged += (_, _) => { if (CurrentTab == tab) RefreshLocation(); };
+        tab.Preview.Loaded += (_, _) => UpdateReadingWidth(tab);
+        tab.Preview.SizeChanged += (_, _) => UpdateReadingWidth(tab);
+        ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading);
         tabs.Add(tab);
         SelectTab(tab);
         return tab;
@@ -154,7 +157,9 @@ public partial class MainWindow : Window
         DetachMarkdownEditor();
         if (CurrentTab is not { } tab) { DocumentHost.Content = null; return; }
         DocumentHost.Content = tab.IsReading && tab.Rendered is not null ? tab.Preview : tab.EditorSurface;
-        ReadingButton.Content = tab.IsReading ? "返回编辑" : "阅读模式";
+        ReadingButton.Content = tab.Kind == TextKind.Markdown
+            ? tab.IsReading ? "编辑原文" : "返回预览"
+            : tab.IsReading ? "返回编辑" : "阅读模式";
         Title = tab.File.Title + " · 轻阅";
         if (tab.Reading is not null)
         {

@@ -78,19 +78,28 @@ public partial class MainWindow
             markdownEditorHost!.Content = tab.EditorSurface;
             DocumentHost.Content = markdownSplit;
         }
-        if (markdownPreview is null || markdownText is null ||
-            markdownFont != settings.FontSize || markdownWidth != settings.ReadingWidth)
+        if (markdownPreview is null || markdownText is null)
         {
             markdownFont = settings.FontSize;
             markdownWidth = settings.ReadingWidth;
             markdownPreview = new MarkdownPreview(tab.File.Text, settings.FontSize + 1, settings.ReadingWidth, tab.File.Path);
+            ReadingClipboard.Attach(markdownPreview, () => true);
             markdownPreviewHost!.Content = markdownPreview;
             markdownText = tab.File.Text;
         }
-        else if (markdownText != tab.File.Text)
+        else
         {
-            markdownTimer.Stop();
-            markdownTimer.Start();
+            if (markdownFont != settings.FontSize || markdownWidth != settings.ReadingWidth)
+            {
+                markdownPreview.UpdatePresentation(settings.FontSize + 1, settings.ReadingWidth);
+                markdownFont = settings.FontSize;
+                markdownWidth = settings.ReadingWidth;
+            }
+            if (markdownText != tab.File.Text)
+            {
+                markdownTimer.Stop();
+                markdownTimer.Start();
+            }
         }
         return true;
     }

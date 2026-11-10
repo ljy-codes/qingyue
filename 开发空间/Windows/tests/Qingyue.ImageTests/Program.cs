@@ -12,7 +12,7 @@ using System.Windows.Threading;
 using Qingyue.Core;
 using Qingyue.Windows;
 
-internal static class Program
+internal static partial class Program
 {
     private static int failed;
     private static int passed;
@@ -25,6 +25,24 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (args is ["--extractor-probe"]) return ExtractorProbe();
+        if (args is ["--resize-only"])
+        {
+            ResizeChecks();
+            Console.WriteLine($"Resize checks: {passed}/{passed + failed} passed");
+            return failed == 0 ? 0 : 1;
+        }
+        if (args is ["--table-only"])
+        {
+            TableLayoutChecks();
+            Console.WriteLine($"Table layout checks: {passed}/{passed + failed} passed");
+            return failed == 0 ? 0 : 1;
+        }
+        if (args is ["--presentation-only"])
+        {
+            PresentationChecks();
+            Console.WriteLine($"Presentation checks: {passed}/{passed + failed} passed");
+            return failed == 0 ? 0 : 1;
+        }
         Directory.CreateDirectory(FixtureDirectory);
         File.WriteAllBytes(Path.Combine(FixtureDirectory, "本地 图 (1).png"), Png);
         Test("embedded PNG becomes a real frozen WPF bitmap", Embedded);
@@ -46,6 +64,9 @@ internal static class Program
         Test("wide images decode to a bounded frozen bitmap", Downsample);
         Test("image layout scales with viewport and keeps its aspect ratio", Responsive);
         Test("preview replacement unload cancellation and recovery", Replacement);
+        ResizeChecks();
+        TableLayoutChecks();
+        PresentationChecks();
         if (args.Length == 2 && args[0] == "--samples")
         {
             foreach (string name in new[] { "01-简介与接入方式.md", "03-管理台接口.md", "04-业务后端接口.md" })

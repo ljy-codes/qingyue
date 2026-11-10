@@ -16,8 +16,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.2.0-Windows构建4-x64.zip`
-及 `交付产品/轻阅-0.2.0-Windows构建4-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.2.0-Windows构建5-x64.zip`
+及 `交付产品/轻阅-0.2.0-Windows构建5-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -33,6 +33,7 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
 - `tests/Qingyue.ReadingTests`：默认全宽预览、富文本导航、自动查找与实际刷新钩子。
 - `tests/Qingyue.ImageTests`：本地与内嵌图片、路径、资源限制及实际样本（`--samples 文档目录`）。
+- `tests/Qingyue.ClipboardTests`：结构化富文本、UTF-8 剪贴板偏移、局部选区及内嵌图片；使用合成数据，不读取系统剪贴板。
 - `tests/Qingyue.InstanceTests`：真实多进程启动转发、激活和单实例通信。
 - `tests/Qingyue.ExternalChangesTests`：磁盘刷新、未保存保护、异步竞态和视图状态。
 

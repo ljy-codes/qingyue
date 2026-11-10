@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -66,6 +67,52 @@ internal static class Program
                 Check(ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.Preview), "默认全宽预览没有分屏");
                 Check(markdown.Preview.Document.Blocks.OfType<Table>().Any(), "全宽预览保留真实表格");
                 Check(markdown.Preview.Document.Blocks.OfType<System.Windows.Documents.List>().Any(), "全宽预览保留列表层次");
+                for (int round = 1; round <= 3; round++)
+                {
+                    ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await Idle(window);
+                    Check(!markdown.IsReading &&
+                        ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.EditorSurface),
+                        $"按钮第{round}轮返回编辑");
+                    ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await Idle(window);
+                    Check(markdown.IsReading &&
+                        ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.Preview),
+                        $"按钮第{round}轮恢复全宽预览");
+                }
+                Action(window, "markdownPreview");
+                await Idle(window);
+                Check(!markdown.IsReading &&
+                    !ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.EditorSurface),
+                    "可选分屏进入编辑");
+                markdown.Editor.AppendText("\n即时复制的新增内容");
+                // Invoke only the production data factory; never read or write the system clipboard.
+                var copied = (ReadingClipboardResult?)typeof(MainWindow)
+                    .GetMethod("CreateReadingDocumentData", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(window, null);
+                Check(copied is not null &&
+                    (copied.Data.GetData(DataFormats.UnicodeText) as string)?.Contains("即时复制的新增内容") == true,
+                    "分屏输入后立即复制全文包含最新正文");
+                markdown.Editor.Undo();
+                ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Idle(window);
+                Check(markdown.IsReading &&
+                    ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.Preview),
+                    "从分屏编辑可恢复全宽预览");
+                ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Idle(window);
+                Check(!markdown.IsReading &&
+                    ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.EditorSurface),
+                    "分屏返回预览后仍可继续编辑");
+                markdown.Editor.AppendText("\n\n编辑往返验收");
+                ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await Idle(window);
+                Check(markdown.IsReading && markdown.Reading!.VisibleText.Contains("编辑往返验收"),
+                    "实际按钮从编辑恢复最新预览");
+                window.ToggleReading();
+                markdown.Editor.Undo();
+                window.ToggleReading();
+                Check(!markdown.File.IsDirty, "往返预览保留编辑撤销与保存基线");
                 foreach (string token in new[] { "阅读标题", "中文", "参数", "key", "值", "列表" })
                 {
                     int offset = markdown.Reading!.VisibleText.IndexOf(token, StringComparison.Ordinal);
@@ -74,6 +121,13 @@ internal static class Program
                     Check(new TextRange(start, end).Text == token && markdown.Rendered.OffsetAt(start) == offset,
                         "富文本导航准确映射：" + token);
                 }
+                int cellOffset = markdown.Reading!.VisibleText.IndexOf("值", StringComparison.Ordinal);
+                markdown.Preview.Selection.Select(markdown.Rendered!.PointerAt(cellOffset),
+                    markdown.Rendered.PointerAt(cellOffset + 1));
+                var previewCopy = CopyData(markdown.Preview, "值");
+                string previewHtml = (string)previewCopy.GetData(DataFormats.Html)!;
+                Check(previewHtml.Contains("<table") && previewHtml.Contains("值") &&
+                    !previewHtml.Contains("阅读标题"), "真实阅读控件复制钩子仅输出选中表格内容");
                 string source = markdown.File.Text;
                 Action(window, "find");
                 var query = (TextBox)window.FindName("SearchQuery");
@@ -81,6 +135,8 @@ internal static class Program
                 await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains("处匹配"));
                 Check(markdown.Preview.Selection.Text == "中文", "输入搜索后自动高亮匹配");
                 Check(query.IsKeyboardFocusWithin, "自动匹配不抢搜索输入焦点");
+                Check(!CopyData(query, query.Text).GetDataPresent(DataFormats.Html, false),
+                    "搜索输入框复制不进入Markdown富文本转换");
                 await Idle(window);
                 Check(HasSelectionDrawing(window), "首次自动查找实际绘制选区高亮");
                 query.Text = "第二";
@@ -89,12 +145,39 @@ internal static class Program
                 Check(query.IsKeyboardFocusWithin && HasSelectionDrawing(window), "连续查询仍实际高亮并保留搜索输入焦点");
                 query.Text = "中文";
                 await Until(() => markdown.Preview.Selection.Text == "中文");
+                var readingDocument = markdown.Preview.Document;
+                foreach (double width in new[] { 840d, 1320d, 1120d })
+                {
+                    window.Width = width;
+                    await Idle(window);
+                    Check(ReferenceEquals(readingDocument, markdown.Preview.Document) &&
+                        markdown.Preview.Selection.Text == "中文" && query.IsKeyboardFocusWithin &&
+                        HasSelectionDrawing(window), $"真实窗口调整至{width}保留阅读文档及搜索高亮");
+                }
+                window.ToggleSidebar();
+                await Idle(window);
+                Check(ReferenceEquals(readingDocument, markdown.Preview.Document) &&
+                    markdown.Preview.Selection.Text == "中文" && query.IsKeyboardFocusWithin,
+                    "切换侧栏保留当前搜索与阅读文档");
+                window.ToggleSidebar();
+                var headingBlock = markdown.Preview.Document.Blocks.OfType<Paragraph>().First();
+                var tableBlock = markdown.Preview.Document.Blocks.OfType<Table>().Single();
+                double headingSize = headingBlock.FontSize, tableSize = tableBlock.FontSize;
+                Action(window, "fontUp");
+                await Idle(window);
+                Check(headingBlock.FontSize > headingSize && tableBlock.FontSize > tableSize &&
+                    markdown.Preview.Selection.Text == "中文" && ReferenceEquals(readingDocument, markdown.Preview.Document),
+                    "真实字号命令同步标题表格并保留文档与选区");
+                Action(window, "fontDown");
+                await Idle(window);
                 Check(markdown.File.Text == source && !markdown.File.IsDirty, "搜索不修改Markdown原文");
                 Action(window, "next");
                 Check(markdown.Preview.Selection.Text == "中文", "下一处匹配仍映射到可见文字");
                 Action(window, "hideFind");
                 window.ToggleReading();
                 Check(!markdown.IsReading && markdown.Editor.Text.Contains("**中文**"), "进入编辑才展示原始Markdown代码");
+                Check(!CopyData(markdown.Editor, "**中文**").GetDataPresent(DataFormats.Html, false),
+                    "源码编辑复制不进入Markdown富文本转换");
                 markdown.Editor.AppendText("\n新增 **内容**");
                 window.ToggleReading();
                 Check(markdown.IsReading && markdown.Reading!.VisibleText.Contains("新增 内容"), "再次预览反映未保存编辑");
@@ -160,6 +243,13 @@ internal static class Program
 
     private static Task Idle(MainWindow window) =>
         window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle).Task;
+
+    private static DataObject CopyData(UIElement target, string text)
+    {
+        var data = new DataObject(DataFormats.UnicodeText, text);
+        target.RaiseEvent(new DataObjectCopyingEventArgs(data, false));
+        return data;
+    }
 
     private static bool HasSelectionDrawing(Visual root)
     {

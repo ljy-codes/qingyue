@@ -92,13 +92,13 @@ internal static class Dialogs
         });
         var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(Heading(about ? "轻阅 Qingyue" : "留一点空间，给文字。", 25));
-        var subtitle = new TextBlock { Text = "0.2.0 · Windows 构建 4", Margin = new Thickness(0, 7, 0, 0) };
+        var subtitle = new TextBlock { Text = "0.2.0 · Windows 构建 5", Margin = new Thickness(0, 7, 0, 0) };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         title.Children.Add(subtitle); brand.Children.Add(title); panel.Children.Add(brand);
         panel.Children.Add(Card("从一份新文件开始",
             "双击标签栏空白处新建，按住标签左右拖动排序。\n双击选取文本片段，三击选中整行。", "Ctrl+N  新建    Ctrl+O  打开"));
         panel.Children.Add(Card("让内容更好读",
-            "上方“格式化”支持 JSON、Markdown；“整理 TXT”清理空白。\n“MD 预览”支持离线 Mermaid 时序图；“JSON 结构”可折叠层级。", "Ctrl+Alt+F  格式化    Ctrl+R  阅读"));
+            "Markdown 打开即预览；“编辑原文”和“返回预览”随时切换。\n预览中 Ctrl+C 复制选中内容，支持富文本的接收方可保留表格和图片。", "Ctrl+R  预览 / 编辑    Ctrl+F  查找"));
         panel.Children.Add(Card("每一次修改，都看得见",
             "行号旁橙色表示尚未保存，绿色表示本次会话已保存的修改。\n恢复草稿只保存在本机；修改原文件仍需点击保存。", "Ctrl+S  保存    Ctrl+Z  撤销"));
         panel.Children.Add(new TextBlock

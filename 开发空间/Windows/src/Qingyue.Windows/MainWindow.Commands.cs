@@ -119,6 +119,7 @@ public partial class MainWindow
                     break;
                 case "structure": ToggleStructure(); break;
                 case "markdownPreview": ToggleMarkdownPreview(); break;
+                case "copyReading": CopyReadingDocument(); break;
                 case "drafts": await ShowDraftSettingsAsync(); break;
                 case "help":
                     Modal(() => Dialogs.CreateHelp(this, false).ShowDialog());

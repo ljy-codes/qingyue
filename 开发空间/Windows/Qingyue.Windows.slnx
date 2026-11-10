@@ -10,6 +10,7 @@
   <Project Path="tests/Qingyue.MermaidViewTests/Qingyue.MermaidViewTests.csproj" />
   <Project Path="tests/Qingyue.ReadingTests/Qingyue.ReadingTests.csproj" />
   <Project Path="tests/Qingyue.ImageTests/Qingyue.ImageTests.csproj" />
+  <Project Path="tests/Qingyue.ClipboardTests/Qingyue.ClipboardTests.csproj" />
   <Project Path="tests/Qingyue.InstanceTests/Qingyue.InstanceTests.csproj" />
   <Project Path="tests/Qingyue.ExternalChangesTests/Qingyue.ExternalChangesTests.csproj" />
   <Project Path="tests/Qingyue.FileTests/TextPositionTests/TextPositionTests.csproj" />
