@@ -75,12 +75,17 @@ Word 本机默认使用“合并格式”，字体和颜色会跟随目标文档
 **腾讯文档实际粘贴、DPI/多屏仍未验收**；历史特定带图文档持续卡死尚未稳定复现，
 不能宣称已经根治。此次解锁后仅做交付验收和文档收尾，未修改生产源码或重新打包。
 
-源码实现已在本地提交 `0d96350`。GitHub 同步仍未完成：
-普通执行宿主与已核验 Explorer 父进程/用户 SID 的真实桌面环境均执行了无交互推送，
-后者同样退出 **128**，返回
-`Cannot prompt because user interactivity has been disabled / unable to get password from user`。
-本机 PATH 中没有可用 GitHub CLI 登录入口，需用户恢复 GitHub 登录后同步
-`feat/windows-client`；未修改全局配置、远端或凭据，未强推、未自动操作认证界面。
+源码实现提交为 `0d96350`，GitHub 同步已完成。2026-11-10 19:43（北京时间），
+`feat/windows-client` 从 `7adde94` 成功推送至
+`fb9c254d38ecb24d5c8382954e6e107e41ed7077`，推送退出 **0**；
+随后 `ls-remote` 退出 **0**，确认远端完整 SHA 与本地 HEAD 一致。
+本条交付记录另行提交并再次同步。
+
+此前普通宿主和真实桌面环境退出 **128** 的记录保留。浏览器授权命令虽已成功，
+真实桌面用户仍有多个 GitHub 账号且仓库没有指定账号，导致无交互模式无法选择。
+交付辅助命令仅为本次推送指定 `credential.https://github.com.username=ljy-codes`
+后恢复成功；未修改全局配置或远端，未强推、未自动操作认证界面，
+未读取或输出密码与令牌，生产源码和交付包不变。
 
 证据均在 `开发空间/Windows/artifacts/`：`test-v030-final.log`、
 `navigation-red.log`、`recovery-v030/REPORT.md`、`reader-v030/INTEGRATION.md`、
