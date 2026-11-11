@@ -19,6 +19,12 @@ xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_r
 "$reader_test_build/WorkspaceStoreTests"
 xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/QuickOpenController.swift" "$reader_test_root/Tests/QuickOpenTests.swift" -o "$reader_test_build/QuickOpenTests"
 "$reader_test_build/QuickOpenTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/MermaidSequence.swift" "$reader_test_root/Tests/MermaidSequenceTests.swift" -o "$reader_test_build/MermaidSequenceTests"
+"$reader_test_build/MermaidSequenceTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Sources/TextFormatting.swift" "$reader_test_root/Sources/LineChanges.swift" "$reader_test_root/Sources/JSONStructureController.swift" "$reader_test_root/Tests/FormattingParityTests.swift" -o "$reader_test_build/FormattingParityTests"
+"$reader_test_build/FormattingParityTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Sources/ReadingDocument.swift" "$reader_test_root/Sources/ReadingMedia.swift" "$reader_test_root/Sources/ReadingShare.swift" "$reader_test_root/Tests/RichReadingTests.swift" -o "$reader_test_build/RichReadingTests"
+"$reader_test_build/RichReadingTests"
 reader_ui_sources=()
 for reader_source in "$reader_test_root"/Sources/*.swift; do
     if [ "$(basename "$reader_source")" != "main.swift" ]; then reader_ui_sources+=("$reader_source"); fi
@@ -29,3 +35,5 @@ xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_r
 "$reader_test_build/WindowMenuBarTests"
 xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "${reader_ui_sources[@]}" "$reader_test_root/Tests/ReaderMenusTests.swift" -o "$reader_test_build/ReaderMenusTests"
 "$reader_test_build/ReaderMenusTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "${reader_ui_sources[@]}" "$reader_test_root/Tests/MacParityWorkflowTests.swift" -o "$reader_test_build/MacParityWorkflowTests"
+"$reader_test_build/MacParityWorkflowTests"

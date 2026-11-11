@@ -93,7 +93,7 @@ struct ReadingDocumentTests {
         expect(build(yaml, .yaml).headings.map(\.title) == ["server:"], "YAML offers only root block key navigation")
         expect(build("[main]\na=1\n[next] ; comment\nb=2\n", .ini).headings.count == 2, "INI section outline")
 
-        let huge = "# 标题\n" + String(repeating: "正文😀\n", count: 50_000)
+        let huge = "# 标题\n" + String(repeating: "正文😀\n", count: 100_000)
         let downgraded = build(huge, .markdown)
         expect(downgraded.attributedText.string == huge && downgraded.headings.isEmpty, "Large Markdown safely falls back to literal text")
         expect(downgraded.displayRange(forSourceOffset: 20) == NSRange(location: 20, length: 0), "Large source retains identity positions")
