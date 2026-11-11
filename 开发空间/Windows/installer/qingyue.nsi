@@ -57,9 +57,9 @@ BrandingText "轻阅 · 本机文本阅读与编辑"
 SetFont "Microsoft YaHei UI" 9
 InstallColors E4EDF7 0C121E
 InstProgressFlags smooth
-ShowInstDetails show
-ShowUninstDetails show
-AutoCloseWindow false
+ShowInstDetails hide
+ShowUninstDetails hide
+AutoCloseWindow true
 VIProductVersion "${BUILD_VERSION}"
 VIAddVersionKey /LANG=2052 "ProductName" "轻阅"
 VIAddVersionKey /LANG=2052 "FileDescription" "轻阅 Windows 安装程序"
@@ -74,14 +74,10 @@ DetailsButtonText "查看详细信息"
 
 Var Dialog
 Var PathInput
-Var DesktopCheck
 Var DesktopChoice
-Var RunCheck
 Var KeepRadio
 Var PurgeRadio
 Var PurgeChoice
-Var PurgeConfirmCheck
-Var PurgeConfirmed
 Var OldLocation
 Var OldVersion
 Var Result
@@ -92,12 +88,8 @@ Var UserDataPath
 
 Page custom LocationPage LocationLeave
 Page instfiles InstallPre
-Page custom FinishPage FinishLeave
-UninstPage custom un.WelcomePage
 UninstPage custom un.OptionsPage un.OptionsLeave
-UninstPage custom un.ConfirmPage un.ConfirmLeave
 UninstPage instfiles un.RemovePre
-UninstPage custom un.FinishPage
 
 
 Function .onInit
@@ -130,7 +122,6 @@ Function un.onInit
   SetShellVarContext current
   SetRegView 64
   StrCpy $PurgeChoice ${BST_UNCHECKED}
-  StrCpy $PurgeConfirmed ${BST_UNCHECKED}
   StrCpy $UserDataPath "$LOCALAPPDATA\${DATA_LEAF}"
 FunctionEnd
 Function un.onGUIInit
@@ -149,11 +140,8 @@ Function LocationPage
   Pop $Control
   ${NSD_OnClick} $Control BrowseDirectory
   !insertmacro Label 46 14 "浏览时自动补全 Qingyue 子文件夹，可直接编辑完整路径。"
-  ${NSD_CreateCheckbox} 0 62u 320u 20u "创建桌面快捷方式"
-  Pop $DesktopCheck
-  ${NSD_SetState} $DesktopCheck $DesktopChoice
-  !insertmacro Label 90 20 "开始菜单快捷方式与系统卸载入口将自动创建。"
-  !insertmacro Label 118 27 "程序约需 ${ESTIMATED_MB} MB 空间。升级保留设置与恢复草稿。"
+  !insertmacro Label 69 20 "开始菜单和桌面快捷方式、系统卸载入口将自动创建。"
+  !insertmacro Label 96 27 "程序约需 ${ESTIMATED_MB} MB 空间。升级保留设置与恢复草稿。"
   !insertmacro NextText "开始安装"
   QingyueTheme::Apply /NOUNLOAD
   nsDialogs::Show
@@ -172,7 +160,6 @@ Function BrowseDirectory
 FunctionEnd
 Function LocationLeave
   ${NSD_GetText} $PathInput $INSTDIR
-  ${NSD_GetState} $DesktopCheck $DesktopChoice
   Call CheckInstall
 FunctionEnd
 Function CheckInstall
@@ -206,47 +193,19 @@ Function CheckInstall
   ${EndIf}
   QingyueSafety::HasFiles /NOUNLOAD "$INSTDIR"
   Pop $Result
-  StrCmp $Result 0 checkBusy
+  StrCmp $Result 0 preflight
   IfFileExists "$INSTDIR\Qingyue.exe" 0 notDedicated
-  IfFileExists "$INSTDIR\Qingyue.runtimeconfig.json" checkBusy notDedicated
+  IfFileExists "$INSTDIR\Qingyue.runtimeconfig.json" preflight notDedicated
   notDedicated:
     MessageBox MB_OK|MB_ICONSTOP "所选目录已有其他文件，不能直接安装。$\r$\n$\r$\n请点击“浏览”选择父目录，安装器会自动添加 Qingyue 子文件夹；也可手动输入空文件夹或已有轻阅安装文件夹的完整路径。$\r$\n$\r$\n当前目录：$INSTDIR" /SD IDOK
     SetErrorLevel 2
     Abort
-  checkBusy:
-  QingyueSafety::IsBusy /NOUNLOAD
-  Pop $Result
-  ${If} $Result == 1
-    MessageBox MB_OK|MB_ICONSTOP "请先关闭所有轻阅窗口，保存编辑后再继续安装。" /SD IDOK
-    SetErrorLevel 3
-    Abort
-  ${EndIf}
+  preflight:
   !include "${PREFLIGHT_FILES}"
 FunctionEnd
 Function InstallPre
   !insertmacro Header "QINGYUE  /  正在安装" "正在准备你的阅读空间" "进度按实际写入文件计算，完成后即可使用。"
   QingyueTheme::Progress /NOUNLOAD "0" "正在校验安装目录与文件占用"
-FunctionEnd
-Function FinishPage
-  !insertmacro Header "QINGYUE  /  已就绪" "安装完成，开始轻阅。" "轻阅 ${VERSION} · Windows 构建 ${WINDOWS_BUILD}"
-  !insertmacro NewPage
-  !insertmacro Label 4 24 "轻阅已安装至："
-  !insertmacro Label 29 38 "$INSTDIR"
-  ${NSD_CreateCheckbox} 0 87u 320u 22u "立即启动轻阅"
-  Pop $RunCheck
-  ${NSD_SetState} $RunCheck ${BST_CHECKED}
-  !insertmacro Label 121 24 "可从 Windows 设置中的应用列表卸载。"
-  !insertmacro NextText "完成"
-  GetDlgItem $Control $HWNDPARENT 3
-  ShowWindow $Control ${SW_HIDE}
-  QingyueTheme::Apply /NOUNLOAD
-  nsDialogs::Show
-FunctionEnd
-Function FinishLeave
-  ${NSD_GetState} $RunCheck $Result
-  ${If} $Result == ${BST_CHECKED}
-    Exec '"$INSTDIR\Qingyue.exe"'
-  ${EndIf}
 FunctionEnd
 
 Section "轻阅" SEC_MAIN
@@ -258,11 +217,15 @@ Section "轻阅" SEC_MAIN
   QingyueTheme::Progress /NOUNLOAD "96" "正在写入卸载入口"
   ClearErrors
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  ClearErrors
   FileOpen $0 "$INSTDIR\Qingyue.install" w
-  IfErrors installFailed
+  IfErrors installMarkerOpenFailed
+  ClearErrors
   FileWrite $0 "${PRODUCT_ID}$\r$\n"
+  IfErrors installMarkerWriteFailed
+  ClearErrors
   FileClose $0
-  IfErrors installFailed
+  IfErrors installMarkerCloseFailed
   QingyueTheme::Progress /NOUNLOAD "98" "正在登记应用与创建快捷方式"
   ClearErrors
   WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
@@ -277,14 +240,28 @@ Section "轻阅" SEC_MAIN
   WriteRegDWORD HKCU "${UNKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNKEY}" "NoRepair" 1
   WriteRegDWORD HKCU "${UNKEY}" "EstimatedSize" ${ESTIMATED_KB}
+  IfErrors installRegistryFailed
   CreateShortcut "$SMPROGRAMS\${LINK_NAME}.lnk" "$INSTDIR\Qingyue.exe" "" "$INSTDIR\Qingyue.ico" 0
+  ClearErrors
   ${If} $DesktopChoice == ${BST_CHECKED}
     CreateShortcut "$DESKTOP\${LINK_NAME}.lnk" "$INSTDIR\Qingyue.exe" "" "$INSTDIR\Qingyue.ico" 0
+    ClearErrors
   ${EndIf}
-  IfErrors installFailed
-  QingyueTheme::Progress /NOUNLOAD "100" "安装完成"
+  QingyueTheme::Progress /NOUNLOAD "100" "安装完成，即将关闭"
   SetErrorLevel 0
   Goto installDone
+  installMarkerOpenFailed:
+    SetErrorLevel 51
+    Abort
+  installMarkerWriteFailed:
+    SetErrorLevel 52
+    Abort
+  installMarkerCloseFailed:
+    SetErrorLevel 53
+    Abort
+  installRegistryFailed:
+    SetErrorLevel 54
+    Abort
   installFailed:
     QingyueTheme::Progress /NOUNLOAD "-1" "安装未完成，请处理错误后重新运行安装器"
     MessageBox MB_OK|MB_ICONSTOP "安装未完成，可能没有写入权限或文件正在被占用。请处理后重新运行安装器；升级时原有用户信息保持不变。" /SD IDOK
@@ -314,13 +291,6 @@ Function un.CheckRemove
     SetErrorLevel 2
     Abort
   un.validMarker:
-  QingyueSafety::IsBusy /NOUNLOAD
-  Pop $Result
-  ${If} $Result == 1
-    MessageBox MB_OK|MB_ICONSTOP "轻阅正在运行。请先保存并关闭所有轻阅窗口，再执行卸载。" /SD IDOK
-    SetErrorLevel 3
-    Abort
-  ${EndIf}
   !include "${PREFLIGHT_FILES}"
 FunctionEnd
 

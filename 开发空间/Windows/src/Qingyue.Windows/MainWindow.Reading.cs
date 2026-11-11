@@ -42,21 +42,34 @@ public partial class MainWindow
             ? tab.Reading.DisplayToSource(tab.Rendered.OffsetAt(tab.Preview.Selection.Start))
             : SourceOffset(tab, tab.Editor.CaretIndex);
 
-    private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true)
+    private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true, bool snapToBlockStart = true)
     {
         tab.SourceAnchor = Math.Clamp(sourceAnchor ?? CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
         if (CanReuseReading(tab))
         {
+            if (snapToBlockStart) tab.SourceAnchor = SnapToReadingBlockStart(tab.Reading!, tab.SourceAnchor);
             PublishReading(tab, tab.Reading!, tab.Rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
             return;
         }
         var model = ReadingModel.Build(tab.File.Text, tab.Kind);
+        if (snapToBlockStart) tab.SourceAnchor = SnapToReadingBlockStart(model, tab.SourceAnchor);
         var rendered = PreviewLimits.CanRender(tab.File.Text, tab.Kind)
             ? tab.Kind == TextKind.Markdown
                 ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
                 : new RenderedReading(model, sourcePath: tab.File.Path)
             : null;
         PublishReading(tab, model, rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
+    }
+
+    private static int SnapToReadingBlockStart(ReadingModel model, int sourceAnchor)
+    {
+        int anchor = Math.Clamp(sourceAnchor, 0, int.MaxValue);
+        if (model.Blocks.Count == 0) return anchor;
+        var containing = model.Blocks.FirstOrDefault(block =>
+            anchor >= block.SourceStart && anchor <= block.SourceStart + block.SourceLength);
+        if (containing is not null) return containing.SourceStart;
+        var next = model.Blocks.FirstOrDefault(block => block.SourceStart > anchor);
+        return next?.SourceStart ?? model.Blocks[^1].SourceStart;
     }
 
     private static bool CanReuseReading(EditorTab tab) =>
@@ -181,10 +194,11 @@ public partial class MainWindow
     public void ApplyTheme(bool dark)
     {
         settings.Dark = dark;
-        var names = new[] { "WindowBrush", "PanelBrush", "EditorBrush", "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush" };
+        var names = new[] { "WindowBrush", "PanelBrush", "EditorBrush", "ReadingBrush", "ReadingPanelBrush",
+            "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush" };
         var colors = dark
-            ? new[] { "#2B2B2B", "#333333", "#3F3F3F", "#DCDCCC", "#BDBDB5", "#585858", "#4782FF", "#365579", "#4A4A4A" }
-            : new[] { "#F3F5F8", "#E9EDF3", "#FFFFFF", "#17253B", "#53647A", "#CFD7E3", "#2464DB", "#CFDFFF", "#DFE7F4" };
+            ? new[] { "#191B1F", "#23262B", "#2A2825", "#2A2825", "#23262B", "#E8E2D8", "#BEB8AE", "#4B4D52", "#2F6FDB", "#355A91", "#34383F" }
+            : new[] { "#F6F4EF", "#EFEAE2", "#FFFDF8", "#FFFDF8", "#EFEAE2", "#262A2F", "#6B6A66", "#D8D1C5", "#2F6FDB", "#D7E5FA", "#F3EDE4" };
         for (int i = 0; i < names.Length; i++)
             Resources[names[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[i]));
         Resources[SystemColors.MenuBrushKey] = Resources["PanelBrush"];

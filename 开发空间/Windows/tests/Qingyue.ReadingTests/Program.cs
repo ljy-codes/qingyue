@@ -132,7 +132,7 @@ internal static class Program
                 Action(window, "find");
                 var query = (TextBox)window.FindName("SearchQuery");
                 query.Text = "中文";
-                await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains("处匹配"));
+                await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains(" / "));
                 Check(markdown.Preview.Selection.Text == "中文", "输入搜索后自动高亮匹配");
                 Check(query.IsKeyboardFocusWithin, "自动匹配不抢搜索输入焦点");
                 Check(!CopyData(query, query.Text).GetDataPresent(DataFormats.Html, false),
@@ -185,7 +185,7 @@ internal static class Program
                 var txt = window.NewDocument("第一处 匹配\n第二处 匹配");
                 Action(window, "find");
                 query.Text = "匹配";
-                await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains("处匹配"));
+                await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains(" / "));
                 Check(txt.Editor.SelectedText == "匹配" && query.IsKeyboardFocusWithin, "普通文本搜索自动选中且可连续输入");
                 query.Text = "第二";
                 await Until(() => txt.Editor.SelectedText == "第二");

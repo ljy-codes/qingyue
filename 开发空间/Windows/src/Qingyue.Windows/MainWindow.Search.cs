@@ -68,7 +68,7 @@ public partial class MainWindow
             var result = await Task.Run(() => SearchEngine.Find(text, query, replacement, options));
             if (generation != searchGeneration || CurrentTab != tab || reading != (tab.IsReading && tab.Rendered is not null)) return;
             matches = result; matchedText = text; completedGeneration = generation;
-            SearchCount.Text = result.Count == 0 ? "没有匹配" : $"{result.Count:N0} 处匹配";
+            SearchCount.Text = result.Count == 0 ? "没有匹配" : $"1 / {result.Count:N0}";
             if (result.Count > 0)
             {
                 int caret = reading ? tab.Rendered!.OffsetAt(tab.Preview.Selection.Start)

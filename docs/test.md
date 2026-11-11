@@ -694,3 +694,45 @@ pwsh -File 开发空间/Windows/scripts/build-wizard-preview.ps1
 - 已验证本机安装、同版本覆盖与降级保护；尚无跨版本升级实测，未执行签名和 SmartScreen 分发验收，未发布在线版本。
 
 后续补充 IME、无障碍、不同系统/缩放及网络文件系统验收，再决定正式签名与分发。
+
+## 2026-11-11｜Windows 0.4.0 构建 2
+
+本轮目标是交付阅读优先的 Windows 客户端，并收敛安装器交互。安装器首屏保留安装路径、开始安装和单一进度条；安装完成后自动退出。卸载默认保留用户资料，可选彻底清理；卸载完成后自动退出。按最终要求，安装和卸载流程不再额外检测轻阅是否正在运行，文件实际被占用时仍由文件系统操作返回失败并保留卸载入口。
+
+本轮同步覆盖 Markdown 阅读/编辑往返、外部文件更新、搜索高亮、复制、图片和主题相关回归，以及新文件命名、格式化、保存状态和 Windows 登记流程。正式版本配置为产品版本 `0.4.0`、Windows 构建 `2`、文件版本 `0.4.0.2`。
+
+### 测试结果
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 完整回归 | 622 项通过，0 失败 |
+| FileTests | 25/25 |
+| ExternalChanges | 81/81 |
+| Reading | 62/62 |
+| Image | 30/30 |
+| Clipboard | 48/48 |
+| WPF | 162/162 |
+| 安装/默认卸载集成测试 | 23 项通过 |
+| 彻底卸载集成测试 | 10 项通过 |
+| 安装器 UI 首屏检查 | 通过 |
+| 安装器契约检查 | 8 项通过 |
+
+执行命令：
+
+```powershell
+pwsh -NoProfile -File 开发空间/Windows/scripts/test.ps1 -Configuration Release
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-purge.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-ui.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-contract.ps1
+```
+
+正式产物：
+
+```text
+交付产品/轻阅-Windows-x64
+交付产品/轻阅-0.4.0-Windows构建2-x64.zip
+交付产品/轻阅-0.4.0-Windows构建2-x64-setup.exe
+```
+
+本机安装验证目录为 `D:\Program File\Qingyue`，安装后检查启动、Markdown 图片、复制、搜索、主题、编辑/预览往返、安装登记和卸载入口。真实用户资料不参与彻底清理验收。

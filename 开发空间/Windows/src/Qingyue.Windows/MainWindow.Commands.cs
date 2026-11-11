@@ -212,7 +212,7 @@ public partial class MainWindow
         tab.AutomaticKind = false;
         tab.Kind = kind;
         tab.Reading = null;
-        if (tab.IsReading) EnterReading(tab, anchor);
+        if (tab.IsReading) EnterReading(tab, anchor, snapToBlockStart: false);
         RefreshCurrent(); SchedulePersist();
     }
 

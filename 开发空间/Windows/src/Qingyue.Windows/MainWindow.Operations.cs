@@ -68,6 +68,7 @@ public partial class MainWindow
             operation.Stage("正在解析正文");
             var model = await Task.Run(() => ReadingModel.Build(text, kind), operation.Token).WaitAsync(operation.Token);
             operation.Token.ThrowIfCancellationRequested();
+            anchor = SnapToReadingBlockStart(model, anchor);
             operation.Stage("正在排版阅读内容");
             // WPF objects are created on their owning dispatcher, in bounded batches.
             await Dispatcher.Yield(DispatcherPriority.Background);

@@ -220,6 +220,8 @@ public partial class MainWindow : Window
             (tab.File.IsDirty ? " · 未保存" : " · 已保存") +
             (!PreviewLimits.CanRender(tab.File.Text, tab.Kind) && tab.IsReading ? " · 超过 50 万正文字符，原文阅读" : "") +
             (tab.File.Path is null ? " · 未命名文档" : " · " + tab.File.Path);
+        ReadingTitle.Text = tab.File.Title + (tab.File.IsDirty ? "  •" : "");
+        ReadingStatus.Text = $"{tab.File.Text.Length:N0} 字符 · {(tab.File.IsDirty ? "未保存" : "已保存")}";
         Title = tab.File.Title + (tab.File.IsDirty ? " *" : "") + " · 轻阅";
         RefreshPresentation(tab);
     }

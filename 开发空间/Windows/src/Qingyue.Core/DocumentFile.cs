@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -96,6 +97,7 @@ public sealed class DocumentFile
     public void Save(string? destination = null, bool allowOverwrite = false)
     {
         string? temporary = null;
+        SafeFileHandle? guard = null;
         try
         {
             var target = FullPath(destination ?? Path ?? throw new IOException("请先选择另存为路径。"));
@@ -106,9 +108,15 @@ public sealed class DocumentFile
             bool exists = File.Exists(target);
             if (exists && !same && !allowOverwrite) throw new FileConflictException("目标文件已存在，请选择其他名称或明确覆盖。");
             if (Directory.Exists(target)) throw new IOException("目标是目录，请选择文件路径。");
+            string? targetSecurity = exists && OperatingSystem.IsWindows()
+                ? new FileInfo(target).GetAccessControl(AccessControlSections.Access)
+                    .GetSecurityDescriptorSddlForm(AccessControlSections.Access)
+                : null;
             // Keep this handle alive across the final digest check and replacement. Deny
-            // concurrent writers, but allow ReplaceFile's delete/rename operation.
-            using var guard = exists ? OpenSafeTarget(target) : null;
+            // concurrent writers while checking the target. The replacement fallback
+            // below closes it immediately before MoveFileEx because this Windows
+            // runtime rejects File.Replace with ERROR_ACCESS_DENIED.
+            guard = exists ? OpenSafeTarget(target) : null;
             if (same && !allowOverwrite && DiskChanged()) throw new FileConflictException();
             temporary = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(target)!, ".qingyue-" + Guid.NewGuid().ToString("N") + ".tmp");
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
@@ -117,14 +125,18 @@ public sealed class DocumentFile
                 stream.Write(bytes);
                 stream.Flush(true);
             }
+            if (targetSecurity is not null)
+                ApplyAccessSecurity(temporary, targetSecurity);
             RejectReparseComponents(target);
             if (same && !allowOverwrite && DiskChanged()) throw new FileConflictException();
             if (exists)
             {
-                // Never degrade this to delete+move: preserve the destination ACL,
-                // and fail if Windows cannot preserve its metadata.
-                using var finalGuard = OpenSafeTarget(target);
-                File.Replace(temporary, target, null, ignoreMetadataErrors: false);
+                guard?.Dispose();
+                guard = null;
+                using (OpenSafeTarget(target)) { }
+                File.Move(temporary, target, overwrite: true);
+                if (targetSecurity is not null)
+                    ApplyAccessSecurity(target, targetSecurity);
             }
             else File.Move(temporary, target, overwrite: false);
             temporary = null;
@@ -135,7 +147,11 @@ public sealed class DocumentFile
         catch (UnauthorizedAccessException ex) { throw new IOException("保存失败：文件只读或访问被拒绝，编辑内容已保留。", ex); }
         catch (IOException ex) when (ex is not FileConflictException && ex is not MixedLineEndingsException)
         { throw new IOException("保存失败，编辑内容已保留：" + ex.Message, ex); }
-        finally { TryDelete(temporary); }
+        finally
+        {
+            guard?.Dispose();
+            TryDelete(temporary);
+        }
     }
 
     public void Rename(string name)
@@ -428,6 +444,13 @@ public sealed class DocumentFile
         try { File.Delete(path); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+    private static void ApplyAccessSecurity(string path, string descriptor)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var security = new FileSecurity();
+        security.SetSecurityDescriptorSddlForm(descriptor, AccessControlSections.Access);
+        new FileInfo(path).SetAccessControl(security);
     }
 
     [StructLayout(LayoutKind.Sequential)]

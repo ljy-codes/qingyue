@@ -101,7 +101,7 @@
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>
-    <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="20,15">
+    <Border x:Name="BrandHeader" Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="20,15">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
@@ -115,6 +115,39 @@
           <Button x:Name="SaveButton" Content="保存" Tag="save" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+S"/>
           <Button x:Name="ReadingButton" Content="阅读模式" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0" ToolTip="Ctrl+R"/>
           <Button x:Name="FocusButton" Content="专注" Tag="focus" Click="MenuAction" ToolTip="Ctrl+Shift+F"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+    <Border x:Name="ReadingToolbar" Grid.Row="1" Visibility="Collapsed"
+            Background="{DynamicResource ReadingPanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="0,0,0,1" Padding="14,8">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Button Grid.Column="0" Tag="sidebar" Click="MenuAction" Width="34" Padding="0"
+                ToolTip="显示 / 隐藏侧栏 · Ctrl+B" AutomationProperties.Name="显示或隐藏侧栏">
+          <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource TextBrush}"
+                StrokeThickness="1.4" Data="M 1,1 L 15,1 15,15 1,15 Z M 6,1 L 6,15"/>
+        </Button>
+        <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+          <TextBlock x:Name="ReadingTitle" FontSize="15" FontWeight="SemiBold"
+                     TextTrimming="CharacterEllipsis"/>
+          <TextBlock x:Name="ReadingStatus" FontSize="10" Foreground="{DynamicResource MutedBrush}"
+                     Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Content="查找" Tag="find" Click="MenuAction" Margin="0,0,6,0" ToolTip="Ctrl+F"/>
+          <Button Content="目录" Tag="outline" Click="MenuAction" Margin="0,0,6,0" ToolTip="Ctrl+Shift+O"/>
+          <Button Content="A−" Tag="fontDown" Click="MenuAction" Margin="0,0,6,0" ToolTip="减小字号"/>
+          <Button Content="A+" Tag="fontUp" Click="MenuAction" Margin="0,0,6,0" ToolTip="增大字号"/>
+          <Button Content="主题" Tag="theme" Click="MenuAction" Margin="0,0,6,0" ToolTip="切换明暗主题"/>
+          <Button x:Name="ReadingCopyButton" Content="复制全文" Tag="copyReading" Click="MenuAction"
+                  Visibility="Collapsed" Margin="0,0,6,0" ToolTip="复制富文本、表格和图片"/>
+          <Button Content="编辑原文" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}"
+                  Foreground="White" ToolTip="进入原文编辑 · Ctrl+R"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -205,7 +238,7 @@
       </Border>
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
+        <Border x:Name="EditOnlyTools" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,8">
           <WrapPanel VerticalAlignment="Center">
             <Button x:Name="FormatButton" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button x:Name="StructureButton" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
@@ -245,7 +278,7 @@
           <TextBlock x:Name="StatusText" Text="就绪" FontSize="11" Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis"/>
           <TextBlock x:Name="LocationText" Text="行 1，列 1" FontSize="10" Foreground="{DynamicResource MutedBrush}" Margin="0,3,0,0"/>
         </StackPanel>
-        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+        <StackPanel x:Name="EditorStatusControls" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <ComboBox x:Name="KindCombo" Width="150" ItemTemplate="{StaticResource DocumentLabelTemplate}" Margin="0,0,8,0" SelectionChanged="KindChanged" ToolTip="文档语言：影响显示和格式化，不会转换文件内容" AutomationProperties.Name="文档语言"/>
           <ComboBox x:Name="CodecCombo" Width="138" ItemTemplate="{StaticResource DocumentLabelTemplate}" Margin="0,0,8,0" SelectionChanged="CodecChanged" ToolTip="保存时使用的文字编码；中文一般选 UTF-8" AutomationProperties.Name="保存编码"/>
           <ComboBox x:Name="EndingCombo" Width="178" ItemTemplate="{StaticResource DocumentLabelTemplate}" SelectionChanged="EndingChanged" ToolTip="文件中每行结尾的存储方式，与屏幕自动折行不同；保存时生效" AutomationProperties.Name="文件换行方式"/>

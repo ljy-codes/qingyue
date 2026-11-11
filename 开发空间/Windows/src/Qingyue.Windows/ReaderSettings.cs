@@ -45,7 +45,11 @@ public sealed class ReaderSettings
         try
         {
             System.IO.File.WriteAllText(temporary, JsonSerializer.Serialize(this));
-            if (System.IO.File.Exists(destination)) System.IO.File.Replace(temporary, destination, destination + ".bak");
+            if (System.IO.File.Exists(destination))
+            {
+                System.IO.File.Copy(destination, destination + ".bak", overwrite: true);
+                System.IO.File.Move(temporary, destination, overwrite: true);
+            }
             else System.IO.File.Move(temporary, destination);
         }
         finally { if (System.IO.File.Exists(temporary)) System.IO.File.Delete(temporary); }

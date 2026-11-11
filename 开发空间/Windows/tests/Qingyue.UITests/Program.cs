@@ -73,10 +73,26 @@ internal static class Program
                 Check(markdown.Reading?.Headings.Count == 2, "阅读目录生成");
                 Check(markdown.Reading?.VisibleText.Contains("中文") == true, "阅读显示中文");
                 Check(markdown.Preview.IsReadOnly, "阅读页面不允许修改原文");
+                Check(window.FindName("ReadingToolbar") is FrameworkElement { Visibility: Visibility.Visible },
+                    "阅读态显示轻量工具条");
+                Check(((FrameworkElement)window.FindName("FormatButton")).Visibility == Visibility.Collapsed &&
+                    ((FrameworkElement)window.FindName("StructureButton")).Visibility == Visibility.Collapsed &&
+                    ((FrameworkElement)window.FindName("MarkdownButton")).Visibility == Visibility.Collapsed,
+                    "阅读态隐藏编辑专用工具");
                 Check(markdown.Rendered!.PointerAt(0).GetCharacterRect(System.Windows.Documents.LogicalDirection.Forward).Left >= 20,
                     "首次阅读排版保留正文边距");
                 window.ToggleReading();
                 Check(!markdown.IsReading && markdown.Editor.Text.Contains("**中文**"), "返回编辑保留原始 Markdown");
+                markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("中文", StringComparison.Ordinal) + 2;
+                int expectedSourceAnchor = markdown.Positions.ToSource(markdown.Editor.CaretIndex);
+                window.ToggleReading();
+                await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                var expectedBlock = markdown.Reading!.Blocks.FirstOrDefault(block =>
+                    expectedSourceAnchor >= block.SourceStart && expectedSourceAnchor <= block.SourceStart + block.SourceLength)
+                    ?? markdown.Reading.Blocks.Last();
+                Check(markdown.IsReading && markdown.Rendered!.OffsetAt(markdown.Preview.Selection.Start) == expectedBlock.DisplayStart,
+                    "从段落中间进入阅读时吸附到内容块开头");
+                window.ToggleReading();
 
                 window.ToggleSidebar();
                 Check(window.FindName("SidebarToggle") is Button { IsVisible: true }, "收起侧栏后仍有展开按钮");
@@ -119,7 +135,7 @@ internal static class Program
                 ((ComboBox)window.FindName("KindCombo")).SelectedItem = TextKind.Markdown;
                 ClickAction(window, "find");
                 ((TextBox)window.FindName("SearchQuery")).Text = "中文";
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 1");
                 ClickAction(window, "next");
                 Check(markdown.IsReading && markdown.Preview.Selection.Text == "中文", "阅读查找选中实际可见文字");
                 ClickAction(window, "hideFind");
@@ -128,7 +144,7 @@ internal static class Program
                 ClickAction(window, "find");
                 ((TextBox)window.FindName("SearchQuery")).Text = "x";
                 ((TextBox)window.FindName("ReplacementText")).Text = new string('a', 1_000_000);
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "11 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 11");
                 Check(true, "仅查找不受隐藏替换内容上限影响");
                 ((TextBox)window.FindName("ReplacementText")).Text = "";
                 ClickAction(window, "hideFind");
@@ -137,7 +153,7 @@ internal static class Program
                 ClickAction(window, "replace");
                 ((TextBox)window.FindName("SearchQuery")).Text = "中文";
                 ((TextBox)window.FindName("ReplacementText")).Text = "值$";
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "2 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 2");
                 ClickAction(window, "replaceAll");
                 Check(searchTab.File.Text == "甲\n值$ 😀 值$", "CRLF源文替换偏移与字面替换正确");
                 searchTab.Editor.Undo();

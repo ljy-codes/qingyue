@@ -4,7 +4,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if ([IO.Path]::GetFileName($SetupPath) -ne 'Qingyue-installer-test.exe') { throw '仅允许隔离测试安装器。' }
 $version = (Get-Item -LiteralPath $SetupPath).VersionInfo.FileVersion
-if ($version -ne '0.2.0.2') { throw "FAIL: 安装器文件版本应为 0.2.0.2，实际为 $version" }
+$versionSource = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'installer/version.nsh') -Raw
+$expectedVersion = [regex]::Match($versionSource,'!define BUILD_VERSION "([^"]+)"').Groups[1].Value
+if ($version -ne $expectedVersion) { throw "FAIL: 安装器文件版本应为 $expectedVersion，实际为 $version" }
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 $process = Start-Process -FilePath $SetupPath -WindowStyle Normal -PassThru
 try {
@@ -17,9 +19,9 @@ try {
             $root = [Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
             $elements = $root.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)
             $names = @($elements | ForEach-Object { $_.Current.Name })
-            $edits = @($elements | Where-Object {
-                $_.Current.ControlType -eq [Windows.Automation.ControlType]::Edit -and -not $_.Current.IsOffscreen
-            })
+    $edits = @($elements | Where-Object {
+        $_.Current.ClassName -eq 'Edit' -and -not $_.Current.IsOffscreen
+    })
             if ($edits.Count -and $names -contains '开始安装') { break }
         }
         Start-Sleep -Milliseconds 100

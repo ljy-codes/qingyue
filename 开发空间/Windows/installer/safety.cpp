@@ -5,7 +5,6 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
-#include <tlhelp32.h>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -80,16 +79,6 @@ static std::wstring Validate(const std::wstring& raw,const std::wstring& dataRoo
     if(TreeHasLinks(path)) return L"现有安装目录含链接，已停止操作以保护链接指向的文件。";
     return {};
 }
-static bool Busy() {
-    HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
-    if(snapshot==INVALID_HANDLE_VALUE) return true; // Fail closed.
-    PROCESSENTRY32W process={};process.dwSize=sizeof(process);
-    bool busy=false;
-    if(Process32FirstW(snapshot,&process)) do {
-        if(Equal(process.szExeFile,L"Qingyue.exe")) {busy=true;break;}
-    } while(Process32NextW(snapshot,&process));
-    CloseHandle(snapshot);return busy;
-}
 // Never follows reparse points. The parent is checked immediately before entry.
 static bool RemoveTree(const std::wstring& root) {
     DWORD attributes=GetFileAttributesW(root.c_str());
@@ -116,6 +105,67 @@ static bool RemoveTree(const std::wstring& root) {
     const DWORD error=GetLastError();FindClose(search);
     if(error!=ERROR_NO_MORE_FILES) success=false;
     return success && RemoveDirectoryW(root.c_str())!=FALSE;
+}
+static bool MarkerMatches(const std::wstring& root,const std::wstring& product) {
+    const auto marker=root+L"\\Qingyue.install";
+    const DWORD attributes=GetFileAttributesW(marker.c_str());
+    if(attributes==INVALID_FILE_ATTRIBUTES || (attributes&FILE_ATTRIBUTE_DIRECTORY) ||
+        (attributes&FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+    HANDLE file=CreateFileW(marker.c_str(),GENERIC_READ,
+        FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE) return false;
+    const DWORD length=GetFileSize(file,nullptr);
+    if(length==INVALID_FILE_SIZE || length>1024) {CloseHandle(file);return false;}
+    std::vector<BYTE> bytes(length);
+    DWORD read=0;
+    const bool loaded=length==0 || (ReadFile(file,bytes.data(),length,&read,nullptr)!=FALSE && read==length);
+    CloseHandle(file);
+    if(!loaded) return false;
+    std::wstring value;
+    if(bytes.size()>=2 && bytes[0]==0xFF && bytes[1]==0xFE) {
+        for(size_t i=2;i+1<bytes.size();i+=2)
+            value.push_back(static_cast<wchar_t>(bytes[i]) |
+                static_cast<wchar_t>(bytes[i+1])<<8);
+    } else if(bytes.size()>=2 && bytes[1]==0 && bytes.size()%2==0) {
+        for(size_t i=0;i+1<bytes.size();i+=2)
+            value.push_back(static_cast<wchar_t>(bytes[i]));
+    } else {
+        for(const auto byte:bytes) value.push_back(static_cast<wchar_t>(byte));
+    }
+    while(!value.empty() && (value.back()==L'\r' || value.back()==L'\n' || value.back()==L'\0'))
+        value.pop_back();
+    return Equal(value,product);
+}
+static bool RemoveInstallContents(const std::wstring& root) {
+    const DWORD attributes=GetFileAttributesW(root.c_str());
+    if(attributes==INVALID_FILE_ATTRIBUTES || (attributes&FILE_ATTRIBUTE_REPARSE_POINT) ||
+        !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return false;
+    WIN32_FIND_DATAW data; HANDLE search=FindFirstFileW((root+L"\\*").c_str(),&data);
+    if(search==INVALID_HANDLE_VALUE) return false;
+    bool success=true;
+    do {
+        if(Equal(data.cFileName,L".") || Equal(data.cFileName,L"..")) continue;
+        const auto path=root+L"\\"+data.cFileName;
+        const bool directory=(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+        const bool reserved=!directory &&
+            (Equal(data.cFileName,L"Uninstall.exe") || Equal(data.cFileName,L"Qingyue.install"));
+        if(reserved) continue;
+        if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT) {
+            success=false;
+        } else if(directory) {
+            if(!RemoveInstallContents(path) || !RemoveDirectoryW(path.c_str()))
+                success=false;
+        } else {
+            if(data.dwFileAttributes&FILE_ATTRIBUTE_READONLY &&
+                !SetFileAttributesW(path.c_str(),data.dwFileAttributes&~FILE_ATTRIBUTE_READONLY))
+                success=false;
+            if(!DeleteFileW(path.c_str())) success=false;
+        }
+    } while(FindNextFileW(search,&data));
+    const DWORD error=GetLastError();FindClose(search);
+    if(error!=ERROR_NO_MORE_FILES) success=false;
+    return success;
 }
 
 extern "C" __declspec(dllexport) void __cdecl ValidateRoot(HWND,int size,wchar_t*,void* stack,void*) {
@@ -153,9 +203,6 @@ extern "C" __declspec(dllexport) void __cdecl HasFiles(HWND,int size,wchar_t*,vo
     while(FindNextFileW(search,&data));
     FindClose(search);Push(found?L"1":L"0");
 }
-extern "C" __declspec(dllexport) void __cdecl IsBusy(HWND,int size,wchar_t*,void* stack,void*) {
-    Init(size,stack);Push(Busy()?L"1":L"0");
-}
 extern "C" __declspec(dllexport) void __cdecl CanReplace(HWND,int size,wchar_t*,void* stack,void*) {
     Init(size,stack);auto path=Pop();
     auto links=NoLinks(path);
@@ -175,6 +222,16 @@ extern "C" __declspec(dllexport) void __cdecl PurgeData(HWND,int size,wchar_t*,v
     Init(size,stack);auto raw=Pop(),leaf=Pop();
     const auto expected=Known(FOLDERID_LocalAppData)+L"\\"+leaf, path=Canonical(raw);
     if(leaf.empty() || leaf.find_first_of(L"\\/:.")!=std::wstring::npos || !Equal(expected,path) ||
-        !NoLinks(path).empty() || Busy()) {Push(L"用户数据路径校验失败或轻阅正在运行，已保留数据。");return;}
+        !NoLinks(path).empty()) {Push(L"用户数据路径校验失败，已保留数据。");return;}
     Push(RemoveTree(path)?L"":L"部分用户数据无法删除，请关闭占用程序后重试。");
+}
+extern "C" __declspec(dllexport) void __cdecl PurgeInstall(HWND,int size,wchar_t*,void* stack,void*) {
+    Init(size,stack);auto raw=Pop(),data=Pop(),product=Pop();
+    const auto path=Canonical(raw);
+    const auto validation=Validate(raw,data);
+    if(product.empty() || path.empty() || !validation.empty() || !MarkerMatches(path,product)) {
+        Push(L"安装目录校验失败或安装标记不匹配，已保留安装目录。");
+        return;
+    }
+    Push(RemoveInstallContents(path)?L"":L"部分安装文件无法删除，请关闭占用程序后重试。");
 }

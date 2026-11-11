@@ -257,7 +257,7 @@ internal static partial class Program
             await Idle(window);
             query.Focus();
             query.Text = "needle";
-            await WaitFor(() => count.Text.Contains("处匹配"), "真实搜索框完成阅读内容查找");
+            await WaitFor(() => count.Text.Contains(" / "), "真实搜索框完成阅读内容查找");
             query.Select(1, 3);
             Check(ReferenceEquals(Keyboard.FocusedElement, query),
                 $"磁盘刷新前搜索框确实持有键盘焦点 (active={window.IsActive}, focused={Keyboard.FocusedElement})");
@@ -266,7 +266,7 @@ internal static partial class Program
             window.QueueExternalRefresh(tab);
             await WaitFor(() => tab.Reading?.Headings.FirstOrDefault()?.Title == "After",
                 "搜索输入期间外部刷新仍重建阅读视图");
-            await WaitFor(() => count.Text.Contains("处匹配"), "外部刷新后搜索结果重新生成");
+            await WaitFor(() => count.Text.Contains(" / "), "外部刷新后搜索结果重新生成");
             await Idle(window);
             Check(ReferenceEquals(Keyboard.FocusedElement, query) && query.IsKeyboardFocusWithin,
                 "阅读模式磁盘刷新不会抢走真实搜索框键盘焦点");
@@ -275,7 +275,7 @@ internal static partial class Program
             // Keep the preview loaded while checking the optional parameter's
             // default; initial visibility/layout timing is outside this regression.
             typeof(MainWindow).GetMethod("EnterReading", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(window, [tab, null, Type.Missing]);
+                .Invoke(window, [tab, null, Type.Missing, Type.Missing]);
             Check(tab.Preview.IsKeyboardFocusWithin, "EnterReading默认调用仍聚焦阅读视图");
         }
         finally
