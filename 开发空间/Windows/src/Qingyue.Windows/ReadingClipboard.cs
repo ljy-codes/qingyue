@@ -195,31 +195,34 @@ public static class ReadingClipboard
     /// Adds HTML to WPF's existing copy data. Does not copy, focus or select anything.
     /// Attach once per preview; repeated calls only replace the enabling predicate.
     /// </summary>
-    public static void Attach(RichTextBox preview, Func<bool> enabled)
+    public static void Attach(RichTextBox preview, Func<bool> enabled, Action<string>? report = null)
     {
         ArgumentNullException.ThrowIfNull(preview);
         ArgumentNullException.ThrowIfNull(enabled);
         preview.VerifyAccess();
         if (Registrations.TryGetValue(preview, out var registration))
+        {
             registration.Enabled = enabled;
+            registration.Report = report;
+        }
         else
         {
-            registration = new Registration(enabled);
+            registration = new Registration(enabled, report);
             Registrations.Add(preview, registration);
             InstallBlockMenu(preview, registration);
             DataObject.AddSettingDataHandler(preview, (_, e) =>
             {
                 if (e.Format != DataFormats.Xaml || e.IsDragDrop || !ReferenceEquals(e.OriginalSource, preview)
                     || !registration.Enabled() || preview.Selection.IsEmpty) return;
+                PreparedCopies.Remove(e.DataObject);
                 try
                 {
                     var payload = PrepareSelection(preview);
-                    PreparedCopies.Remove(e.DataObject);
                     PreparedCopies.Add(e.DataObject, payload);
-                    // Standalone WPF XAML cannot carry cached bitmap bytes. Suppress
-                    // this stale text-only flavor before WPF puts it into the data
-                    // object; Copying below supplies the self-contained XamlPackage.
-                    if (payload.Package is not null) e.CancelCommand();
+                    // Never allow WPF to serialize the live document into a
+                    // standalone XAML flavor. Copying below publishes the
+                    // detached snapshot result instead.
+                    e.CancelCommand();
                 }
                 catch (Exception ex) when (IsExportFailure(ex)) { /* Keep native copy. */ }
             });
@@ -227,20 +230,47 @@ public static class ReadingClipboard
             {
                 if (e.IsDragDrop || !ReferenceEquals(e.OriginalSource, preview)
                     || !registration.Enabled() || preview.Selection.IsEmpty) return;
+
+                SelectionPayload payload;
                 try
                 {
-                    var payload = PreparedCopies.TryGetValue(e.DataObject, out var prepared)
+                    payload = PreparedCopies.TryGetValue(e.DataObject, out var prepared)
                         ? prepared : PrepareSelection(preview);
-                    if (payload.Rtf is not null) e.DataObject.SetData(DataFormats.Rtf, payload.Rtf, false);
-                    if (payload.Package is not null) e.DataObject.SetData(DataFormats.XamlPackage, payload.Package, false);
-                    if (payload.Bitmap is not null) e.DataObject.SetData(DataFormats.Bitmap, payload.Bitmap, false);
-                    if (!e.DataObject.GetDataPresent(DataFormats.UnicodeText, false))
-                        e.DataObject.SetData(DataFormats.UnicodeText, preview.Selection.Text, false);
-                    // Publish HTML last so a native-format failure cannot leave a
-                    // partial rich clipboard object advertising incomplete HTML.
-                    e.DataObject.SetData(DataFormats.Html, payload.Html, false);
                 }
-                catch (Exception ex) when (IsExportFailure(ex)) { /* Keep native copy. */ }
+                catch (Exception ex) when (IsExportFailure(ex))
+                {
+                    PreparedCopies.Remove(e.DataObject);
+                    return;
+                }
+
+                try
+                {
+                    var result = payload.Result;
+                    if (result.DegradationReason is { Length: > 0 } reason)
+                    {
+                        e.CancelCommand();
+                        Clipboard.SetDataObject(result.Data, true);
+                        registration.Report?.Invoke(reason);
+                        return;
+                    }
+
+                    // Read every format from the completed result before
+                    // touching WPF's event object. The package is copied so
+                    // its position and lifetime are independent of the source.
+                    string? unicodeText = result.Data.GetData(DataFormats.UnicodeText, false) as string;
+                    string? text = result.Data.GetData(DataFormats.Text, false) as string;
+                    string? rtf = result.Data.GetData(DataFormats.Rtf, false) as string;
+                    MemoryStream? package = CopyPackage(result.Data);
+                    BitmapSource? bitmap = result.Data.GetData(DataFormats.Bitmap, false) as BitmapSource;
+                    string? html = result.Data.GetData(DataFormats.Html, false) as string;
+
+                    if (unicodeText is not null) e.DataObject.SetData(DataFormats.UnicodeText, unicodeText, false);
+                    if (text is not null) e.DataObject.SetData(DataFormats.Text, text, false);
+                    if (rtf is not null) e.DataObject.SetData(DataFormats.Rtf, rtf, false);
+                    if (package is not null) e.DataObject.SetData(DataFormats.XamlPackage, package, false);
+                    if (bitmap is not null) e.DataObject.SetData(DataFormats.Bitmap, bitmap, false);
+                    if (html is not null) e.DataObject.SetData(DataFormats.Html, html, false);
+                }
                 finally { PreparedCopies.Remove(e.DataObject); }
             });
         }
@@ -332,6 +362,7 @@ public static class ReadingClipboard
     {
         var data = new DataObject();
         data.SetData(DataFormats.UnicodeText, plainText, false);
+        data.SetData(DataFormats.Text, plainText, false);
         return new(data, images?.Embedded ?? 0, images?.Omitted ?? 0)
         {
             Images = images ?? new(0, 0, 0, 0, 0),
@@ -341,9 +372,10 @@ public static class ReadingClipboard
         };
     }
 
-    private sealed class Registration(Func<bool> enabled)
+    private sealed class Registration(Func<bool> enabled, Action<string>? report)
     {
         internal Func<bool> Enabled = enabled;
+        internal Action<string>? Report = report;
     }
 
     private static void InstallBlockMenu(RichTextBox preview, Registration registration)
@@ -365,7 +397,10 @@ public static class ReadingClipboard
                     var result = CreateCurrentBlockData(preview, code);
                     if (result is null) throw new IOException("当前选区不在同一个目标块内，或内容超出复制上限。");
                     Clipboard.SetDataObject(result.Data, true);
-                    if (result.Images.Incomplete) MessageBox.Show(result.Images.Description + "。已保留明确占位符。", "复制图片未完整");
+                    if (result.DegradationReason is { Length: > 0 } reason)
+                        MessageBox.Show("复制已降级：" + reason, "复制已降级");
+                    else if (result.Images.Incomplete)
+                        MessageBox.Show(result.Images.Description + "。已保留明确占位符。", "复制图片未完整");
                 }
                 catch (Exception ex) when (IsExportFailure(ex))
                 { MessageBox.Show(ex.Message, "复制未完成"); }
@@ -395,14 +430,20 @@ public static class ReadingClipboard
         catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
 
-    private sealed record SelectionPayload(string Html, string? Rtf, MemoryStream? Package, BitmapSource? Bitmap);
+    private sealed record SelectionPayload(ReadingClipboardResult Result);
 
-    private static SelectionPayload PrepareSelection(RichTextBox preview)
+    private static SelectionPayload PrepareSelection(RichTextBox preview) =>
+        new(CreateData(preview.Document, preview.Selection)
+            ?? throw new IOException("当前选区超过复制上限，无法生成纯文本快照。"));
+
+    private static MemoryStream? CopyPackage(IDataObject data)
     {
-        var snapshot = CreateSnapshot(preview.Document, preview.Selection);
-        if (snapshot.Images.Embedded + snapshot.Images.Omitted == 0)
-            return new(snapshot.Html, null, null, null);
-        return new(snapshot.Html, snapshot.Rtf, snapshot.XamlPackage, snapshot.Bitmap);
+        if (!data.GetDataPresent(DataFormats.XamlPackage, false)) return null;
+        if (data.GetData(DataFormats.XamlPackage, false) is not MemoryStream source)
+            throw new InvalidOperationException("XamlPackage 快照不是可复制的内存流。");
+        var copy = new MemoryStream(source.ToArray());
+        copy.Position = 0;
+        return copy;
     }
 
     private static MemoryStream CreatePackage(TextRange range)

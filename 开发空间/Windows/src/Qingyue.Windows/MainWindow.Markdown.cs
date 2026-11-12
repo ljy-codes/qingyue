@@ -94,7 +94,8 @@ public partial class MainWindow
             // immediate, stable host while a large Markdown file is being prepared.
             markdownPreview = new MarkdownPreview("", settings.FontSize + 1, settings.ReadingWidth, tab.File.Path,
                 includeDiagramSource: true);
-            ReadingClipboard.Attach(markdownPreview, () => true);
+            ReadingClipboard.Attach(markdownPreview, () => true,
+                reason => StatusText.Text = "复制已降级：" + reason);
             markdownPreviewHost!.Content = markdownPreview;
             if (MarkdownPreview.CanBuildSynchronously(tab.File.Text))
             {

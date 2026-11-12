@@ -49,6 +49,7 @@ internal static class Program
         Test("复制快照只依赖已冻结资源", ClipboardSnapshotIsSelfContained);
         Test("全文快照发布完整格式并按图片数量选择 Bitmap", ClipboardSnapshotFormats);
         Test("富文本导出失败仍保留 UnicodeText", RichExportFailureKeepsUnicodeText);
+        Test("Attach 富文本失败只发布 UnicodeText 和 Text", AttachRichExportFailureIsAtomic);
         SharingChecks.Run(Test);
         MainWindowSharingChecks.Run(Test);
         Console.WriteLine($"Clipboard checks: {passed}/{passed + failed} passed");
@@ -116,10 +117,62 @@ internal static class Program
         Check(result is not null, "富文本导出失败后没有返回降级数据");
         Check(result!.Data.GetDataPresent(DataFormats.UnicodeText, false),
             "富文本导出失败后没有保留 UnicodeText");
+        Check(result.Data.GetDataPresent(DataFormats.Text, false),
+            "富文本导出失败后没有保留 Text");
         Check(!result.Data.GetDataPresent(DataFormats.Html, false) &&
             !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
             !result.Data.GetDataPresent(DataFormats.XamlPackage, false),
             "富文本导出失败后仍发布了不完整的富文本格式");
+    }
+
+    private static void AttachRichExportFailureIsAtomic()
+    {
+        var document = new FlowDocument();
+        int maximumElements = (int)typeof(ReadingClipboard)
+            .GetField("MaximumElements", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        for (int i = 0; i <= maximumElements; i++)
+            document.Blocks.Add(new Paragraph(new Run("Attach 快照文本😀")));
+        var box = new RichTextBox { Document = document };
+        box.SelectAll();
+        var prepare = typeof(ReadingClipboard).GetMethod("PrepareSelection",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var payload = prepare.Invoke(null, [box])!;
+        var result = (ReadingClipboardResult)payload.GetType().GetProperty("Result")!.GetValue(payload)!;
+        Check(result.Data.GetDataPresent(DataFormats.UnicodeText, false) &&
+            result.Data.GetDataPresent(DataFormats.Text, false),
+            "Attach degradation did not prepare both plain text flavors");
+        Check(!result.Data.GetDataPresent(DataFormats.Html, false) &&
+            !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
+            !result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
+            !result.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "Attach degradation prepared a rich format");
+        string snapshotText = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(snapshotText == box.Selection.Text,
+            "Attach degradation did not use the selection snapshot plain text");
+        var settingData = new DataObject();
+        ReadingClipboard.Attach(box, () => true);
+        var setting = new DataObjectSettingDataEventArgs(settingData, DataFormats.Xaml);
+        box.RaiseEvent(setting);
+        Check(setting.CommandCancelled,
+            "Attach degradation did not cancel WPF live XAML generation");
+        Check(snapshotText == (string)result.Data.GetData(DataFormats.Text, false)!,
+            "Attach degradation plain text flavors differ");
+
+        var stableRun = new Run("Attach 冻结文本😀");
+        var stableBox = Box(new Paragraph(stableRun));
+        stableBox.SelectAll();
+        var stableData = NativeData(stableBox);
+        ReadingClipboard.Attach(stableBox, () => true);
+        var stableSetting = new DataObjectSettingDataEventArgs(stableData, DataFormats.Xaml);
+        stableBox.RaiseEvent(stableSetting);
+        Check(stableSetting.CommandCancelled,
+            "Attach did not cancel WPF live XAML generation before Copying");
+        string stableSnapshotText = stableBox.Selection.Text;
+        stableRun.Text = "Attach 实时文本";
+        stableBox.RaiseEvent(new DataObjectCopyingEventArgs(stableData, false));
+        Check((string)stableData.GetData(DataFormats.UnicodeText, false)! == stableSnapshotText,
+            "Attach Copying read plain text from the live selection");
     }
 
     private static void ClipboardSnapshotFormats()

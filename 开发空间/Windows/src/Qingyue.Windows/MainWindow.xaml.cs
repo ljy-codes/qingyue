@@ -135,7 +135,8 @@ public partial class MainWindow : Window
         tab.Preview.Loaded += (_, _) => UpdateReadingWidth(tab);
         tab.Preview.SizeChanged += (_, _) => UpdateReadingWidth(tab);
         AttachReadingNavigation(tab);
-        ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading);
+        ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading,
+            reason => StatusText.Text = "复制已降级：" + reason);
         tabs.Add(tab);
         SelectTab(tab);
         return tab;
