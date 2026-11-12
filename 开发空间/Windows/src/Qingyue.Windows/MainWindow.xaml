@@ -164,6 +164,19 @@
             <TabControl.ItemTemplate>
               <DataTemplate>
                 <StackPanel Orientation="Horizontal" ToolTip="{Binding File.Path}" MouseLeftButtonDown="TabDoubleClick">
+                  <StackPanel.ContextMenu>
+                    <ContextMenu Opened="TabContextMenuOpened">
+                      <MenuItem Header="关闭当前标签" Tag="closeTab" Click="TabContextAction"/>
+                      <MenuItem Header="关闭其他标签" Tag="closeOthers" Click="TabContextAction"/>
+                      <MenuItem Header="关闭右侧标签" Tag="closeRight" Click="TabContextAction"/>
+                      <Separator/>
+                      <MenuItem Header="向左移动" Tag="moveLeft" Click="TabContextAction"/>
+                      <MenuItem Header="向右移动" Tag="moveRight" Click="TabContextAction"/>
+                      <Separator/>
+                      <MenuItem Header="复制文件路径" Tag="copyPath" Click="TabContextAction"/>
+                      <MenuItem Header="在资源管理器中显示" Tag="revealPath" Click="TabContextAction"/>
+                    </ContextMenu>
+                  </StackPanel.ContextMenu>
                   <TextBlock Text="{Binding DisplayTitle}" MaxWidth="210" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                   <Button Content="×" Tag="{Binding}" Click="CloseTabClick" Margin="12,0,0,0" MinHeight="22" Width="22" Padding="0" Background="Transparent" BorderThickness="0" ToolTip="关闭标签" AutomationProperties.Name="关闭标签"/>
                 </StackPanel>
@@ -219,14 +232,42 @@
                   <ListBox.ItemTemplate>
                     <DataTemplate>
                       <StackPanel ToolTip="{Binding Path}">
+                        <StackPanel.ContextMenu>
+                          <ContextMenu>
+                            <MenuItem Header="移除记录" Click="RemoveRecentClick"/>
+                          </ContextMenu>
+                        </StackPanel.ContextMenu>
                         <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding Folder}" Foreground="{DynamicResource MutedBrush}" FontSize="10" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                        <TextBlock Text="{Binding StateText}" Foreground="{DynamicResource MutedBrush}" FontSize="10" Margin="0,3,0,0"/>
                       </StackPanel>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
                 <Button Grid.Row="1" Content="清除最近记录" Tag="clearRecent" Click="MenuAction" FontSize="11" Margin="0,14,0,0"/>
               </Grid>
+            </TabItem>
+            <TabItem Header="书签">
+              <ListBox x:Name="BookmarksList" Margin="0,12,0,0"
+                       MouseDoubleClick="BookmarkDoubleClick" KeyDown="BookmarkKeyDown">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel ToolTip="{Binding Bookmark.Label}">
+                      <StackPanel.ContextMenu>
+                        <ContextMenu>
+                          <MenuItem Header="跳转到书签" Click="BookmarkJumpClick"/>
+                          <MenuItem Header="删除书签" Click="RemoveBookmarkClick"/>
+                        </ContextMenu>
+                      </StackPanel.ContextMenu>
+                      <TextBlock Text="{Binding Group}" Foreground="{DynamicResource AccentTextBrush}" FontSize="10"/>
+                      <TextBlock Text="{Binding Bookmark.Label}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                      <TextBlock Text="{Binding DocumentTitle}" Foreground="{DynamicResource MutedBrush}" FontSize="10" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+                      <TextBlock Text="{Binding Location}" Foreground="{DynamicResource MutedBrush}" FontSize="10" Margin="0,2,0,0"/>
+                      <TextBlock Text="{Binding StateText}" Foreground="{DynamicResource MutedBrush}" FontSize="10" Margin="0,2,0,0"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
             </TabItem>
             <TabItem Header="文档目录">
               <ListBox x:Name="OutlineList" Margin="0,12,0,0" SelectionChanged="OutlineSelected" DisplayMemberPath="Title"/>

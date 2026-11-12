@@ -194,6 +194,7 @@ public partial class MainWindow : Window
             QueueOutline(tab);
         }
         RefreshStatus();
+        RefreshBookmarks();
         RefreshLocation();
         QueueSearch();
         SchedulePersist();
@@ -366,6 +367,7 @@ public partial class MainWindow : Window
         tab.NotifyChanged();
         AddRecent(fullPath);
         if (kindChanged && CurrentTab == tab) RefreshCurrent(); else RefreshStatus();
+        RefreshBookmarks();
         SchedulePersist();
         return true;
     }
@@ -429,6 +431,7 @@ public partial class MainWindow : Window
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
         if (kindChanged && CurrentTab == tab) RefreshCurrent(); else RefreshStatus();
+        RefreshBookmarks();
         SchedulePersist();
     }
 

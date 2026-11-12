@@ -67,6 +67,30 @@ internal static class Program
                 window.ToggleBookmark();
                 Check(window.CurrentBookmarks(progressTab).Count == 0, "同一位置再次操作可以删除书签");
                 window.ToggleReading();
+                var sidebarTabs = (TabControl)window.FindName("SidebarTabs");
+                Check(sidebarTabs.Items.Cast<TabItem>().Any(item => Equals(item.Header, "书签")),
+                    "侧栏包含书签页");
+                var tabHeader = FindTabHeader(window, progressTab);
+                Check(tabHeader.ContextMenu is not null, "标签拥有右键菜单");
+                tabHeader.ContextMenu!.IsOpen = true;
+                Check(tabHeader.ContextMenu.Items.Cast<MenuItem>().Any(item => Equals(item.Header, "关闭其他标签")),
+                    "标签右键菜单包含关闭其他标签");
+                tabHeader.ContextMenu.IsOpen = false;
+
+                string missing = Path.Combine(root, "已删除.md");
+                File.WriteAllText(missing, "# 已删除");
+                await window.OpenPathsAsync([missing]);
+                File.Delete(missing);
+                window.RefreshRecent();
+                var recent = (ListBox)window.FindName("RecentList");
+                Check(recent.Items.Cast<object>().Any(item =>
+                {
+                    var type = item.GetType();
+                    return string.Equals(type.GetProperty("Path")?.GetValue(item) as string,
+                        Path.GetFullPath(missing), StringComparison.OrdinalIgnoreCase)
+                        && type.GetProperty("Exists")?.GetValue(item) is false
+                        && (type.GetProperty("StateText")?.GetValue(item) as string)?.Contains("不存在") == true;
+                }), "最近文件显示失效状态");
 
                 string filePath = Path.Combine(root, "中文配置.json");
                 Check(window.SaveTabToPath(first, filePath), "窗口保存到中文路径");
@@ -383,6 +407,26 @@ internal static class Program
             if (found is not null) return found;
         }
         return null;
+    }
+
+    private static FrameworkElement FindTabHeader(MainWindow window, EditorTab tab)
+    {
+        var root = (DependencyObject)window.FindName("TabStrip");
+        var matches = Descendants(root).OfType<FrameworkElement>()
+            .Where(item => ReferenceEquals(item.DataContext, tab))
+            .ToArray();
+        return matches.FirstOrDefault(item => item is StackPanel)
+            ?? throw new Exception("未找到标签头。");
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var nested in Descendants(child)) yield return nested;
+        }
     }
 
     internal static void SaveScreenshot(Window window, string path)

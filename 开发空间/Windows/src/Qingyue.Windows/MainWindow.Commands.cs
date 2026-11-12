@@ -230,10 +230,31 @@ public partial class MainWindow
         tab.File.LineEnding = ending; tab.NotifyChanged(); RefreshStatus(); SchedulePersist();
     }
 
-    private sealed record RecentItem(string Path)
+    public sealed record RecentItem(string Path)
     {
         public string Name => System.IO.Path.GetFileName(Path);
         public string Folder => System.IO.Path.GetDirectoryName(Path) ?? "";
+        public bool Exists
+        {
+            get
+            {
+                try { return File.Exists(Path); }
+                catch { return false; }
+            }
+        }
+        public string StateText
+        {
+            get
+            {
+                try
+                {
+                    if (File.Exists(Path)) return "可打开";
+                    string? folder = System.IO.Path.GetDirectoryName(Path);
+                    return folder is not null && Directory.Exists(folder) ? "文件不存在" : "暂时无法访问";
+                }
+                catch { return "暂时无法访问"; }
+            }
+        }
     }
 
     private void AddRecent(string path)
@@ -244,14 +265,18 @@ public partial class MainWindow
         RefreshRecent();
     }
 
-    private void RefreshRecent()
+    public void RefreshRecent()
     {
         RecentList.ItemsSource = settings.Recent.Select(p => new RecentItem(p)).ToArray();
         RecentMenu.Items.Clear();
         foreach (var path in settings.Recent)
         {
             var item = new MenuItem { Header = Path.GetFileName(path).Replace("_", "__"), ToolTip = path };
-            item.Click += async (_, _) => await OpenPathsAsync([path]);
+            item.Click += async (_, _) =>
+            {
+                if (!File.Exists(path)) { Notify("最近文件当前不存在或无法访问：\n" + path); return; }
+                await OpenPathsAsync([path]);
+            };
             RecentMenu.Items.Add(item);
         }
         if (RecentMenu.Items.Count == 0) RecentMenu.Items.Add(new MenuItem { Header = "暂无最近文件", IsEnabled = false });
@@ -259,13 +284,156 @@ public partial class MainWindow
 
     private async void RecentDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (RecentList.SelectedItem is RecentItem item) await OpenPathsAsync([item.Path]);
+        if (RecentList.SelectedItem is RecentItem item)
+        {
+            if (!item.Exists) { Notify("最近文件当前不存在或无法访问：\n" + item.Path); return; }
+            await OpenPathsAsync([item.Path]);
+        }
     }
 
     private async void RecentKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && RecentList.SelectedItem is RecentItem item)
-        { e.Handled = true; await OpenPathsAsync([item.Path]); }
+        {
+            e.Handled = true;
+            if (!item.Exists) { Notify("最近文件当前不存在或无法访问：\n" + item.Path); return; }
+            await OpenPathsAsync([item.Path]);
+        }
+    }
+
+    private void RemoveRecentClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item || item.Parent is not ContextMenu menu
+            || menu.PlacementTarget is not FrameworkElement target
+            || target.DataContext is not RecentItem recent) return;
+        RemoveRecentPath(recent.Path);
+        e.Handled = true;
+    }
+
+    public void RemoveRecentPath(string path)
+    {
+        settings.Recent.RemoveAll(item => string.Equals(item, path, StringComparison.OrdinalIgnoreCase));
+        RefreshRecent();
+        SchedulePersist();
+    }
+
+    public sealed record BookmarkListItem(
+        DocumentBookmark Bookmark, string Group, string DocumentTitle, string Location, string StateText);
+
+    public void RefreshBookmarks()
+    {
+        if (BookmarksList is null) return;
+        var current = CurrentTab;
+        BookmarksList.ItemsSource = bookmarks.Items.Select(bookmark =>
+        {
+            var tab = tabs.FirstOrDefault(item => item.File.Id == bookmark.DocumentId
+                || bookmark.Path is not null && string.Equals(item.File.Path, bookmark.Path, StringComparison.OrdinalIgnoreCase));
+            bool isCurrent = tab is not null && ReferenceEquals(tab, current);
+            string title = tab?.File.Title
+                ?? (bookmark.Path is null ? "未命名文档" : Path.GetFileName(bookmark.Path));
+            string state = tab is not null ? "已打开"
+                : bookmark.Path is { } path && File.Exists(path) ? "未打开" : "文件不存在";
+            return new BookmarkListItem(bookmark, isCurrent ? "当前文档" : "其他文档",
+                title, $"源位置 {bookmark.SourceAnchor:N0}", state);
+        }).ToArray();
+    }
+
+    private void BookmarkDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (BookmarksList.SelectedItem is BookmarkListItem item)
+        {
+            NavigateToBookmark(item.Bookmark);
+            e.Handled = true;
+        }
+    }
+
+    private void BookmarkJumpClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Parent: ContextMenu menu }
+            && menu.PlacementTarget is FrameworkElement target
+            && target.DataContext is BookmarkListItem item)
+            NavigateToBookmark(item.Bookmark);
+        e.Handled = true;
+    }
+
+    private void BookmarkKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && BookmarksList.SelectedItem is BookmarkListItem item)
+        {
+            NavigateToBookmark(item.Bookmark);
+            e.Handled = true;
+        }
+    }
+
+    private void RemoveBookmarkClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item || item.Parent is not ContextMenu menu
+            || menu.PlacementTarget is not FrameworkElement target
+            || target.DataContext is not BookmarkListItem bookmark) return;
+        if (bookmarks.Remove(bookmark.Bookmark.Id))
+        {
+            bookmarksDirty = true;
+            ScheduleBookmarkSave();
+            RefreshBookmarks();
+        }
+        e.Handled = true;
+    }
+
+    private void TabContextAction(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item || item.Parent is not ContextMenu menu
+            || menu.PlacementTarget is not FrameworkElement target
+            || target.DataContext is not EditorTab tab
+            || item.Tag is not string action) return;
+        e.Handled = true;
+        switch (action)
+        {
+            case "closeTab":
+                CloseTab(tab);
+                break;
+            case "closeOthers":
+                SelectTab(tab);
+                foreach (var other in tabs.ToArray().Where(candidate => candidate != tab))
+                    if (!CloseTab(other, false)) break;
+                if (tabs.Count == 0) NewDocument();
+                break;
+            case "closeRight":
+                SelectTab(tab);
+                int index = tabs.IndexOf(tab);
+                foreach (var other in tabs.Skip(index + 1).Reverse().ToArray())
+                    if (!CloseTab(other, false)) break;
+                break;
+            case "moveLeft":
+                SelectTab(tab); MoveTab(-1);
+                break;
+            case "moveRight":
+                SelectTab(tab); MoveTab(1);
+                break;
+            case "copyPath":
+                if (tab.File.Path is { } path) Clipboard.SetText(path);
+                break;
+            case "revealPath":
+                RevealPath(tab);
+                break;
+        }
+    }
+
+    private void TabContextMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu || menu.PlacementTarget is not FrameworkElement target
+            || target.DataContext is not EditorTab tab) return;
+        bool hasPath = tab.File.Path is not null;
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            if (item.Tag is "copyPath" or "revealPath") item.IsEnabled = hasPath;
+    }
+
+    private static void RevealPath(EditorTab tab)
+    {
+        if (tab.File.Path is not { } path) return;
+        var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+        start.ArgumentList.Add("/select,");
+        start.ArgumentList.Add(path);
+        Process.Start(start);
     }
 
     private async Task QuickOpenAsync()
