@@ -15,6 +15,7 @@ internal static partial class Program
         await CoreSafety(root);
         await EncodingSafety(root);
         await ViewState(window, root);
+        await ReadingAnchorFollowsInsertedPrefix(window, root);
         await SearchFocusDuringRefresh(window, root);
         await NoticesAndRetry(window, root);
         await ActivationStorm(window, root);
@@ -235,6 +236,27 @@ internal static partial class Program
             var pane = (MarkdownPreview?)typeof(MainWindow).GetField("markdownPreview", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window);
             return pane is not null && new TextRange(pane.Document.ContentStart, pane.Document.ContentEnd).Text.Contains("MD!");
         }, "Markdown分屏预览重建且继续显示");
+    }
+
+    private static async Task ReadingAnchorFollowsInsertedPrefix(MainWindow window, string root)
+    {
+        string path = Path.Combine(root, "anchor.md");
+        string before = "# 开始\n\n目标段落\n第二行\n\n结尾";
+        File.WriteAllText(path, before);
+        await window.OpenPathsAsync([path]);
+        var tab = window.CurrentTab!;
+        if (!tab.IsReading) window.ToggleReading();
+        await Idle(window);
+        int sourceTarget = before.IndexOf("目标段落", StringComparison.Ordinal);
+        var pointer = tab.Rendered!.PointerAt(tab.Reading!.SourceToDisplay(sourceTarget));
+        tab.Preview.Selection.Select(pointer, pointer);
+        File.WriteAllText(path, "前置插入\n\n" + before);
+        window.QueueExternalRefresh(tab);
+        await WaitFor(() => tab.File.Text.StartsWith("前置插入", StringComparison.Ordinal),
+            "外部前置插入刷新正文");
+        int expected = tab.File.Text.IndexOf("目标段落", StringComparison.Ordinal);
+        int actual = tab.Reading!.DisplayToSource(tab.Rendered!.OffsetAt(tab.Preview.Selection.Start));
+        Check(Math.Abs(actual - expected) <= 1, $"外部前置插入后阅读选区跟随原段落 (expected={expected}, actual={actual})");
     }
 
     private static async Task SearchFocusDuringRefresh(MainWindow window, string root)

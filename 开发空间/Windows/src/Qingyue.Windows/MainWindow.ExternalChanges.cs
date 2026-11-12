@@ -162,8 +162,10 @@ public partial class MainWindow
 
     private void ApplyExternalRefresh(EditorTab tab, ExternalRefreshResult result)
     {
+        string oldText = tab.File.Text;
         bool reading = tab.IsReading;
         int anchor = CurrentSourceAnchor(tab);
+        int viewportAnchor = tab.ViewportAnchor ?? anchor;
         int selectionStart = SourceOffset(tab, tab.Editor.SelectionStart);
         int selectionEnd = SourceOffset(tab, tab.Editor.SelectionStart + tab.Editor.SelectionLength);
         int readingStart = anchor, readingEnd = anchor;
@@ -181,7 +183,17 @@ public partial class MainWindow
         double markdownVertical = markdown?.VerticalOffset ?? 0;
         int markdownStart = markdown?.Document.ContentStart.GetOffsetToPosition(markdown.Selection.Start) ?? 0;
         int markdownEnd = markdown?.Document.ContentStart.GetOffsetToPosition(markdown.Selection.End) ?? 0;
+        string? oldMarkdownText = markdown is null
+            ? null
+            : new TextRange(markdown.Document.ContentStart, markdown.Document.ContentEnd).Text;
         if (!result.TryApply()) return;
+        string newText = tab.File.Text;
+        anchor = TextAnchorMapper.Map(oldText, newText, anchor);
+        viewportAnchor = TextAnchorMapper.Map(oldText, newText, viewportAnchor);
+        selectionStart = TextAnchorMapper.Map(oldText, newText, selectionStart);
+        selectionEnd = TextAnchorMapper.Map(oldText, newText, selectionEnd);
+        readingStart = TextAnchorMapper.Map(oldText, newText, readingStart);
+        readingEnd = TextAnchorMapper.Map(oldText, newText, readingEnd);
 
         // The existing TextChanged path invalidates models and refreshes automatic
         // kind. Suppress only its reading rebuild, then rebuild exactly once below.
@@ -195,6 +207,7 @@ public partial class MainWindow
         tab.TrackSavedBaseline();
         tab.NotifyChanged();
         tab.SourceAnchor = Math.Clamp(anchor, 0, tab.File.Text.Length);
+        tab.ViewportAnchor = Math.Clamp(viewportAnchor, 0, tab.File.Text.Length);
         int start = EditorOffset(tab, selectionStart), end = EditorOffset(tab, selectionEnd);
         tab.Editor.Select(start, Math.Max(0, end - start));
         if (reading)
@@ -217,7 +230,12 @@ public partial class MainWindow
         {
             markdownTimer.Stop();
             UpdateMarkdownPreview(tab);
-            RestoreExternalMarkdownSelection(markdown, markdownStart, markdownEnd);
+            string newMarkdownText = new TextRange(markdown.Document.ContentStart, markdown.Document.ContentEnd).Text;
+            int mappedStart = oldMarkdownText is null ? markdownStart
+                : TextAnchorMapper.Map(oldMarkdownText, newMarkdownText, markdownStart);
+            int mappedEnd = oldMarkdownText is null ? markdownEnd
+                : TextAnchorMapper.Map(oldMarkdownText, newMarkdownText, markdownEnd);
+            RestoreExternalMarkdownSelection(markdown, mappedStart, mappedEnd);
         }
 
         var accepted = new ExternalFileRefresh(tab.File);
