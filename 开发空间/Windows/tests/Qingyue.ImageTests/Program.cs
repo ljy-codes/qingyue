@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -50,6 +51,8 @@ internal static partial class Program
         Test("code and escaped image syntax stay literal", LiteralCode);
         Test("mapped reading keeps one Run and UTF16 pointer roundtrips", Mapping);
         Test("relative absolute file URI Chinese spaces and URL escapes in both renderers", LocalPaths);
+        Test("中文空格括号和 file URI 图片路径可解析", ImagePathVariants);
+        Test("失败图片可以只重试当前控件", RetryFailedImage);
         Test("mapped reading inserts images without changing the mapping Runs", MappedImages);
         Test("long inline base64 keeps rich paragraphs tables lists and Mermaid", LongEmbedded);
         Test("image table list and Mermaid block tags retain original source ranges", TagsAndContainers);
@@ -158,6 +161,38 @@ internal static partial class Program
             AssertLoaded(reading.Document, "mapped " + target);
             Roundtrip(reading, model);
         }
+    }
+
+    private static void ImagePathVariants()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "artifacts", "中文 目录", "(截图)");
+        Directory.CreateDirectory(root);
+        string imagePath = Path.Combine(root, "带 空格 (截图).png");
+        File.WriteAllBytes(imagePath, Png);
+        string sourcePath = Path.Combine(root, "文档.md");
+        string relative = Path.GetRelativePath(Path.GetDirectoryName(sourcePath)!, imagePath);
+        string fileUri = new Uri(imagePath).AbsoluteUri;
+        foreach (string target in new[] { relative, Uri.EscapeDataString(relative), fileUri })
+            AssertLoaded(new MarkdownPreview("![路径图](" + target + ")", 16, 680, sourcePath).Document, target);
+    }
+
+    private static void RetryFailedImage()
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "artifacts", "retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string firstPath = Path.Combine(root, "first.png");
+        string secondPath = Path.Combine(root, "second.png");
+        var preview = new MarkdownPreview($"![一]({firstPath})\n\n![二]({secondPath})", 16, 680);
+        var images = Images(preview.Document).ToArray();
+        Activate(preview.Document);
+        PumpUntil(() => images.All(image => image.Source is null), "失败图片没有进入失败状态");
+        File.WriteAllBytes(firstPath, Png);
+        var view = Controls(preview.Document.Blocks).OfType<MarkdownImageView>().First();
+        var retry = typeof(MarkdownImageView).GetMethod("Retry", BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Missing public MarkdownImageView retry API");
+        retry.Invoke(view, null);
+        PumpUntil(() => images[0].Source is not null, "当前图片重试后没有成功");
+        Check(images[1].Source is null, "重试一张图片改变了另一张图片状态");
     }
 
     private static void MappedImages()

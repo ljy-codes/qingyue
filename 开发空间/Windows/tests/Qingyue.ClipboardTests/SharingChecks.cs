@@ -41,6 +41,7 @@ internal static class SharingChecks
         test("v030 atomic HTML writer rejects trailing-dot source aliases", () => Pump(TrailingDot));
         test("v030 portable HTML enforces existing text and image budgets", Budgets);
         test("v030 block context menu is installed once and uses current selection", ContextMenu);
+        test("复制快照只依赖已冻结资源", ClipboardSnapshotIsSelfContained);
     }
 
     private static MethodInfo Api(string name) =>
@@ -71,6 +72,15 @@ internal static class SharingChecks
         Check((string)data.GetData(DataFormats.Text, false)! == source, "text flavor changed Markdown");
         Check(!data.GetDataPresent(DataFormats.Html, false) && !data.GetDataPresent(DataFormats.Rtf, false),
             "Markdown must paste as source text");
+    }
+
+    private static void ClipboardSnapshotIsSelfContained()
+    {
+        var box = Box(new Paragraph(new Run("快照😀")));
+        box.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null && result.Data.GetDataPresent(DataFormats.UnicodeText, false),
+            "快照未冻结 UnicodeText");
     }
 
     private static void PlainText()

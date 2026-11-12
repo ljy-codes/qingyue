@@ -46,6 +46,8 @@ internal static class Program
         Test("disabled empty drag and nested text input copy keep defaults", DefaultBehavior);
         Test("pending and excessive images have explicit placeholders without URI access", MissingAndLimitedImages);
         Test("oversized selected text falls back atomically to native formats", TextLimit);
+        Test("复制快照只依赖已冻结资源", ClipboardSnapshotIsSelfContained);
+        Test("富文本导出失败仍保留 UnicodeText", RichExportFailureKeepsUnicodeText);
         SharingChecks.Run(Test);
         MainWindowSharingChecks.Run(Test);
         Console.WriteLine($"Clipboard checks: {passed}/{passed + failed} passed");
@@ -61,6 +63,32 @@ internal static class Program
         Check(data.GetDataPresent(DataFormats.Rtf, false), "WPF default lacks RTF");
         Check(data.GetDataPresent(DataFormats.Xaml, false), "WPF default lacks XAML");
         Check(!data.GetDataPresent(DataFormats.Html, false), "WPF baseline unexpectedly has HTML");
+    }
+
+    private static void ClipboardSnapshotIsSelfContained()
+    {
+        var image = Image();
+        var box = Box(new Paragraph(new Run("前文😀")), new Paragraph(new InlineUIContainer(image)),
+            new Paragraph(new Run("后文")));
+        box.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null, "快照创建失败");
+        Check(result!.Data.GetDataPresent(DataFormats.XamlPackage, false), "快照缺少 XamlPackage");
+        image.Source = null;
+        Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
+            ((string)result.Data.GetData(DataFormats.UnicodeText, false)!).Contains("前文😀"),
+            "快照仍依赖已变更的实时控件资源");
+    }
+
+    private static void RichExportFailureKeepsUnicodeText()
+    {
+        var box = Box(new Paragraph(new Run("Unicode😀保留")));
+        box.SelectAll();
+        ReadingClipboard.Attach(box, () => true);
+        var result = ReadingClipboard.CreateFullDocumentData(
+            Box(new Paragraph(new InlineUIContainer(new FrameworkElement()))));
+        Check(result is not null && result.Data.GetDataPresent(DataFormats.UnicodeText, false),
+            "富文本导出失败后没有保留 UnicodeText");
     }
 
     private static void Structure()
