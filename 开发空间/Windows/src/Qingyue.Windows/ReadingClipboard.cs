@@ -513,11 +513,14 @@ public static class ReadingClipboard
         internal int EmbeddedImages { get; private set; }
         internal int OmittedImages { get; private set; }
         private BitmapSource? singleBitmap;
+        private bool hasVisibleNonImageContent;
         private readonly List<string> mermaidSources = [];
         private int pendingImages, failedImages, unsupportedImages, limitedImages;
         private bool hasUnrenderedImages;
+        private bool CanPublishSingleBitmap =>
+            EmbeddedImages == 1 && OmittedImages == 0 && textLength == 0 && !hasVisibleNonImageContent;
         internal BitmapSource? SingleBitmap =>
-            EmbeddedImages == 1 && OmittedImages == 0 && textLength == 0 ? singleBitmap : null;
+            CanPublishSingleBitmap ? singleBitmap : null;
         internal ReadingImageReport Images => new(EmbeddedImages, pendingImages, failedImages, unsupportedImages, limitedImages)
             { HasUnrenderedImages = hasUnrenderedImages };
         internal List<XElement> Elements { get; } = [];
@@ -736,6 +739,7 @@ public static class ReadingClipboard
                     parent.Add(content);
                     break;
                 case LineBreak br when SelectedObject(br):
+                    hasVisibleNonImageContent = true;
                     parent.Add(new XElement("br"));
                     break;
                 case Span span:
@@ -781,6 +785,7 @@ public static class ReadingClipboard
                 {
                     if (sourceBlock is { } source && MermaidBlock.IsMermaid(source))
                         mermaidSources.Add(source.Text);
+                    hasVisibleNonImageContent = true;
                     return new XElement("span", mermaidNotice);
                 }
                 return null;
@@ -823,7 +828,7 @@ public static class ReadingClipboard
                         new XAttribute("style", "max-width:100%;height:auto"));
                     element.AddAnnotation(new ExportedImage(frozen, displayWidth, displayHeight));
                     EmbeddedImages++;
-                    singleBitmap = EmbeddedImages == 1 ? frozen : null;
+                    singleBitmap = CanPublishSingleBitmap ? frozen : null;
                     imageBytes += (int)stream.Length;
                     imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
                     return element;
@@ -892,7 +897,7 @@ public static class ReadingClipboard
                 new XAttribute("style", "max-width:100%;height:auto"));
             element.AddAnnotation(new ExportedImage(frozen, width, height));
             EmbeddedImages++;
-            singleBitmap = EmbeddedImages == 1 ? frozen : null;
+            singleBitmap = CanPublishSingleBitmap ? frozen : null;
             imageBytes += png.Length;
             imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
             return element;

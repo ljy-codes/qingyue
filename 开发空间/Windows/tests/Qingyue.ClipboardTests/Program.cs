@@ -181,6 +181,15 @@ internal static class Program
         var singleResult = ReadingClipboard.CreateFullDocumentData(single);
         Check(singleResult is not null && singleResult.Data.GetDataPresent(DataFormats.Bitmap, false),
             "单图选区没有发布 Bitmap");
+
+        var imageWithPlaceholderParagraph = new Paragraph(new InlineUIContainer(Image()));
+        imageWithPlaceholderParagraph.Inlines.Add(
+            new InlineUIContainer(new Border { Child = new TextBlock { Text = "图表暂未显示" } }));
+        var imageWithPlaceholder = Box(imageWithPlaceholderParagraph);
+        imageWithPlaceholder.SelectAll();
+        var placeholderResult = ReadingClipboard.CreateFullDocumentData(imageWithPlaceholder);
+        Check(placeholderResult is not null && !placeholderResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "图片和占位内容全文发布了误导性的 Bitmap");
     }
 
     private static int FieldOffset(string cfHtml, string field)
