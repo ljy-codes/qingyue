@@ -71,6 +71,13 @@ internal static class Program
         var box = Box(new Paragraph(new Run("前文😀")), new Paragraph(new InlineUIContainer(image)),
             new Paragraph(new Run("后文")));
         box.SelectAll();
+        var snapshotFactory = typeof(ReadingClipboard).GetMethod("CreateSnapshot",
+            BindingFlags.NonPublic | BindingFlags.Static, binder: null,
+            types: new[] { typeof(FlowDocument), typeof(TextRange) }, modifiers: null);
+        Check(snapshotFactory is not null, "缺少冻结剪贴板快照接口");
+        var snapshot = snapshotFactory!.Invoke(null,
+            new object[] { box.Document, new TextRange(box.Document.ContentStart, box.Document.ContentEnd) });
+        Check(snapshot is not null, "冻结剪贴板快照创建失败");
         var result = ReadingClipboard.CreateFullDocumentData(box);
         Check(result is not null, "快照创建失败");
         Check(result!.Data.GetDataPresent(DataFormats.XamlPackage, false), "快照缺少 XamlPackage");
@@ -78,6 +85,14 @@ internal static class Program
         Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
             ((string)result.Data.GetData(DataFormats.UnicodeText, false)!).Contains("前文😀"),
             "快照仍依赖已变更的实时控件资源");
+        using var package = (MemoryStream)result.Data.GetData(DataFormats.XamlPackage, false)!;
+        package.Position = 0;
+        var restored = new FlowDocument();
+        new TextRange(restored.ContentStart, restored.ContentEnd).Load(package, DataFormats.XamlPackage);
+        Check(restored.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Select(c => c.Child).OfType<Image>()
+            .Any(item => item.Source is BitmapSource),
+            "冻结快照中的图片无法独立还原");
     }
 
     private static void RichExportFailureKeepsUnicodeText()
