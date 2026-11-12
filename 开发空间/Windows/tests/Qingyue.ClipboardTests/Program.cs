@@ -78,8 +78,13 @@ internal static class Program
         var snapshot = snapshotFactory!.Invoke(null,
             new object[] { box.Document, new TextRange(box.Document.ContentStart, box.Document.ContentEnd) });
         Check(snapshot is not null, "冻结剪贴板快照创建失败");
-        var result = ReadingClipboard.CreateFullDocumentData(box);
-        Check(result is not null, "快照创建失败");
+        var dataFactory = typeof(ReadingClipboard).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(method => method.Name == "CreateData" &&
+                method.GetParameters() is [{ ParameterType: var parameterType }] &&
+                parameterType == snapshot!.GetType());
+        Check(dataFactory is not null, "缺少从冻结快照创建剪贴板数据的接口");
+        var result = dataFactory!.Invoke(null, new[] { snapshot }) as ReadingClipboardResult;
+        Check(result is not null, "快照创建剪贴板数据失败");
         Check(result!.Data.GetDataPresent(DataFormats.XamlPackage, false), "快照缺少 XamlPackage");
         image.Source = null;
         Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
@@ -98,7 +103,10 @@ internal static class Program
     private static void RichExportFailureKeepsUnicodeText()
     {
         var document = new FlowDocument();
-        for (int i = 0; i < 21_000; i++)
+        int maximumElements = (int)typeof(ReadingClipboard)
+            .GetField("MaximumElements", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        for (int i = 0; i <= maximumElements; i++)
             document.Blocks.Add(new Paragraph(new Run("Unicode😀保留")));
         var box = new RichTextBox { Document = document };
         box.SelectAll();
