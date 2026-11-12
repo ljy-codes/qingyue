@@ -694,7 +694,9 @@ internal static class MarkdownImageLoader
                 throw new ImageSourceException("网络图片未加载");
             path = uri.LocalPath;
         }
-        else path = Uri.UnescapeDataString(target);
+        else path = target;
+        path = Uri.UnescapeDataString(path)
+            .Replace('/', Path.DirectorySeparatorChar);
         if (MarkdownImages.IsRemote(path)) throw new ImageSourceException("网络图片未加载");
         if (string.IsNullOrWhiteSpace(path)) throw new ImageSourceException("图片路径为空");
         if (!Path.IsPathFullyQualified(path))
@@ -752,6 +754,23 @@ internal sealed class MarkdownImageView : Grid
     }
 
     internal bool LoadingStarted { get; private set; }
+    internal bool IsReady => finished && image.Source is BitmapSource;
+    internal bool IsFailed => finished && image.Source is null;
+
+    public void Retry()
+    {
+        loading?.Cancel();
+        MarkdownImageScheduler.Unregister(this, host);
+        loading = null;
+        LoadingStarted = false;
+        finished = false;
+        image.Source = null;
+        image.Visibility = Visibility.Collapsed;
+        status.Text = "图片加载中：" + (reference.Alt.Length > 160 ? reference.Alt[..160] + "…" : reference.Alt);
+        status.Visibility = Visibility.Visible;
+        InvalidateMeasure();
+        OnLoaded(this, new RoutedEventArgs(LoadedEvent));
+    }
 
     private void OnLoaded(object sender, RoutedEventArgs args)
     {
@@ -791,15 +810,18 @@ internal sealed class MarkdownImageView : Grid
                     image.Visibility = Visibility.Visible;
                     status.Visibility = Visibility.Collapsed;
                 }
-                else status.Text = "图片加载失败：" + result.Error;
+                else status.Text = "图片加载失败：" + result.Error + "  · 点击重试";
                 InvalidateMeasure();
             });
         }
         catch (OperationCanceledException) { }
         finally
         {
-            if (ReferenceEquals(loading, request)) loading = null;
-            if (request.IsCancellationRequested && !finished) LoadingStarted = false;
+            if (ReferenceEquals(loading, request))
+            {
+                loading = null;
+                if (request.IsCancellationRequested && !finished) LoadingStarted = false;
+            }
         }
     }
 
