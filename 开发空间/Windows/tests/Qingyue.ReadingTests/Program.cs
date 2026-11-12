@@ -55,7 +55,7 @@ internal static class Program
                 Check(!PreviewLimits.CanRender(unfinished, TextKind.Markdown), "大量未闭合图片仍按正文降级");
                 Check(scanTime.Elapsed < TimeSpan.FromSeconds(2), "未闭合图片扫描保持线性响应");
                 string path = Path.Combine(root, "默认阅读 中文.md");
-                File.WriteAllText(path, "# 阅读标题\n\n正文包含 **中文** 与第二处中文。\n\n| 参数 | 说明 |\n| --- | --- |\n| key | 值 |\n\n- 列表\n");
+                File.WriteAllText(path, "# 阅读标题\n\n## 二级标题\n\n正文包含 **中文** 与第二处中文。\n\n| 参数 | 说明 |\n| --- | --- |\n| key | 值 |\n\n- 列表\n");
                 window = new MainWindow(Path.Combine(root, "profile"), restoreSession: false);
                 window.Show();
                 await window.InitializeAsync();
@@ -67,6 +67,10 @@ internal static class Program
                 Check(ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.Preview), "默认全宽预览没有分屏");
                 Check(markdown.Preview.Document.Blocks.OfType<Table>().Any(), "全宽预览保留真实表格");
                 Check(markdown.Preview.Document.Blocks.OfType<System.Windows.Documents.List>().Any(), "全宽预览保留列表层次");
+                var outline = (ListBox)window.FindName("OutlineList");
+                Check(outline.Items.Count == 2 && outline.Items[0] is MarkdownOutlineEntry &&
+                    outline.Items[1] is MarkdownOutlineEntry { Level: 2 },
+                    "Markdown目录使用保留层级的目录项");
                 for (int round = 1; round <= 3; round++)
                 {
                     ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -135,6 +139,7 @@ internal static class Program
                 await Until(() => ((TextBlock)window.FindName("SearchCount")).Text.Contains(" / "));
                 Check(markdown.Preview.Selection.Text == "中文", "输入搜索后自动高亮匹配");
                 Check(query.IsKeyboardFocusWithin, "自动匹配不抢搜索输入焦点");
+                Check(HasSearchHighlightAdorner(markdown.Preview), "搜索结果全部绘制为可见高亮");
                 Check(!CopyData(query, query.Text).GetDataPresent(DataFormats.Html, false),
                     "搜索输入框复制不进入Markdown富文本转换");
                 await Idle(window);
@@ -143,6 +148,10 @@ internal static class Program
                 await Until(() => markdown.Preview.Selection.Text == "第二");
                 await Idle(window);
                 Check(query.IsKeyboardFocusWithin && HasSelectionDrawing(window), "连续查询仍实际高亮并保留搜索输入焦点");
+                query.Text = "";
+                await Until(() => ((TextBlock)window.FindName("SearchCount")).Text == "输入查找内容");
+                await Idle(window);
+                Check(!HasSearchHighlightAdorner(markdown.Preview), "清除搜索后移除全部匹配高亮");
                 query.Text = "中文";
                 await Until(() => markdown.Preview.Selection.Text == "中文");
                 var readingDocument = markdown.Preview.Document;
@@ -258,6 +267,18 @@ internal static class Program
             return true;
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
             if (VisualTreeHelper.GetChild(root, i) is Visual child && HasSelectionDrawing(child))
+                return true;
+        return false;
+    }
+
+    private static bool HasSearchHighlightAdorner(Visual root)
+    {
+        if (root is UIElement element && AdornerLayer.GetAdornerLayer(element)?.GetAdorners(element) is { Length: > 0 } adorners &&
+            adorners.Any(adorner => adorner.GetType().Name == "SearchHighlightAdorner"))
+            return true;
+        if (root.GetType().Name == "SearchHighlightAdorner") return true;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            if (VisualTreeHelper.GetChild(root, i) is Visual child && HasSearchHighlightAdorner(child))
                 return true;
         return false;
     }

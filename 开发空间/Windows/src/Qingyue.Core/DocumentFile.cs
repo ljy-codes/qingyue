@@ -204,9 +204,10 @@ public sealed class DocumentFile
 
     // Must run on the document's owning thread. The replacement was safely opened on
     // a worker; transfer its raw mixed-ending bytes as well as its digest/BOM baseline.
-    internal bool TryAcceptExternalVersion(DocumentSnapshot expected, long version, DocumentFile replacement)
+    internal bool TryAcceptExternalVersion(DocumentSnapshot expected, long version, DocumentFile replacement,
+        bool discardLocalChanges = false)
     {
-        if (ChangeVersion != version || CaptureSnapshot() != expected || IsDirty || !_wasSaved
+        if (ChangeVersion != version || CaptureSnapshot() != expected || (!discardLocalChanges && IsDirty) || !_wasSaved
             || Path is null || replacement.Path is null || !SamePath(Path, replacement.Path)
             || !replacement._wasSaved || replacement.IsDirty) return false;
         _text = replacement._text;

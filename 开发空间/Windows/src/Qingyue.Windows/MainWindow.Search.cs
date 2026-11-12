@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using Qingyue.Core;
 
@@ -13,6 +14,8 @@ public partial class MainWindow
     private string matchedText = "";
     private int matchIndex = -1;
     private long completedGeneration = -1;
+    private SearchHighlightAdorner? searchHighlightAdorner;
+    private FrameworkElement? searchHighlightTarget;
 
     private void TrackTextCommandTarget(object sender, KeyboardFocusChangedEventArgs e)
     {
@@ -31,6 +34,7 @@ public partial class MainWindow
 
     private void ShowSearch(bool replace)
     {
+        ClearSearchHighlights();
         RememberSearchOrigin();
         if (CurrentTab is { } current) ExitStructureForEditing(current);
         if (replace && CurrentTab?.IsReading == true) ToggleReading();
@@ -53,6 +57,7 @@ public partial class MainWindow
     {
         long generation = ++searchGeneration;
         matches = []; matchIndex = -1; completedGeneration = -1;
+        ClearSearchHighlights();
         if (SearchPanel is null || SearchPanel.Visibility != Visibility.Visible || CurrentTab is not { } tab) return;
         if (SearchQuery.Text.Length == 0) { SearchCount.Text = "输入查找内容"; return; }
         string query = SearchQuery.Text;
@@ -81,6 +86,7 @@ public partial class MainWindow
                 matchIndex = Enumerable.Range(0, result.Count).FirstOrDefault(i => result[i].Start >= caret, 0);
                 SelectMatch(tab, result[matchIndex], focus: false);
             }
+            UpdateSearchHighlights(tab, result, reading);
         }
         catch (Exception ex)
         {
@@ -102,6 +108,7 @@ public partial class MainWindow
         }
         else matchIndex = (matchIndex + delta + matches.Count) % matches.Count;
         SelectMatch(tab, matches[matchIndex]);
+        UpdateSearchHighlights(tab, matches, tab.IsReading && tab.Rendered is not null);
         SearchCount.Text = $"{matchIndex + 1:N0} / {matches.Count:N0}";
     }
 
@@ -150,5 +157,52 @@ public partial class MainWindow
         tab.Editor.BeginChange();
         try { tab.Editor.SelectAll(); tab.Editor.SelectedText = replacement; }
         finally { tab.Editor.EndChange(); }
+    }
+
+    private void UpdateSearchHighlights(EditorTab tab, IReadOnlyList<SearchMatch> result, bool reading)
+    {
+        if (result.Count == 0 || CurrentTab != tab)
+        {
+            ClearSearchHighlights();
+            return;
+        }
+        FrameworkElement target = reading && tab.Rendered is not null ? tab.Preview : tab.Editor;
+        if (!target.IsLoaded)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (CurrentTab == tab && completedGeneration == searchGeneration)
+                    UpdateSearchHighlights(tab, result, reading);
+            }, System.Windows.Threading.DispatcherPriority.Loaded);
+            return;
+        }
+        if (!ReferenceEquals(searchHighlightTarget, target))
+        {
+            ClearSearchHighlights();
+            var layer = AdornerLayer.GetAdornerLayer(target);
+            if (layer is null) return;
+            searchHighlightTarget = target;
+            searchHighlightAdorner = new SearchHighlightAdorner(target, match =>
+                reading && tab.Rendered is not null
+                    ? SearchHighlightAdorner.RichTextBoxRects(tab.Preview,
+                        offset => tab.Rendered.PointerAt(offset), match.Start, match.Length)
+                    : SearchHighlightAdorner.TextBoxRects(tab.Editor,
+                        EditorOffset(tab, match.Start),
+                        EditorOffset(tab, match.Start + match.Length) - EditorOffset(tab, match.Start)));
+            layer.Add(searchHighlightAdorner);
+        }
+        searchHighlightAdorner?.Update(result);
+    }
+
+    private void ClearSearchHighlights()
+    {
+        if (searchHighlightAdorner is not null && searchHighlightTarget is not null)
+        {
+            var layer = AdornerLayer.GetAdornerLayer(searchHighlightTarget);
+            layer?.Remove(searchHighlightAdorner);
+            searchHighlightAdorner.Detach();
+        }
+        searchHighlightAdorner = null;
+        searchHighlightTarget = null;
     }
 }

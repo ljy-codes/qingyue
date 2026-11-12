@@ -132,6 +132,9 @@ public partial class MainWindow
                 case "copyTable": CopyReadingTable(); break;
                 case "exportHtml": await ShareReadingWithProgressAsync(true); break;
                 case "drafts": await ShowDraftSettingsAsync(); break;
+                case "externalAccept": await AcceptExternalVersionAsync(); break;
+                case "externalKeep": await KeepExternalEditAsync(); break;
+                case "externalRetry": RetryExternalRefresh(); break;
                 case "help":
                     Modal(() => Dialogs.CreateHelp(this, false).ShowDialog());
                     break;

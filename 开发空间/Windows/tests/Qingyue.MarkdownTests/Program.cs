@@ -50,6 +50,8 @@ internal static class Program
             ("ordered marker numeric limits", OrderedMarkerLimits),
             ("successive incomplete edits remain renderable", EditingStates),
             ("parser failures show raw text and recover", ParserFailureRecovery),
+            ("markdown outline preserves heading levels and source ranges", Outline),
+            ("text diff marks changed lines and keeps line numbers", Diff),
             ("pasted Markdown shows a sequence diagram", MermaidChecks.Preview),
             ("Mermaid fences, literal code and failure recovery", MermaidChecks.FencesAndFallback),
             ("Mermaid reader preserves search and source mapping", MermaidChecks.ReadingMapping),
@@ -355,6 +357,38 @@ internal static class Program
         try { preview.Update(raw, _ => throw new OutOfMemoryException("simulated; no allocation")); }
         catch (OutOfMemoryException) { propagated = true; }
         Check(propagated && ReferenceEquals(before, preview.Document), "fatal runtime failures are not disguised as content errors");
+    }
+
+    private static void Outline()
+    {
+        const string source = "# 一级\n\n正文\n\n## 二级\n\n### 三级";
+        var model = ReadingModel.Build(source, TextKind.Markdown);
+        var outline = MarkdownOutline.Build(source, model);
+        Equal(3, outline.Count, "outline count");
+        Equal(1, outline[0].Level, "outline H1 level");
+        Equal(2, outline[1].Level, "outline H2 level");
+        Equal(3, outline[2].Level, "outline H3 level");
+        Equal("# 一级\n".Length, outline[0].SourceLength, "outline source range");
+        Equal("二级", outline[1].Title, "outline visible title");
+        Check(outline[2].DisplayStart > outline[1].DisplayStart, "outline display order");
+        Check(MarkdownOutline.Build("正文", ReadingModel.Build("正文", TextKind.Markdown)).Count == 0,
+            "plain markdown has no outline");
+    }
+
+    private static void Diff()
+    {
+        var diff = TextDiff.Build("a\nsame\nold", "a\nsame\nnew\nadd");
+        Check(diff.Any(line => line.Kind == TextDiffLineKind.Equal && line.Text == "same"),
+            "diff equal line");
+        Check(diff.Count(line => line.Kind == TextDiffLineKind.Changed) == 2,
+            "diff changed pair");
+        Check(diff.Any(line => line.Kind == TextDiffLineKind.Added && line.Text == "add"),
+            "diff added line");
+        Check(diff.All(line => line.LeftLine >= 0 && line.RightLine >= 0), "diff line numbers");
+        bool rejected = false;
+        try { _ = TextDiff.Build(new string('x', TextDiff.MaximumCharacters + 1), ""); }
+        catch (ArgumentException) { rejected = true; }
+        Check(rejected, "diff character budget");
     }
 
     private static void Screenshots(string directory)

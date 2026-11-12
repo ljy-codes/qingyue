@@ -187,7 +187,7 @@ public partial class MainWindow : Window
         if (tab.Reading is not null)
         {
             outlineGeneration++;
-            OutlineList.ItemsSource = tab.Reading.Headings;
+            OutlineList.ItemsSource = BuildOutlineItems(tab, tab.Reading);
         }
         else
         {
@@ -213,7 +213,7 @@ public partial class MainWindow : Window
             var model = await Task.Run(() => ReadingModel.Build(text, kind));
             if (generation != outlineGeneration || CurrentTab != tab || tab.File.Text != text || tab.Kind != kind || tab.IsReading) return;
             tab.Reading = model;
-            OutlineList.ItemsSource = model.Headings;
+            OutlineList.ItemsSource = BuildOutlineItems(tab, model);
         }
         catch (Exception ex)
         {

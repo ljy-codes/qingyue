@@ -216,9 +216,12 @@ public partial class MainWindow
     {
         if (CurrentTab != tab || tab.Reading is null || tab.ViewportAnchor is not { } anchor) return;
         var heading = tab.Reading.Headings.LastOrDefault(h => h.SourceStart <= anchor);
-        if (ReferenceEquals(OutlineList.SelectedItem, heading)) return;
+        var item = OutlineList.Items.Cast<object>().FirstOrDefault(candidate =>
+            TryGetOutlineLocation(candidate, out int sourceStart, out _) &&
+            heading is not null && sourceStart == heading.SourceStart);
+        if (ReferenceEquals(OutlineList.SelectedItem, item)) return;
         followingOutline = true;
-        try { OutlineList.SelectedItem = heading; }
+        try { OutlineList.SelectedItem = item; }
         finally { followingOutline = false; }
     }
 
@@ -234,6 +237,7 @@ public partial class MainWindow
     private void HideSearch()
     {
         searchGeneration++;
+        ClearSearchHighlights();
         SearchPanel.Visibility = Visibility.Collapsed;
         if (searchOriginTab is { } tab && CurrentTab == tab && tab.IsReading)
             RestoreReadingViewport(tab, searchOriginAnchor, searchOriginDelta);

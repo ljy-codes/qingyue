@@ -165,3 +165,15 @@ public sealed class DocumentLabelConverter : IValueConverter
 
     private static string KindLabel(TextKind kind) => LanguageCatalog.DisplayName(kind);
 }
+
+public sealed class OutlineIndentConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        int level = value is int number ? Math.Clamp(number, 1, 6) : 1;
+        return new Thickness((level - 1) * 14, 0, 0, 0);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
+}

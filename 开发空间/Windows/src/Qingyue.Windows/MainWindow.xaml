@@ -7,6 +7,7 @@
         GotKeyboardFocus="TrackTextCommandTarget">
   <Window.Resources>
     <local:DocumentLabelConverter x:Key="DocumentLabel"/>
+    <local:OutlineIndentConverter x:Key="OutlineIndent"/>
     <DataTemplate x:Key="DocumentLabelTemplate">
       <TextBlock Text="{Binding Converter={StaticResource DocumentLabel}}"/>
     </DataTemplate>
@@ -270,7 +271,14 @@
               </ListBox>
             </TabItem>
             <TabItem Header="文档目录">
-              <ListBox x:Name="OutlineList" Margin="0,12,0,0" SelectionChanged="OutlineSelected" DisplayMemberPath="Title"/>
+              <ListBox x:Name="OutlineList" Margin="0,12,0,0" SelectionChanged="OutlineSelected">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Title}" Margin="{Binding Level, Converter={StaticResource OutlineIndent}}"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
             </TabItem>
           </TabControl>
           <StackPanel Grid.Row="2" Margin="6,18,0,0">
@@ -301,16 +309,40 @@
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
           </WrapPanel>
         </Border>
-        <Border x:Name="OperationPanel" Grid.Row="1" Visibility="Collapsed" Padding="14,8" Background="{DynamicResource PanelBrush}">
-          <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-              <TextBlock x:Name="OperationLabel" Text="正在读取文件" FontSize="12" Margin="0,0,0,6"/>
-              <ProgressBar x:Name="OperationProgress" Height="4" IsIndeterminate="True" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="文档加载进度"/>
-            </StackPanel>
-            <Button Grid.Column="1" Content="取消" Tag="cancelLoading" Click="MenuAction" AutomationProperties.Name="取消加载"/>
-          </Grid>
-        </Border>
+        <StackPanel Grid.Row="1">
+          <Border x:Name="OperationPanel" Visibility="Collapsed" Padding="14,8" Background="{DynamicResource PanelBrush}">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                <TextBlock x:Name="OperationLabel" Text="正在读取文件" FontSize="12" Margin="0,0,0,6"/>
+                <ProgressBar x:Name="OperationProgress" Height="4" IsIndeterminate="True" Foreground="{DynamicResource AccentBrush}" AutomationProperties.Name="文档加载进度"/>
+              </StackPanel>
+              <Button Grid.Column="1" Content="取消" Tag="cancelLoading" Click="MenuAction" AutomationProperties.Name="取消加载"/>
+            </Grid>
+          </Border>
+          <Border x:Name="ExternalChangePanel" Visibility="Collapsed" Padding="14,8"
+                  Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
+                  BorderThickness="0,0,0,1">
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center" Margin="0,0,18,0">
+                <TextBlock x:Name="ExternalChangeLabel" Text="检测到磁盘文件发生变化" FontSize="12"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock Text="轻阅默认保留当前内容，不会自动覆盖未保存编辑。"
+                           FontSize="10" Foreground="{DynamicResource MutedBrush}" Margin="0,3,0,0"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="ExternalAcceptButton" Content="接纳磁盘版本" Tag="externalAccept" Click="MenuAction"
+                        Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"
+                        ToolTip="放弃当前未保存编辑并读取磁盘版本"/>
+                <Button x:Name="ExternalKeepButton" Content="保留当前编辑" Tag="externalKeep" Click="MenuAction" Margin="0,0,8,0"
+                        ToolTip="保留当前正文，稍后可再次检查"/>
+                <Button x:Name="ExternalRetryButton" Content="重新检查" Tag="externalRetry" Click="MenuAction"
+                        ToolTip="立即重新检查磁盘文件"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+        </StackPanel>
         <ContentControl x:Name="DocumentHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
       </Grid>
     </Grid>

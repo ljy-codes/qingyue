@@ -12,13 +12,28 @@ internal static partial class Program
 {
     private static partial async Task RunAdditionalTests(MainWindow window, string root)
     {
+        CoreReadingModels();
         await CoreSafety(root);
         await EncodingSafety(root);
         await ViewState(window, root);
         await ReadingAnchorFollowsInsertedPrefix(window, root);
         await SearchFocusDuringRefresh(window, root);
         await NoticesAndRetry(window, root);
+        await ExternalActionButtons(window, root);
         await ActivationStorm(window, root);
+    }
+
+    private static void CoreReadingModels()
+    {
+        const string markdown = "# A\n\n## B\n\n正文";
+        var model = ReadingModel.Build(markdown, TextKind.Markdown);
+        var outline = MarkdownOutline.Build(markdown, model);
+        Check(outline.Count == 2 && outline[1].Level == 2 && outline[1].Title == "B",
+            "Markdown 目录模型保留层级");
+        var diff = TextDiff.Build("same\nold", "same\nnew");
+        Check(diff.Any(line => line.Kind == TextDiffLineKind.Changed && line.Text == "old") &&
+            diff.Any(line => line.Kind == TextDiffLineKind.Changed && line.Text == "new"),
+            "文本差异模型识别修改行");
     }
 
     private static async Task CoreSafety(string root)
@@ -35,6 +50,12 @@ internal static partial class Program
             "相同大小时间戳仍按摘要发现外部变化");
         Check(file.Id == id && file.Text == "external" && !file.IsDirty && !file.DiskChanged(),
             "原地接纳保留ID并更新正文与磁盘基线");
+        file.Text = "local edit";
+        File.WriteAllText(path, "disk choice");
+        var forced = await new ExternalFileRefresh(file).ReadAsync(includeLocalChanges: true);
+        Check(forced.Status == ExternalRefreshStatus.Changed && forced.TryApply(discardLocalChanges: true)
+            && file.Text == "disk choice" && !file.IsDirty,
+            "明确接受磁盘版本可以丢弃本地未保存编辑");
         file.Text = "local edit";
         file.Save();
         Check(File.ReadAllText(path) == "local edit", "刷新后正常保存使用新基线");
@@ -218,7 +239,7 @@ internal static partial class Program
         Check(tab.ReturnAnchor == returnAnchor && tab.ReturnDelta == returnDelta,
             "目录重绑不会被当作用户导航记录返回位置");
         outline.SelectedItem = null;
-        outline.SelectedItem = tab.Reading.Headings[0];
+        outline.SelectedItem = outline.Items[0];
         Check(tab.Rendered.OffsetAt(tab.Preview.Selection.Start) == 0
             && tab.Preview.Selection.IsEmpty && tab.ReturnAnchor is not null,
             "外部刷新结束后用户仍可通过目录正常导航");
@@ -342,6 +363,51 @@ internal static partial class Program
         File.WriteAllText(path, "back");
         window.QueueExternalRefresh(tab);
         await WaitFor(() => tab.File.Text == "back", "失败后的下次切换或激活可重试");
+    }
+
+    private static async Task ExternalActionButtons(MainWindow window, string root)
+    {
+        string path = Path.Combine(root, "external-actions.txt");
+        File.WriteAllText(path, "base");
+        await window.OpenPathsAsync([path]);
+        var tab = window.CurrentTab!;
+        tab.Editor.AppendText(" local");
+        File.WriteAllText(path, "disk one");
+        window.QueueExternalRefresh(tab);
+
+        var panel = window.FindName("ExternalChangePanel") as FrameworkElement
+            ?? throw new InvalidOperationException("找不到外部更新面板");
+        var keep = window.FindName("ExternalKeepButton") as Button
+            ?? throw new InvalidOperationException("找不到保留编辑按钮");
+        var accept = window.FindName("ExternalAcceptButton") as Button
+            ?? throw new InvalidOperationException("找不到接纳磁盘版本按钮");
+        var retry = window.FindName("ExternalRetryButton") as Button
+            ?? throw new InvalidOperationException("找不到重新检查按钮");
+        Check(true, "外部更新面板提供保留、接纳和重试操作");
+        await WaitFor(() => panel.Visibility == Visibility.Visible, "未保存冲突显示外部更新面板");
+
+        keep.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitFor(() => panel.Visibility == Visibility.Collapsed, "保留当前编辑关闭外部更新面板");
+        Check(tab.File.Text == "base local" && tab.File.IsDirty,
+            "保留当前编辑不覆盖本地正文");
+
+        File.WriteAllText(path, "disk two");
+        window.QueueExternalRefresh(tab);
+        await WaitFor(() => panel.Visibility == Visibility.Visible, "磁盘再次变化重新显示外部更新面板");
+        accept.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitFor(() => tab.File.Text == "disk two" && !tab.File.IsDirty,
+            "接纳磁盘版本替换本地未保存编辑");
+        Check(panel.Visibility == Visibility.Collapsed, "接纳磁盘版本后关闭外部更新面板");
+
+        File.Delete(path);
+        window.QueueExternalRefresh(tab);
+        await WaitFor(() => panel.Visibility == Visibility.Visible, "磁盘不可用显示可重试面板");
+        retry.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitFor(() => panel.Visibility == Visibility.Visible, "重新检查失败后继续保留面板");
+        File.WriteAllText(path, "disk three");
+        retry.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitFor(() => tab.File.Text == "disk three" && !tab.File.IsDirty,
+            "重新检查成功后接纳最新磁盘正文");
     }
 
     private static async Task ActivationStorm(MainWindow window, string root)

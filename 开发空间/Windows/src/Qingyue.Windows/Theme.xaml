@@ -18,6 +18,8 @@
   <SolidColorBrush x:Key="SyntaxCommentBrush" Color="#C3C9BF"/>
   <SolidColorBrush x:Key="UnsavedBrush" Color="#FFC078"/>
   <SolidColorBrush x:Key="SavedBrush" Color="#7BDEB3"/>
+  <SolidColorBrush x:Key="SearchHighlightBrush" Color="#80F2C14D"/>
+  <SolidColorBrush x:Key="SearchHighlightBorderBrush" Color="#D5E1A128"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#23262B"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#E8E2D8"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#23262B"/>

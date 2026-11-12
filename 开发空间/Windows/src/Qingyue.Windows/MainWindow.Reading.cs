@@ -137,11 +137,12 @@ public partial class MainWindow
     private void OutlineSelected(object sender, SelectionChangedEventArgs e)
     {
         if (followingOutline) return;
-        if (OutlineList.SelectedItem is not ReadingHeading heading || CurrentTab is not { } tab) return;
+        if (!TryGetOutlineLocation(OutlineList.SelectedItem, out int sourceStart, out int displayStart)
+            || CurrentTab is not { } tab) return;
         RememberReadingPosition(tab);
         if (tab.IsReading && tab.Rendered is not null)
         {
-            var pointer = tab.Rendered.PointerAt(heading.DisplayStart);
+            var pointer = tab.Rendered.PointerAt(displayStart);
             tab.Preview.Selection.Select(pointer, pointer);
             tab.DispatcherBringIntoView(pointer);
             tab.Preview.Focus();
@@ -149,9 +150,32 @@ public partial class MainWindow
         else
         {
             ExitStructureForEditing(tab);
-            tab.Editor.CaretIndex = EditorOffset(tab, heading.SourceStart);
+            tab.Editor.CaretIndex = EditorOffset(tab, sourceStart);
             ScrollToCaret(tab);
             tab.Editor.Focus();
+        }
+    }
+
+    private static IReadOnlyList<object> BuildOutlineItems(EditorTab tab, ReadingModel model) =>
+        tab.Kind == TextKind.Markdown
+            ? MarkdownOutline.Build(tab.File.Text, model).Cast<object>().ToArray()
+            : model.Headings.Cast<object>().ToArray();
+
+    private static bool TryGetOutlineLocation(object? item, out int sourceStart, out int displayStart)
+    {
+        switch (item)
+        {
+            case MarkdownOutlineEntry markdown:
+                sourceStart = markdown.SourceStart;
+                displayStart = markdown.DisplayStart;
+                return true;
+            case ReadingHeading heading:
+                sourceStart = heading.SourceStart;
+                displayStart = heading.DisplayStart;
+                return true;
+            default:
+                sourceStart = displayStart = 0;
+                return false;
         }
     }
 
@@ -195,10 +219,11 @@ public partial class MainWindow
     {
         settings.Dark = dark;
         var names = new[] { "WindowBrush", "PanelBrush", "EditorBrush", "ReadingBrush", "ReadingPanelBrush",
-            "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush" };
+            "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush",
+            "SearchHighlightBrush", "SearchHighlightBorderBrush" };
         var colors = dark
-            ? new[] { "#191B1F", "#23262B", "#2A2825", "#2A2825", "#23262B", "#E8E2D8", "#BEB8AE", "#4B4D52", "#2F6FDB", "#355A91", "#34383F" }
-            : new[] { "#F6F4EF", "#EFEAE2", "#FFFDF8", "#FFFDF8", "#EFEAE2", "#262A2F", "#6B6A66", "#D8D1C5", "#2F6FDB", "#D7E5FA", "#F3EDE4" };
+            ? new[] { "#191B1F", "#23262B", "#2A2825", "#2A2825", "#23262B", "#E8E2D8", "#BEB8AE", "#4B4D52", "#2F6FDB", "#355A91", "#34383F", "#80F2C14D", "#D5E1A128" }
+            : new[] { "#F6F4EF", "#EFEAE2", "#FFFDF8", "#FFFDF8", "#EFEAE2", "#262A2F", "#6B6A66", "#D8D1C5", "#2F6FDB", "#D7E5FA", "#F3EDE4", "#80F2C14D", "#D5E1A128" };
         for (int i = 0; i < names.Length; i++)
             Resources[names[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[i]));
         Resources[SystemColors.MenuBrushKey] = Resources["PanelBrush"];

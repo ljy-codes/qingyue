@@ -63,11 +63,14 @@ public partial class MainWindow
             externalPendingRead = null;
             externalRefreshTimer.Stop();
             externalRefreshCancellation?.Cancel();
+            HideExternalChangePanel();
             return;
         }
         var state = externalRefreshStates.GetOrCreateValue(tab);
         if (state.LastRead?.IsCurrent == true && state.Notice is not null)
             StatusText.Text = state.Notice;
+        if (state.RequiresAction) ShowExternalChangePanel(state.Notice);
+        else HideExternalChangePanel();
         if (externalPendingTab == tab && externalPendingRead?.IsCurrent == true) return;
 
         bool sameRunning = externalRefreshRunning && externalRunningTab == tab && externalRunningRead?.IsCurrent == true;
@@ -118,7 +121,7 @@ public partial class MainWindow
         externalRefreshRunning = true;
         try
         {
-            var result = await read.ReadAsync(cancellation.Token);
+            var result = await read.ReadAsync(cancellation.Token, state.SuppressConflictNotice);
             if (externalChangesClosed || approvedShutdown || exitInProgress || cancellation.IsCancellationRequested
                 || generation != externalRefreshGeneration || CurrentTab != tab || !tabs.Contains(tab)) return;
             if (!read.IsCurrent || modalDepth > 0)
@@ -127,6 +130,20 @@ public partial class MainWindow
                 return;
             }
             state.LastRead = read;
+            if (state.SuppressConflictNotice && result.Status == ExternalRefreshStatus.Changed
+                && string.Equals(result.Text, state.SuppressedDiskText, StringComparison.Ordinal))
+            {
+                state.Notice ??= "已保留当前编辑；磁盘版本未再次变化。";
+                state.RequiresAction = false;
+                HideExternalChangePanel();
+                StatusText.Text = state.Notice;
+                return;
+            }
+            if (state.SuppressConflictNotice)
+            {
+                state.SuppressConflictNotice = false;
+                state.SuppressedDiskText = null;
+            }
             state.Notice = result.Status switch
             {
                 ExternalRefreshStatus.Conflict => "文件已被外部修改或删除，已保留当前编辑；保存时将检查冲突，可另存为。",
@@ -136,12 +153,33 @@ public partial class MainWindow
             };
             if (result.Status == ExternalRefreshStatus.Changed)
             {
+                if (tab.File.IsDirty)
+                {
+                    state.Notice = "检测到新的磁盘版本，当前未保存编辑已保留。";
+                    state.RequiresAction = true;
+                    ShowExternalChangePanel(state.Notice);
+                    StatusText.Text = state.Notice;
+                    return;
+                }
                 await ApplyExternalRefresh(tab, result, cancellation.Token);
                 // Applying advances the document version; keep the notice associated
                 // with the new baseline instead of retaining an obsolete request.
                 state.LastRead = new ExternalFileRefresh(tab.File);
+                state.RequiresAction = false;
+                HideExternalChangePanel();
             }
-            else if (state.Notice is not null) StatusText.Text = state.Notice;
+            else if (state.Notice is not null)
+            {
+                state.RequiresAction = result.Status is ExternalRefreshStatus.Conflict or ExternalRefreshStatus.Unavailable;
+                if (state.RequiresAction) ShowExternalChangePanel(state.Notice);
+                else HideExternalChangePanel();
+                StatusText.Text = state.Notice;
+            }
+            else
+            {
+                state.RequiresAction = false;
+                HideExternalChangePanel();
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException)
@@ -160,8 +198,138 @@ public partial class MainWindow
         }
     }
 
+    private void ShowExternalChangePanel(string? notice)
+    {
+        if (CurrentTab?.File.Path is null)
+        {
+            HideExternalChangePanel();
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(notice))
+            ExternalChangeLabel.Text = notice;
+        ExternalChangePanel.Visibility = Visibility.Visible;
+    }
+
+    private void HideExternalChangePanel() =>
+        ExternalChangePanel.Visibility = Visibility.Collapsed;
+
+    private void CancelQueuedExternalRefresh()
+    {
+        externalRefreshGeneration++;
+        externalPendingTab = null;
+        externalPendingRead = null;
+        externalRefreshTimer.Stop();
+        externalRefreshCancellation?.Cancel();
+    }
+
+    private async Task AcceptExternalVersionAsync()
+    {
+        if (CurrentTab is not { } tab || tab.File.Path is null) return;
+        var state = externalRefreshStates.GetOrCreateValue(tab);
+        CancelQueuedExternalRefresh();
+        ExternalChangeLabel.Text = "正在读取磁盘版本…";
+        StatusText.Text = "正在读取磁盘版本，请稍候…";
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            var read = new ExternalFileRefresh(tab.File);
+            var result = await read.ReadAsync(cancellation.Token, includeLocalChanges: true);
+            if (externalChangesClosed || approvedShutdown || exitInProgress
+                || CurrentTab != tab || !tabs.Contains(tab) || !read.IsCurrent) return;
+            if (result.Status == ExternalRefreshStatus.Changed)
+            {
+                await ApplyExternalRefresh(tab, result, cancellation.Token, discardLocalChanges: true);
+                if (tab.File.IsDirty)
+                {
+                    state.RequiresAction = true;
+                    state.Notice = "接纳磁盘版本失败，当前编辑仍已保留。";
+                    ShowExternalChangePanel(state.Notice);
+                    StatusText.Text = state.Notice;
+                    return;
+                }
+                state.LastRead = new ExternalFileRefresh(tab.File);
+                state.Notice = "已接纳磁盘版本，当前未保存编辑已丢弃。";
+                state.RequiresAction = false;
+                state.SuppressConflictNotice = false;
+                state.SuppressedDiskText = null;
+                HideExternalChangePanel();
+                StatusText.Text = state.Notice;
+            }
+            else if (result.Status == ExternalRefreshStatus.Unavailable)
+            {
+                state.Notice = "磁盘版本仍无法读取，当前编辑已保留；可以稍后重新检查。"
+                    + (result.Error is null ? "" : " " + result.Error);
+                state.RequiresAction = true;
+                ShowExternalChangePanel(state.Notice);
+                StatusText.Text = state.Notice;
+            }
+            else
+            {
+                state.Notice = "磁盘版本没有新的可接纳内容，当前编辑已保留。";
+                state.RequiresAction = false;
+                HideExternalChangePanel();
+                StatusText.Text = state.Notice;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            state.Notice = "接纳磁盘版本失败，当前编辑已保留。 " + ex.Message;
+            state.RequiresAction = true;
+            ShowExternalChangePanel(state.Notice);
+            StatusText.Text = state.Notice;
+        }
+    }
+
+    private async Task KeepExternalEditAsync()
+    {
+        if (CurrentTab is not { } tab || tab.File.Path is null) return;
+        var state = externalRefreshStates.GetOrCreateValue(tab);
+        CancelQueuedExternalRefresh();
+        StatusText.Text = "正在记录当前磁盘版本…";
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            var read = new ExternalFileRefresh(tab.File);
+            var result = await read.ReadAsync(cancellation.Token, includeLocalChanges: true);
+            if (externalChangesClosed || approvedShutdown || exitInProgress
+                || CurrentTab != tab || !tabs.Contains(tab) || !read.IsCurrent) return;
+            state.LastRead = read;
+            state.SuppressConflictNotice = result.Status == ExternalRefreshStatus.Changed;
+            state.SuppressedDiskText = result.Text;
+            state.Notice = "已保留当前编辑；磁盘版本未写入当前文档，可随时重新检查。";
+            state.RequiresAction = false;
+            HideExternalChangePanel();
+            StatusText.Text = state.Notice;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            state.Notice = "已保留当前编辑，但记录磁盘版本失败。 " + ex.Message;
+            state.RequiresAction = false;
+            HideExternalChangePanel();
+            StatusText.Text = state.Notice;
+        }
+    }
+
+    private void RetryExternalRefresh()
+    {
+        if (CurrentTab is not { } tab || tab.File.Path is null) return;
+        var state = externalRefreshStates.GetOrCreateValue(tab);
+        CancelQueuedExternalRefresh();
+        state.LastRead = null;
+        state.Notice = null;
+        state.RequiresAction = false;
+        state.SuppressConflictNotice = false;
+        state.SuppressedDiskText = null;
+        state.NextCheckAt = 0;
+        HideExternalChangePanel();
+        StatusText.Text = "正在重新检查磁盘文件…";
+        QueueExternalRefresh(tab);
+    }
+
     private async Task ApplyExternalRefresh(EditorTab tab, ExternalRefreshResult result,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool discardLocalChanges = false)
     {
         string oldText = tab.File.Text;
         bool reading = tab.IsReading;
@@ -187,7 +355,7 @@ public partial class MainWindow
         string? oldMarkdownText = markdown is null
             ? null
             : new TextRange(markdown.Document.ContentStart, markdown.Document.ContentEnd).Text;
-        if (!result.TryApply()) return;
+        if (!result.TryApply(discardLocalChanges)) return;
         cancellationToken.ThrowIfCancellationRequested();
         string newText = tab.File.Text;
         anchor = TextAnchorMapper.Map(oldText, newText, anchor);
@@ -301,5 +469,8 @@ public partial class MainWindow
         public long NextCheckAt;
         public ExternalFileRefresh? LastRead;
         public string? Notice;
+        public bool RequiresAction;
+        public bool SuppressConflictNotice;
+        public string? SuppressedDiskText;
     }
 }
