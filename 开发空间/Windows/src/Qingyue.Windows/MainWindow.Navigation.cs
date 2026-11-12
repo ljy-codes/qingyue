@@ -39,16 +39,13 @@ public partial class MainWindow
         RefreshReadingProgress(tab);
     }
 
-    public void NavigateToBookmark(DocumentBookmark bookmark)
+    public async void NavigateToBookmark(DocumentBookmark bookmark)
     {
         var tab = tabs.FirstOrDefault(item => bookmarks.For(item.File).Any(saved => saved.Id == bookmark.Id));
         if (tab is null && bookmark.Path is { } path && File.Exists(path))
         {
-            Dispatcher.BeginInvoke(async () =>
-            {
-                await OpenPathsAsync([path]);
-                if (CurrentTab is { } opened) NavigateToBookmark(bookmark);
-            });
+            await OpenPathsAsync([path]);
+            if (CurrentTab is { } opened) NavigateToBookmark(bookmark);
             return;
         }
         if (tab is null) return;
@@ -56,7 +53,11 @@ public partial class MainWindow
         int anchor = Math.Clamp(bookmark.SourceAnchor, 0, tab.File.Text.Length);
         if (tab.Kind == TextKind.Markdown)
         {
-            if (!tab.IsReading) EnterReading(tab, anchor, focus: true);
+            if (!tab.IsReading)
+            {
+                await EnterReadingAsync(tab, anchor, focus: true);
+                if (!tab.IsReading) return;
+            }
             else RestoreReadingViewport(tab, anchor, tab.ViewportDelta);
         }
         else if (tab.IsReading)

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
@@ -553,6 +554,7 @@ internal sealed class MarkdownImageResult(BitmapSource? bitmap, string? error, A
 internal static class MarkdownImageLoader
 {
     private sealed class ImageSourceException(string message) : Exception(message);
+    private sealed record ImageInput(string? Path, byte[]? InlineBytes, MarkdownImageCacheKey CacheKey);
     internal const int MaximumBytes = 16 * 1024 * 1024;
     internal const long MaximumPixels = 32_000_000;
     private static readonly SemaphoreSlim DecodeSlots = new(2);
@@ -560,6 +562,24 @@ internal static class MarkdownImageLoader
     internal static async Task<MarkdownImageResult> LoadAsync(string target, string? sourcePath,
         MarkdownImageBudget budget, CancellationToken cancellation)
     {
+        ImageInput input;
+        try { input = await Task.Run(() => PrepareInput(target, sourcePath), cancellation).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (FileNotFoundException) { return new(null, "找不到图片文件"); }
+        catch (DirectoryNotFoundException) { return new(null, "找不到图片目录"); }
+        catch (ImageSourceException error) { return new(null, error.Message); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or SecurityException or
+            FormatException or ArgumentException or OverflowException)
+        { return new(null, "图片缺失、损坏或无法读取"); }
+
+        if (MarkdownImageCache.TryGet(input.CacheKey, out var cached))
+        {
+            if (!budget.Reserve(cached.SourceBytes, cached.DecodedPixels))
+                return new(null, "本篇图片总量超过上限（64 MiB / 4800 万解码像素）");
+            return new MarkdownImageResult(cached.Bitmap, null,
+                () => budget.Release(cached.SourceBytes, cached.DecodedPixels));
+        }
+
         await DecodeSlots.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
@@ -570,28 +590,16 @@ internal static class MarkdownImageLoader
                 try
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    byte[] bytes;
-                    if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    byte[] bytes = input.InlineBytes ?? await ReadFileAsync(input.Path!, cancellation);
+                    if (bytes.Length > MaximumBytes)
+                        return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                    if (input.Path is not null)
                     {
-                        const string header = "data:image/png;base64,";
-                        if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
-                            return new MarkdownImageResult(null, "仅支持 data:image/png;base64 内嵌图片");
-                        if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
-                            return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
-                        bytes = Convert.FromBase64String(target[header.Length..]);
-                    }
-                    else
-                    {
-                        string path = LocalPath(target, sourcePath);
-                        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
-                            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                        if (file.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
-                        bytes = new byte[checked((int)file.Length)];
-                        await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
-                        if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
+                        var info = new FileInfo(input.Path);
+                        if (!info.Exists || info.Length != input.CacheKey.SourceLength ||
+                            info.LastWriteTimeUtc.Ticks != input.CacheKey.LastWriteUtcTicks)
                             return new MarkdownImageResult(null, "图片读取期间发生变化，请刷新预览");
                     }
-                    if (bytes.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
                     cancellation.ThrowIfCancellationRequested();
                     using var stream = new MemoryStream(bytes, writable: false);
                     var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
@@ -621,6 +629,8 @@ internal static class MarkdownImageLoader
                         cancellation.ThrowIfCancellationRequested();
                         bitmap.Freeze();
                         success = true;
+                        MarkdownImageCache.Add(input.CacheKey,
+                            new MarkdownImageCacheEntry(bitmap, bytes.Length, pixels));
                         return new MarkdownImageResult(bitmap, null, () => budget.Release(bytes.Length, pixels));
                     }
                     finally { if (!success) budget.Release(bytes.Length, pixels); }
@@ -635,6 +645,41 @@ internal static class MarkdownImageLoader
             }, cancellation).ConfigureAwait(false);
         }
         finally { DecodeSlots.Release(); }
+    }
+
+    private static ImageInput PrepareInput(string target, string? sourcePath)
+    {
+        if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            const string header = "data:image/png;base64,";
+            if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
+                throw new ImageSourceException("仅支持 data:image/png;base64 内嵌图片");
+            if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
+                throw new ImageSourceException("图片超过 16 MiB 上限");
+            string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)));
+            return new ImageInput(null, Convert.FromBase64String(target[header.Length..]),
+                new MarkdownImageCacheKey("data:" + identity, target.Length, 0, 0, 0));
+        }
+
+        string path = LocalPath(target, sourcePath);
+        var info = new FileInfo(path);
+        if (!info.Exists) throw new FileNotFoundException(path);
+        if (info.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
+        return new ImageInput(path, null, new MarkdownImageCacheKey(path, info.Length,
+            info.LastWriteTimeUtc.Ticks, 0, 0));
+    }
+
+    private static async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellation)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (file.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
+        byte[] bytes = new byte[checked((int)file.Length)];
+        await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
+        if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
+            throw new ImageSourceException("图片读取期间发生变化，请刷新预览");
+        return bytes;
     }
 
     private static string LocalPath(string target, string? sourcePath)
@@ -699,12 +744,16 @@ internal sealed class MarkdownImageView : Grid
         Unloaded += (_, _) =>
         {
             loading?.Cancel();
+            if (!finished) LoadingStarted = false;
+            MarkdownImageScheduler.Unregister(this, host);
             if (host is not null) host.SizeChanged -= HostSizeChanged;
             host = null;
         };
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs args)
+    internal bool LoadingStarted { get; private set; }
+
+    private void OnLoaded(object sender, RoutedEventArgs args)
     {
         if (host is null)
         {
@@ -717,6 +766,13 @@ internal sealed class MarkdownImageView : Grid
         }
         InvalidateMeasure();
         if (finished || loading is { IsCancellationRequested: false }) return;
+        MarkdownImageScheduler.Register(this, host);
+    }
+
+    internal async void StartLoading()
+    {
+        if (finished || loading is { IsCancellationRequested: false } || LoadingStarted) return;
+        LoadingStarted = true;
         using var request = new CancellationTokenSource();
         loading = request;
         try
@@ -740,7 +796,11 @@ internal sealed class MarkdownImageView : Grid
             });
         }
         catch (OperationCanceledException) { }
-        finally { if (ReferenceEquals(loading, request)) loading = null; }
+        finally
+        {
+            if (ReferenceEquals(loading, request)) loading = null;
+            if (request.IsCancellationRequested && !finished) LoadingStarted = false;
+        }
     }
 
     private void HostSizeChanged(object sender, SizeChangedEventArgs args) => InvalidateMeasure();

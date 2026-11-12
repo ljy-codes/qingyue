@@ -20,6 +20,7 @@ namespace Qingyue.Windows;
 /// </summary>
 public sealed class MarkdownPreview : RichTextBox
 {
+    private const int SynchronousPreviewCharacterLimit = 32_000;
     private double readingWidth;
     private readonly string? sourcePath;
     private readonly bool includeDiagramSource;
@@ -30,6 +31,18 @@ public sealed class MarkdownPreview : RichTextBox
         : this(fontSize, readingWidth, sourcePath, includeDiagramSource)
     {
         Update(text);
+    }
+
+    /// <summary>
+    /// Small text-only Markdown is cheap enough to build before the split pane is
+    /// shown. Documents with images or more text stay on the cancellable async path
+    /// so opening a large file never blocks the dispatcher.
+    /// </summary>
+    internal static bool CanBuildSynchronously(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return text.Length <= SynchronousPreviewCharacterLimit &&
+            MarkdownImages.Extract(text).References.Count == 0;
     }
 
     private MarkdownPreview(double fontSize, double readingWidth, string? sourcePath, bool includeDiagramSource)

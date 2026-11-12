@@ -46,6 +46,7 @@ internal static partial class Program
         Directory.CreateDirectory(FixtureDirectory);
         File.WriteAllBytes(Path.Combine(FixtureDirectory, "本地 图 (1).png"), Png);
         Test("embedded PNG becomes a real frozen WPF bitmap", Embedded);
+        Test("repeated image loads reuse the frozen bitmap cache", CacheReuse);
         Test("code and escaped image syntax stay literal", LiteralCode);
         Test("mapped reading keeps one Run and UTF16 pointer roundtrips", Mapping);
         Test("relative absolute file URI Chinese spaces and URL escapes in both renderers", LocalPaths);
@@ -101,6 +102,18 @@ internal static partial class Program
         Check(bitmap.IsFrozen && bitmap.PixelWidth == 640 && bitmap.PixelHeight == 320,
             "位图必须解码、冻结并保留尺寸");
         Check(!Text(preview.Document).Contains("base64,"), "Base64 不应显示为正文");
+    }
+
+    private static void CacheReuse()
+    {
+        var first = Load(DataUri);
+        var firstBitmap = first.Bitmap;
+        first.Accept();
+        var second = Load(DataUri);
+        var secondBitmap = second.Bitmap;
+        second.Accept();
+        Check(firstBitmap is { IsFrozen: true } && ReferenceEquals(firstBitmap, secondBitmap),
+            "相同图片没有复用冻结位图");
     }
 
     private static void LiteralCode()

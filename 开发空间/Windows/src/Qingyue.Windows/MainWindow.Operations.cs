@@ -10,10 +10,13 @@ public partial class MainWindow
     private readonly SemaphoreSlim openGate = new(1);
     private LoadingOperation? loading;
     private readonly Queue<string> operationDiagnostics = new();
+    private CancellationTokenSource? markdownRenderCancellation;
+    private long markdownRenderGeneration;
 
     public void CancelLoading()
     {
         loading?.Cancellation.Cancel();
+        markdownRenderCancellation?.Cancel();
         CancelReadingSharing();
     }
 
@@ -48,11 +51,11 @@ public partial class MainWindow
     }
 
     private async Task<bool> EnterReadingAsync(EditorTab tab, int? sourceAnchor = null, bool focus = true,
-        LoadingOperation? existingOperation = null)
+        LoadingOperation? existingOperation = null, bool snapToBlockStart = true)
     {
         if (CanReuseReading(tab))
         {
-            EnterReading(tab, sourceAnchor, focus);
+            EnterReading(tab, sourceAnchor, focus, snapToBlockStart);
             return true;
         }
         using var ownedOperation = existingOperation is null ? BeginLoading("正在解析正文", tab) : null;
@@ -63,25 +66,27 @@ public partial class MainWindow
         TextKind kind = tab.Kind;
         var expected = new ExternalFileRefresh(tab.File);
         int anchor = Math.Clamp(sourceAnchor ?? CurrentSourceAnchor(tab), 0, text.Length);
+        var request = BeginMarkdownRenderRequest(tab, text, path, kind, operation.Token);
         try
         {
             operation.Stage("正在解析正文");
-            var model = await Task.Run(() => ReadingModel.Build(text, kind), operation.Token).WaitAsync(operation.Token);
-            operation.Token.ThrowIfCancellationRequested();
-            anchor = SnapToReadingBlockStart(model, anchor);
+            var model = await Task.Run(() => ReadingModel.Build(request.Text, request.Kind), request.Token)
+                .WaitAsync(request.Token);
+            request.Token.ThrowIfCancellationRequested();
+            if (snapToBlockStart) anchor = SnapToReadingBlockStart(model, anchor);
             operation.Stage("正在排版阅读内容");
             // WPF objects are created on their owning dispatcher, in bounded batches.
             await Dispatcher.Yield(DispatcherPriority.Background);
             RenderedReading? rendered = null;
-            if (PreviewLimits.CanRender(text, kind))
-                rendered = kind == TextKind.Markdown
-                    ? await RenderedReading.MarkdownAsync(model, text, path, settings.FontSize + 1,
-                        settings.ReadingWidth, operation.Token)
+            if (PreviewLimits.CanRender(request.Text, request.Kind))
+                rendered = request.Kind == TextKind.Markdown
+                    ? await RenderedReading.MarkdownAsync(model, request.Text, request.SourcePath,
+                        request.FontSize, request.ReadingWidth, request.Token)
                     : new RenderedReading(model, sourcePath: path);
-            operation.Token.ThrowIfCancellationRequested();
-            if (!tabs.Contains(tab) || CurrentTab != tab || approvedShutdown || exitInProgress
-                || !expected.IsCurrent || tab.Kind != kind || tab.File.Path != path) return false;
-            PublishReading(tab, model, rendered, text, path, kind, anchor, focus);
+            request.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentMarkdownRenderRequest(request, expected)) return false;
+            PublishReading(tab, model, rendered, request.Text, request.SourcePath,
+                request.Kind, anchor, focus);
             operation.Stage("阅读已就绪");
             return true;
         }
@@ -89,6 +94,10 @@ public partial class MainWindow
         {
             if (CurrentTab == tab && !exitInProgress) StatusText.Text = "已取消预览，原文与编辑仍保留。";
             return false;
+        }
+        finally
+        {
+            EndMarkdownRenderRequest(request);
         }
     }
 
@@ -164,5 +173,67 @@ public partial class MainWindow
             }
             Cancellation.Dispose();
         }
+    }
+
+    private sealed class MarkdownRenderRequest : IDisposable
+    {
+        internal EditorTab Tab { get; }
+        internal string Text { get; }
+        internal string? SourcePath { get; }
+        internal TextKind Kind { get; }
+        internal double FontSize { get; }
+        internal double ReadingWidth { get; }
+        internal long Generation { get; }
+        internal CancellationTokenSource Cancellation { get; }
+        internal CancellationToken Token => Cancellation.Token;
+
+        internal MarkdownRenderRequest(EditorTab tab, string text, string? sourcePath, TextKind kind,
+            double fontSize, double readingWidth, long generation, CancellationTokenSource cancellation)
+        {
+            Tab = tab;
+            Text = text;
+            SourcePath = sourcePath;
+            Kind = kind;
+            FontSize = fontSize;
+            ReadingWidth = readingWidth;
+            Generation = generation;
+            Cancellation = cancellation;
+        }
+
+        public void Dispose() => Cancellation.Dispose();
+    }
+
+    private MarkdownRenderRequest BeginMarkdownRenderRequest(EditorTab tab, string text,
+        string? sourcePath, TextKind kind, CancellationToken operationToken)
+    {
+        markdownRenderCancellation?.Cancel();
+        markdownRenderCancellation?.Dispose();
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
+        markdownRenderCancellation = cancellation;
+        return new MarkdownRenderRequest(tab, text, sourcePath, kind, settings.FontSize + 1,
+            settings.ReadingWidth, ++markdownRenderGeneration, cancellation);
+    }
+
+    private bool IsCurrentMarkdownRenderRequest(MarkdownRenderRequest request, ExternalFileRefresh expected) =>
+        !request.Token.IsCancellationRequested
+        && tabs.Contains(request.Tab)
+        && CurrentTab == request.Tab
+        && ReferenceEquals(markdownRenderCancellation, request.Cancellation)
+        && request.Generation == markdownRenderGeneration
+        && request.Tab.Kind == request.Kind
+        && request.Tab.File.Text == request.Text
+        && request.Tab.File.Path == request.SourcePath
+        && expected.IsCurrent
+        && !approvedShutdown
+        && !exitInProgress;
+
+    private void EndMarkdownRenderRequest(MarkdownRenderRequest request)
+    {
+        if (ReferenceEquals(markdownRenderCancellation, request.Cancellation))
+        {
+            markdownRenderCancellation = null;
+            markdownRenderGeneration++;
+        }
+        request.Dispose();
     }
 }

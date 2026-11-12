@@ -58,6 +58,11 @@ public partial class MainWindow
         string query = SearchQuery.Text;
         string replacement = ReplacePanel.Visibility == Visibility.Visible ? ReplacementText.Text : "";
         bool reading = tab.IsReading && tab.Rendered is not null;
+        if (reading && tab.Reading is null)
+        {
+            SearchCount.Text = "正在准备阅读…";
+            return;
+        }
         string text = reading ? tab.Reading!.VisibleText : tab.File.Text;
         var options = new SearchOptions(CaseOption.IsChecked == true, RegexOption.IsChecked == true, WordOption.IsChecked == true);
         SearchCount.Text = "正在查找…";

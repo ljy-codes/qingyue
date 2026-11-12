@@ -207,15 +207,29 @@ public partial class MainWindow
         SelectTab(replacement);
     }
 
-    private void KindChanged(object sender, SelectionChangedEventArgs e)
+    private async void KindChanged(object sender, SelectionChangedEventArgs e)
     {
         if (updatingControls || CurrentTab is not { } tab || KindCombo.SelectedItem is not TextKind kind) return;
         int anchor = CurrentSourceAnchor(tab);
+        bool wasReading = tab.IsReading;
         tab.AutomaticKind = false;
         tab.Kind = kind;
         tab.Reading = null;
-        if (tab.IsReading) EnterReading(tab, anchor, snapToBlockStart: false);
-        RefreshCurrent(); SchedulePersist();
+        if (wasReading)
+        {
+            if (kind != TextKind.Markdown && tab.File.Text.Length <= 200_000 &&
+                PreviewLimits.CanRender(tab.File.Text, kind))
+            {
+                EnterReading(tab, anchor, focus: false, snapToBlockStart: false);
+            }
+            else
+            {
+                RefreshCurrent();
+                await EnterReadingAsync(tab, anchor, focus: false, snapToBlockStart: false);
+            }
+        }
+        if (CurrentTab == tab) RefreshCurrent();
+        SchedulePersist();
     }
 
     private void CodecChanged(object sender, SelectionChangedEventArgs e)

@@ -136,7 +136,7 @@ public partial class MainWindow
             };
             if (result.Status == ExternalRefreshStatus.Changed)
             {
-                ApplyExternalRefresh(tab, result);
+                await ApplyExternalRefresh(tab, result, cancellation.Token);
                 // Applying advances the document version; keep the notice associated
                 // with the new baseline instead of retaining an obsolete request.
                 state.LastRead = new ExternalFileRefresh(tab.File);
@@ -160,7 +160,8 @@ public partial class MainWindow
         }
     }
 
-    private void ApplyExternalRefresh(EditorTab tab, ExternalRefreshResult result)
+    private async Task ApplyExternalRefresh(EditorTab tab, ExternalRefreshResult result,
+        CancellationToken cancellationToken)
     {
         string oldText = tab.File.Text;
         bool reading = tab.IsReading;
@@ -187,6 +188,7 @@ public partial class MainWindow
             ? null
             : new TextRange(markdown.Document.ContentStart, markdown.Document.ContentEnd).Text;
         if (!result.TryApply()) return;
+        cancellationToken.ThrowIfCancellationRequested();
         string newText = tab.File.Text;
         anchor = TextAnchorMapper.Map(oldText, newText, anchor);
         viewportAnchor = TextAnchorMapper.Map(oldText, newText, viewportAnchor);
@@ -212,7 +214,8 @@ public partial class MainWindow
         tab.Editor.Select(start, Math.Max(0, end - start));
         if (reading)
         {
-            EnterReading(tab, tab.SourceAnchor, focus: false);
+            await EnterReadingAsync(tab, tab.SourceAnchor, focus: false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (tab.Rendered is not null && tab.Reading is not null)
                 tab.Preview.Selection.Select(tab.Rendered.PointerAt(ExternalReadingDisplayOffset(tab.Reading,
                         Math.Clamp(readingStart, 0, tab.File.Text.Length), readingDisplayStart)),
@@ -229,7 +232,7 @@ public partial class MainWindow
         if (markdown is not null && ReferenceEquals(markdown, markdownPreview) && markdownTab == tab)
         {
             markdownTimer.Stop();
-            UpdateMarkdownPreview(tab);
+            await EnsureMarkdownPreviewAsync(tab, tab.File.Text, cancellationToken);
             string newMarkdownText = new TextRange(markdown.Document.ContentStart, markdown.Document.ContentEnd).Text;
             int mappedStart = oldMarkdownText is null ? markdownStart
                 : TextAnchorMapper.Map(oldMarkdownText, newMarkdownText, markdownStart);
@@ -244,7 +247,7 @@ public partial class MainWindow
         int restoredReadingEnd = rendered?.OffsetAt(tab.Preview.Selection.End) ?? 0;
         // Run after EnterReading's Loaded/BringIntoView callback and text layout.
         // A later edit/save, mode change, tab switch or selection change wins.
-        Dispatcher.BeginInvoke(() =>
+        _ = Dispatcher.BeginInvoke(() =>
         {
             if (externalChangesClosed || approvedShutdown || exitInProgress || CurrentTab != tab
                 || !tabs.Contains(tab) || !accepted.IsCurrent || tab.IsReading != reading

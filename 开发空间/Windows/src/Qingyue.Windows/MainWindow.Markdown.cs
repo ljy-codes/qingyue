@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using System.Text.RegularExpressions;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
@@ -15,6 +16,8 @@ public partial class MainWindow
     private MarkdownPreview? markdownPreview;
     private string? markdownText;
     private double markdownFont, markdownWidth;
+    private CancellationTokenSource? markdownPreviewCancellation;
+    private long markdownPreviewGeneration;
 
     private void InitializeMarkdownPreview()
     {
@@ -23,9 +26,13 @@ public partial class MainWindow
             markdownTimer.Stop();
             if (CurrentTab is { } tab && tab == markdownTab && !tab.IsReading &&
                 tab.Kind == TextKind.Markdown && PreviewLimits.CanRender(tab.File.Text, tab.Kind))
-                UpdateMarkdownPreview(tab);
+                StartMarkdownPreviewUpdate(tab);
         };
-        Closed += (_, _) => markdownTimer.Stop();
+        Closed += (_, _) =>
+        {
+            markdownTimer.Stop();
+            CancelMarkdownPreviewUpdate();
+        };
     }
 
     private void ToggleMarkdownPreview()
@@ -82,10 +89,23 @@ public partial class MainWindow
         {
             markdownFont = settings.FontSize;
             markdownWidth = settings.ReadingWidth;
-            markdownPreview = new MarkdownPreview(tab.File.Text, settings.FontSize + 1, settings.ReadingWidth, tab.File.Path);
+            // Keep the control lightweight while the real document is built in the
+            // cancellable async pipeline. An empty document also gives the user an
+            // immediate, stable host while a large Markdown file is being prepared.
+            markdownPreview = new MarkdownPreview("", settings.FontSize + 1, settings.ReadingWidth, tab.File.Path,
+                includeDiagramSource: true);
             ReadingClipboard.Attach(markdownPreview, () => true);
             markdownPreviewHost!.Content = markdownPreview;
-            markdownText = tab.File.Text;
+            if (MarkdownPreview.CanBuildSynchronously(tab.File.Text))
+            {
+                markdownPreview.Update(tab.File.Text);
+                markdownText = tab.File.Text;
+            }
+            else
+            {
+                markdownText = null;
+                StartMarkdownPreviewUpdate(tab);
+            }
         }
         else
         {
@@ -98,6 +118,7 @@ public partial class MainWindow
             if (markdownText != tab.File.Text)
             {
                 markdownTimer.Stop();
+                CancelMarkdownPreviewUpdate();
                 markdownTimer.Start();
             }
         }
@@ -106,17 +127,96 @@ public partial class MainWindow
 
     private void UpdateMarkdownPreview(EditorTab tab)
     {
+        // Synchronous compatibility boundary for the in-memory copy factory and
+        // existing test hosts. Interactive preview updates use the async method.
         if (markdownPreview is null || markdownText == tab.File.Text) return;
+        CancelMarkdownPreviewUpdate();
         double offset = markdownPreview.VerticalOffset;
         markdownPreview.Update(tab.File.Text);
         markdownText = tab.File.Text;
         markdownPreview.ScrollToVerticalOffset(offset);
     }
 
+    private void StartMarkdownPreviewUpdate(EditorTab tab)
+    {
+        if (markdownPreview is null || markdownTab != tab || tab.IsReading ||
+            tab.Kind != TextKind.Markdown || !PreviewLimits.CanRender(tab.File.Text, tab.Kind))
+            return;
+        string text = tab.File.Text;
+        if (markdownText == text) return;
+        _ = UpdateMarkdownPreviewAsync(tab, text, CancellationToken.None);
+    }
+
+    private async Task<bool> EnsureMarkdownPreviewAsync(EditorTab tab, string text,
+        CancellationToken cancellationToken)
+    {
+        VerifyAccess();
+        if (markdownPreview is null || markdownTab != tab || tab.IsReading ||
+            tab.Kind != TextKind.Markdown || !PreviewLimits.CanRender(text, tab.Kind))
+            return false;
+        if (markdownText == text) return true;
+        markdownTimer.Stop();
+        return await UpdateMarkdownPreviewAsync(tab, text, cancellationToken);
+    }
+
+    private async Task<bool> UpdateMarkdownPreviewAsync(EditorTab tab, string text,
+        CancellationToken externalCancellation)
+    {
+        if (markdownPreview is null) return false;
+        markdownPreviewCancellation?.Cancel();
+        markdownPreviewCancellation?.Dispose();
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellation);
+        markdownPreviewCancellation = cancellation;
+        long generation = ++markdownPreviewGeneration;
+        double offset = markdownPreview.VerticalOffset;
+        try
+        {
+            if (CurrentTab != tab || markdownTab != tab || tab.IsReading ||
+                tab.Kind != TextKind.Markdown || tab.File.Text != text || exitInProgress)
+                return false;
+            var model = await Task.Run(() => ReadingModel.Build(text, TextKind.Markdown),
+                cancellation.Token).WaitAsync(cancellation.Token);
+            var document = await MarkdownPreview.BuildDocumentAsync(model, text, tab.File.Path,
+                settings.FontSize + 1, settings.ReadingWidth, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (markdownPreviewCancellation != cancellation || generation != markdownPreviewGeneration ||
+                CurrentTab != tab || markdownTab != tab || tab.IsReading ||
+                tab.Kind != TextKind.Markdown || tab.File.Text != text || exitInProgress)
+                return false;
+            markdownPreview.Document = document;
+            markdownText = text;
+            markdownPreview.ScrollToVerticalOffset(Math.Max(0, offset));
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception ex) when (ex is RegexMatchTimeoutException or ArgumentException or
+            FormatException or OverflowException or InvalidOperationException or IndexOutOfRangeException)
+        {
+            if (CurrentTab == tab && markdownTab == tab && tab.File.Text == text)
+                StatusText.Text = "Markdown 预览生成失败，已保留当前编辑内容。";
+            return false;
+        }
+        finally
+        {
+            if (ReferenceEquals(markdownPreviewCancellation, cancellation))
+                markdownPreviewCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelMarkdownPreviewUpdate()
+    {
+        markdownPreviewGeneration++;
+        markdownPreviewCancellation?.Cancel();
+        markdownPreviewCancellation?.Dispose();
+        markdownPreviewCancellation = null;
+    }
+
     private void ReleaseClosedMarkdownPreview()
     {
         if (markdownTab is null || tabs.Contains(markdownTab)) return;
         markdownTimer.Stop();
+        CancelMarkdownPreviewUpdate();
         DetachMarkdownEditor();
         markdownTab = null;
         markdownPreview = null;
