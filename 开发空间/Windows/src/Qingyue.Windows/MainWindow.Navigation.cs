@@ -35,6 +35,7 @@ public partial class MainWindow
         else bookmarks.Add(tab.File, anchor);
         bookmarksDirty = true;
         ScheduleBookmarkSave();
+        RefreshBookmarks();
         RefreshReadingProgress(tab);
     }
 
