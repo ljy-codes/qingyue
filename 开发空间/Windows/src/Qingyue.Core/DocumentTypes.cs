@@ -33,6 +33,9 @@ public sealed record WorkspaceSession(int Version, List<WorkspaceEntry> Entries,
 public sealed record RestoredDocument(WorkspaceEntry Entry, DocumentFile File);
 public sealed record WorkspaceLoadResult(List<RestoredDocument> Documents, Guid? ActiveId, List<string> Warnings);
 public sealed record WorkspaceSaveResult(DateTimeOffset SavedAt, List<string> Errors);
+public sealed record DocumentBookmark(
+    Guid Id, Guid DocumentId, string? Path, int SourceAnchor, string Label, DateTimeOffset UpdatedAt);
+public sealed record BookmarkSaveResult(DateTimeOffset SavedAt, List<string> Errors);
 
 public sealed record SearchOptions(bool CaseSensitive = false, bool Regex = false, bool WholeWord = false);
 public sealed record SearchMatch(int Start, int Length, string Replacement);

@@ -489,6 +489,53 @@ var tests = new List<(string Name, Action Run)>
         Equal(8, outline[1].DisplayStart);
         Equal("a|b\t代码", Build("| a\\|b | `代码` |\n| --- | --- |", TextKind.Markdown).Blocks.Single().Text);
         Check(Build("# h\n" + new string('文', 499_996), TextKind.Markdown).Headings.Count == 1, "50 万以内应富文本");
+    }),
+    ("bookmark/path matching and deletion", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-bookmark-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "a.md");
+            var file = new DocumentFile("标题\n正文");
+            file.Save(path);
+            var store = new BookmarkStore(root);
+            var item = store.Add(file, 3, "正文");
+            Check(item.SourceAnchor == 3 && item.Path == file.Path, "书签保存规范化路径和源位置");
+            Check(store.For(file).Count == 1, "书签按当前文件路径查询");
+            Check(store.Remove(item.Id), "书签可以删除");
+            Check(store.For(file).Count == 0, "删除后查询为空");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("bookmark store survives reload", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-bookmark-reload-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "a.txt");
+            File.WriteAllText(path, "第一行\n第二行");
+            var file = DocumentFile.Open(path);
+            var first = new BookmarkStore(root);
+            var item = first.Add(file, 4, "第二行");
+            Check(first.SaveAsync().GetAwaiter().GetResult().Errors.Count == 0, "书签首次写入成功");
+            var second = new BookmarkStore(root);
+            second.LoadAsync().GetAwaiter().GetResult();
+            Check(second.Items.Any(x => x.Id == item.Id && x.Label == "第二行"),
+                "书签重启后可恢复");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("anchor mapping follows unchanged paragraph", () =>
+    {
+        const string oldText = "前言\n\n目标段落\n第二行\n\n结尾";
+        const string newText = "新增说明\n\n前言\n\n目标段落\n第二行\n\n结尾";
+        int oldAnchor = oldText.IndexOf("目标段落", StringComparison.Ordinal);
+        int mapped = TextAnchorMapper.Map(oldText, newText, oldAnchor);
+        Check(newText.IndexOf("目标段落", StringComparison.Ordinal) == mapped,
+            "外部前置插入后锚点跟随原段落");
+        Check(TextAnchorMapper.Map(oldText, "短文", 999) == "短文".Length, "映射结果限制在新文本长度");
     })
 };
 
