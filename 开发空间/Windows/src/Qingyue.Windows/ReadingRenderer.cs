@@ -694,9 +694,11 @@ internal static class MarkdownImageLoader
                 throw new ImageSourceException("网络图片未加载");
             path = uri.LocalPath;
         }
-        else path = target;
-        path = Uri.UnescapeDataString(path)
-            .Replace('/', Path.DirectorySeparatorChar);
+        else
+        {
+            path = Uri.UnescapeDataString(target);
+        }
+        path = path.Replace('/', Path.DirectorySeparatorChar);
         if (MarkdownImages.IsRemote(path)) throw new ImageSourceException("网络图片未加载");
         if (string.IsNullOrWhiteSpace(path)) throw new ImageSourceException("图片路径为空");
         if (!Path.IsPathFullyQualified(path))
@@ -759,6 +761,7 @@ internal sealed class MarkdownImageView : Grid
 
     public void Retry()
     {
+        if (!IsFailed) return;
         loading?.Cancel();
         MarkdownImageScheduler.Unregister(this, host);
         loading = null;

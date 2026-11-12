@@ -174,6 +174,15 @@ internal static partial class Program
         string fileUri = new Uri(imagePath).AbsoluteUri;
         foreach (string target in new[] { relative, Uri.EscapeDataString(relative), fileUri })
             AssertLoaded(new MarkdownPreview("![路径图](" + target + ")", 16, 680, sourcePath).Document, target);
+
+        string literalPercentPath = Path.Combine(root, "字面%20图片.png");
+        File.WriteAllBytes(literalPercentPath, Png);
+        string literalPercentUri = new Uri("file:///" +
+            literalPercentPath.Replace('\\', '/').Replace("%", "%25")).AbsoluteUri;
+        Check(literalPercentUri.Contains("%2520", StringComparison.OrdinalIgnoreCase),
+            "字面 %20 文件名的 file URI 必须编码为 %2520");
+        AssertLoaded(new MarkdownPreview("![字面百分号图片](" + literalPercentUri + ")", 16, 680, sourcePath).Document,
+            literalPercentUri);
     }
 
     private static void RetryFailedImage()
@@ -184,15 +193,34 @@ internal static partial class Program
         string secondPath = Path.Combine(root, "second.png");
         var preview = new MarkdownPreview($"![一]({firstPath})\n\n![二]({secondPath})", 16, 680);
         var images = Images(preview.Document).ToArray();
-        Activate(preview.Document);
-        PumpUntil(() => images.All(image => image.Source is null), "失败图片没有进入失败状态");
-        File.WriteAllBytes(firstPath, Png);
         var view = Controls(preview.Document.Blocks).OfType<MarkdownImageView>().First();
+        Activate(preview.Document);
+        PumpUntil(() => view.IsFailed, "失败图片没有进入失败状态");
+        Check(images.All(image => image.Source is null), "失败图片不应有已解码位图");
+        Check(RetryMenu(view).IsEnabled, "失败图片的重试菜单必须启用");
+        var ordinaryImage = new Image();
+        ReaderImageWindow.Attach(ordinaryImage, ordinaryImage, "普通图片");
+        Check(!RetryMenu(ordinaryImage).IsEnabled, "普通 Image 的重试菜单必须禁用");
+
+        File.WriteAllBytes(firstPath, Png);
         var retry = typeof(MarkdownImageView).GetMethod("Retry", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("Missing public MarkdownImageView retry API");
         retry.Invoke(view, null);
         PumpUntil(() => images[0].Source is not null, "当前图片重试后没有成功");
+        Check(!RetryMenu(view).IsEnabled, "成功图片的重试菜单必须禁用");
+        var loadedBitmap = images[0].Source;
+        Check(view.IsReady, "重试成功后图片必须处于 ready 状态");
+        retry.Invoke(view, null);
+        Check(view.IsReady && ReferenceEquals(images[0].Source, loadedBitmap),
+            "成功图片重复调用 Retry 不应清空或重复加载");
         Check(images[1].Source is null, "重试一张图片改变了另一张图片状态");
+    }
+
+    private static MenuItem RetryMenu(FrameworkElement view)
+    {
+        var menu = view.ContextMenu ?? throw new InvalidOperationException("图片控件没有上下文菜单");
+        menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+        return menu.Items.OfType<MenuItem>().Single(item => Equals(item.Header, "重试加载"));
     }
 
     private static void MappedImages()
