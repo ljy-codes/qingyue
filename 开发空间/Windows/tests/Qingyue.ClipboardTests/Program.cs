@@ -82,13 +82,20 @@ internal static class Program
 
     private static void RichExportFailureKeepsUnicodeText()
     {
-        var box = Box(new Paragraph(new Run("Unicode😀保留")));
+        var document = new FlowDocument();
+        for (int i = 0; i < 21_000; i++)
+            document.Blocks.Add(new Paragraph(new Run("Unicode😀保留")));
+        var box = new RichTextBox { Document = document };
         box.SelectAll();
         ReadingClipboard.Attach(box, () => true);
-        var result = ReadingClipboard.CreateFullDocumentData(
-            Box(new Paragraph(new InlineUIContainer(new FrameworkElement()))));
-        Check(result is not null && result.Data.GetDataPresent(DataFormats.UnicodeText, false),
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null, "富文本导出失败后没有返回降级数据");
+        Check(result!.Data.GetDataPresent(DataFormats.UnicodeText, false),
             "富文本导出失败后没有保留 UnicodeText");
+        Check(!result.Data.GetDataPresent(DataFormats.Html, false) &&
+            !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
+            !result.Data.GetDataPresent(DataFormats.XamlPackage, false),
+            "富文本导出失败后仍发布了不完整的富文本格式");
     }
 
     private static void Structure()

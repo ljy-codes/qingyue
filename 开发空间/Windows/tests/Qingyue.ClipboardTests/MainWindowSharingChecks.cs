@@ -37,7 +37,6 @@ internal static class MainWindowSharingChecks
                 () => Pump(SplitCopyLatest));
             test("v030 MainWindow stable split sharing preserves document focus selection and scroll",
                 () => Pump(StableSplitSharing));
-            test("富文本导出失败仍保留 UnicodeText", RichExportFailureKeepsUnicodeText);
         }
         finally { application.Shutdown(); }
     }
@@ -192,17 +191,6 @@ internal static class MainWindowSharingChecks
             Math.Abs(vertical - preview.VerticalOffset) < .1 && Math.Abs(horizontal - preview.HorizontalOffset) < .1,
             "stable split sharing rebuilt the document or changed focus, selection or scroll");
     });
-
-    private static void RichExportFailureKeepsUnicodeText()
-    {
-        var box = new RichTextBox(new FlowDocument(new Paragraph(new Run("Unicode😀保留"))))
-        { IsReadOnly = true };
-        box.SelectAll();
-        ReadingClipboard.Attach(box, () => true);
-        var result = ReadingClipboard.CreateFullDocumentData(box);
-        Check(result is not null && result.Data.GetDataPresent(DataFormats.UnicodeText, false),
-            "富文本导出失败后 UnicodeText 丢失");
-    }
 
     private static async Task SourceJunction()
     {
