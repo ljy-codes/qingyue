@@ -47,6 +47,7 @@ internal static class Program
         Test("pending and excessive images have explicit placeholders without URI access", MissingAndLimitedImages);
         Test("oversized selected text falls back atomically to native formats", TextLimit);
         Test("复制快照只依赖已冻结资源", ClipboardSnapshotIsSelfContained);
+        Test("全文快照发布完整格式并按图片数量选择 Bitmap", ClipboardSnapshotFormats);
         Test("富文本导出失败仍保留 UnicodeText", RichExportFailureKeepsUnicodeText);
         SharingChecks.Run(Test);
         MainWindowSharingChecks.Run(Test);
@@ -119,6 +120,73 @@ internal static class Program
             !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
             !result.Data.GetDataPresent(DataFormats.XamlPackage, false),
             "富文本导出失败后仍发布了不完整的富文本格式");
+    }
+
+    private static void ClipboardSnapshotFormats()
+    {
+        var image = Image();
+        var preview = Box(new Paragraph(new Run("前文😀")), new Paragraph(new InlineUIContainer(image)),
+            new Paragraph(new Run("后文")));
+        preview.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(preview);
+        Check(result is not null, "全文复制没有返回结果");
+        Check(result!.Data.GetDataPresent(DataFormats.Html, false), "HTML missing");
+        Check(result.Data.GetDataPresent(DataFormats.Rtf, false), "RTF missing");
+        Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false), "XamlPackage missing");
+        Check(result.Data.GetDataPresent(DataFormats.UnicodeText, false), "UnicodeText missing");
+        Check(result.Data.GetDataPresent(DataFormats.Bitmap, false) == false,
+            "混合文字和图片全文发布了误导性的 Bitmap");
+
+        string html = (string)result.Data.GetData(DataFormats.Html, false)!;
+        byte[] htmlBytes = Encoding.UTF8.GetBytes(html);
+        int fragmentStart = FieldOffset(html, "StartFragment");
+        int fragmentEnd = FieldOffset(html, "EndFragment");
+        string fragment = Encoding.UTF8.GetString(htmlBytes, fragmentStart, fragmentEnd - fragmentStart);
+        var htmlImage = XDocument.Parse("<root>" + fragment + "</root>").Descendants("img").Single();
+        using var htmlStream = new MemoryStream(Convert.FromBase64String(
+            htmlImage.Attribute("src")!.Value["data:image/png;base64,".Length..]));
+        Check(BitmapFrame.Create(htmlStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).PixelWidth == 2,
+            "HTML 图片在删除源资源后无法解码");
+
+        string rtf = (string)result.Data.GetData(DataFormats.Rtf, false)!;
+        Check(rtf.Contains("\\pict"), "RTF 缺少图片");
+        using var rtfStream = new MemoryStream(Encoding.ASCII.GetBytes(rtf));
+        var restoredRtf = new FlowDocument();
+        new TextRange(restoredRtf.ContentStart, restoredRtf.ContentEnd).Load(rtfStream, DataFormats.Rtf);
+        Check(restoredRtf.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Any(container => container.Child is Image { Source: BitmapSource }),
+            "RTF 图片在删除源资源后无法解码");
+
+        using var package = new MemoryStream(((MemoryStream)result.Data.GetData(DataFormats.XamlPackage, false)!).ToArray());
+        var restoredPackage = new FlowDocument();
+        new TextRange(restoredPackage.ContentStart, restoredPackage.ContentEnd).Load(package, DataFormats.XamlPackage);
+        Check(restoredPackage.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Any(container => container.Child is Image { Source: BitmapSource }),
+            "XamlPackage 图片在删除源资源后无法解码");
+
+        image.Source = null;
+        htmlStream.Position = 0;
+        Check(BitmapFrame.Create(htmlStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).PixelHeight == 1,
+            "快照输出依赖删除后的实时图片资源");
+
+        var mixed = Box(new Paragraph(new InlineUIContainer(Image())),
+            new Paragraph(new InlineUIContainer(Image())));
+        mixed.SelectAll();
+        var mixedResult = ReadingClipboard.CreateFullDocumentData(mixed);
+        Check(mixedResult is not null && !mixedResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "多图全文发布了误导性的 Bitmap");
+
+        var single = Box(new Paragraph(new InlineUIContainer(Image())));
+        single.SelectAll();
+        var singleResult = ReadingClipboard.CreateFullDocumentData(single);
+        Check(singleResult is not null && singleResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "单图选区没有发布 Bitmap");
+    }
+
+    private static int FieldOffset(string cfHtml, string field)
+    {
+        int start = cfHtml.IndexOf(field + ":", StringComparison.Ordinal) + field.Length + 1;
+        return int.Parse(cfHtml.AsSpan(start, 10), CultureInfo.InvariantCulture);
     }
 
     private static void Structure()

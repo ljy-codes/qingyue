@@ -38,7 +38,16 @@ public sealed record ReadingImageWaitProgress(int PendingImages, TimeSpan Elapse
 public sealed record ReadingClipboardResult(DataObject Data, int EmbeddedImages, int OmittedImages)
 {
     public ReadingImageReport Images { get; init; } = new(EmbeddedImages, OmittedImages, 0, 0, 0);
+    public string? DegradationReason { get; init; }
 }
+
+internal sealed record ReadingClipboardSnapshot(
+    string PlainText,
+    string Html,
+    string? Rtf,
+    MemoryStream? XamlPackage,
+    BitmapSource? Bitmap,
+    ReadingImageReport Images);
 
 public static class ReadingClipboard
 {
@@ -222,12 +231,14 @@ public static class ReadingClipboard
                 {
                     var payload = PreparedCopies.TryGetValue(e.DataObject, out var prepared)
                         ? prepared : PrepareSelection(preview);
-                    e.DataObject.SetData(DataFormats.Html, payload.Html, false);
                     if (payload.Rtf is not null) e.DataObject.SetData(DataFormats.Rtf, payload.Rtf, false);
                     if (payload.Package is not null) e.DataObject.SetData(DataFormats.XamlPackage, payload.Package, false);
                     if (payload.Bitmap is not null) e.DataObject.SetData(DataFormats.Bitmap, payload.Bitmap, false);
                     if (!e.DataObject.GetDataPresent(DataFormats.UnicodeText, false))
                         e.DataObject.SetData(DataFormats.UnicodeText, preview.Selection.Text, false);
+                    // Publish HTML last so a native-format failure cannot leave a
+                    // partial rich clipboard object advertising incomplete HTML.
+                    e.DataObject.SetData(DataFormats.Html, payload.Html, false);
                 }
                 catch (Exception ex) when (IsExportFailure(ex)) { /* Keep native copy. */ }
                 finally { PreparedCopies.Remove(e.DataObject); }
@@ -251,23 +262,83 @@ public static class ReadingClipboard
     {
         try
         {
-            var export = new Export(range);
-            string html = export.Html(document);
-            string plainText = export.PlainText(range.Text);
-            // Serialize a detached, whitelisted document. Original image wrappers can
-            // be Grids, which WPF's RTF writer does not treat as image objects.
-            var safeRange = export.RichRange();
-            var data = new DataObject();
-            data.SetData(DataFormats.UnicodeText, plainText, false);
-            data.SetData(DataFormats.Text, plainText, false);
-            data.SetData(DataFormats.Html, html, false);
-            data.SetData(DataFormats.Rtf, CreateRtf(safeRange), false);
-            data.SetData(DataFormats.XamlPackage, CreatePackage(safeRange), false);
-            if (export.SingleBitmap is { } bitmap)
-                data.SetData(DataFormats.Bitmap, bitmap, false);
-            return new(data, export.EmbeddedImages, export.OmittedImages) { Images = export.Images };
+            return CreateData(CreateSnapshot(document, range));
         }
-        catch (Exception ex) when (IsExportFailure(ex)) { return null; }
+        catch (Exception ex) when (IsExportFailure(ex))
+        {
+            try
+            {
+                string plainText = CreatePlainTextFallback(document, range);
+                return DegradedData(plainText, ex);
+            }
+            catch (Exception plainEx) when (IsExportFailure(plainEx))
+            {
+                return null;
+            }
+        }
+    }
+
+    internal static ReadingClipboardSnapshot CreateSnapshot(FlowDocument document, TextRange range)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(range);
+        var export = new Export(range);
+        string html = export.Html(document);
+        string plainText = export.PlainText(range.Text);
+        var safeRange = export.RichRange();
+        return new(
+            plainText,
+            html,
+            CreateRtf(safeRange),
+            CreatePackage(safeRange),
+            export.SingleBitmap,
+            export.Images);
+    }
+
+    private static ReadingClipboardResult CreateData(ReadingClipboardSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var data = TextData(snapshot.PlainText);
+        try
+        {
+            // Prepare every rich flavor before publishing HTML. If a later format
+            // fails, this object is discarded and only UnicodeText is returned.
+            if (snapshot.Rtf is not null) data.SetData(DataFormats.Rtf, snapshot.Rtf, false);
+            if (snapshot.XamlPackage is not null)
+                data.SetData(DataFormats.XamlPackage, new MemoryStream(snapshot.XamlPackage.ToArray()), false);
+            if (snapshot.Bitmap is not null) data.SetData(DataFormats.Bitmap, snapshot.Bitmap, false);
+            data.SetData(DataFormats.Html, snapshot.Html, false);
+            return new(data, snapshot.Images.Embedded, snapshot.Images.Omitted)
+            {
+                Images = snapshot.Images
+            };
+        }
+        catch (Exception ex) when (IsExportFailure(ex))
+        {
+            return DegradedData(snapshot.PlainText, ex, snapshot.Images);
+        }
+    }
+
+    private static string CreatePlainTextFallback(FlowDocument document, TextRange range)
+    {
+        var export = new Export(range);
+        try { export.Html(document); }
+        catch (Exception ex) when (IsExportFailure(ex)) { }
+        return export.PlainText(range.Text);
+    }
+
+    private static ReadingClipboardResult DegradedData(string plainText, Exception cause,
+        ReadingImageReport? images = null)
+    {
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, plainText, false);
+        return new(data, images?.Embedded ?? 0, images?.Omitted ?? 0)
+        {
+            Images = images ?? new(0, 0, 0, 0, 0),
+            DegradationReason = string.IsNullOrWhiteSpace(cause.Message)
+                ? "富文本格式生成失败，已保留纯文本。"
+                : cause.Message
+        };
     }
 
     private sealed class Registration(Func<bool> enabled)
@@ -328,12 +399,10 @@ public static class ReadingClipboard
 
     private static SelectionPayload PrepareSelection(RichTextBox preview)
     {
-        var export = new Export(preview.Selection);
-        string html = export.Html(preview.Document);
-        if (export.EmbeddedImages + export.OmittedImages == 0) return new(html, null, null, null);
-        var safeRange = export.RichRange();
-        string rtf = CreateRtf(safeRange);
-        return new(html, rtf, CreatePackage(safeRange), export.SingleBitmap);
+        var snapshot = CreateSnapshot(preview.Document, preview.Selection);
+        if (snapshot.Images.Embedded + snapshot.Images.Omitted == 0)
+            return new(snapshot.Html, null, null, null);
+        return new(snapshot.Html, snapshot.Rtf, snapshot.XamlPackage, snapshot.Bitmap);
     }
 
     private static MemoryStream CreatePackage(TextRange range)
@@ -745,15 +814,16 @@ public static class ReadingClipboard
                         width = Math.Min(width, image.ActualHeight * bitmap.PixelWidth / bitmap.PixelHeight);
                     int displayWidth = Math.Max(1, (int)Math.Round(width));
                     int displayHeight = Math.Max(1, (int)Math.Round(width * bitmap.PixelHeight / bitmap.PixelWidth));
+                    BitmapSource frozen = FreezeBitmap(bitmap);
                     var element = new XElement("img",
                         new XAttribute("src", "data:image/png;base64," + Convert.ToBase64String(stream.ToArray())),
                         new XAttribute("alt", alt),
                         new XAttribute("width", displayWidth),
                         new XAttribute("height", displayHeight),
                         new XAttribute("style", "max-width:100%;height:auto"));
-                    element.AddAnnotation(new ExportedImage(bitmap, displayWidth, displayHeight));
+                    element.AddAnnotation(new ExportedImage(frozen, displayWidth, displayHeight));
                     EmbeddedImages++;
-                    singleBitmap = EmbeddedImages == 1 ? bitmap : null;
+                    singleBitmap = EmbeddedImages == 1 ? frozen : null;
                     imageBytes += (int)stream.Length;
                     imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
                     return element;
@@ -792,7 +862,12 @@ public static class ReadingClipboard
             }
 
             byte[] png;
-            try { png = EncodePng(bitmap); }
+            BitmapSource frozen;
+            try
+            {
+                frozen = FreezeBitmap(bitmap);
+                png = EncodePng(frozen);
+            }
             catch (Exception ex) when (IsExportFailure(ex))
             {
                 OmittedImages++;
@@ -815,9 +890,9 @@ public static class ReadingClipboard
                 new XAttribute("width", width),
                 new XAttribute("height", height),
                 new XAttribute("style", "max-width:100%;height:auto"));
-            element.AddAnnotation(new ExportedImage(bitmap, width, height));
+            element.AddAnnotation(new ExportedImage(frozen, width, height));
             EmbeddedImages++;
-            singleBitmap = EmbeddedImages == 1 ? bitmap : null;
+            singleBitmap = EmbeddedImages == 1 ? frozen : null;
             imageBytes += png.Length;
             imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
             return element;
@@ -865,6 +940,14 @@ public static class ReadingClipboard
                     return found;
             return null;
         }
+    }
+
+    private static BitmapSource FreezeBitmap(BitmapSource bitmap)
+    {
+        if (bitmap.IsFrozen) return bitmap;
+        var clone = bitmap.Clone();
+        clone.Freeze();
+        return clone;
     }
 
     // Native full-copy formats are produced by WPF from a detached document containing
@@ -928,7 +1011,7 @@ public static class ReadingClipboard
         if (node is not XElement element) return;
         if (element.Name == "img" && element.Annotation<ExportedImage>() is { } image)
         {
-            inlines.Add(new InlineUIContainer(new Image { Source = image.Bitmap,
+            inlines.Add(new InlineUIContainer(new Image { Source = FreezeBitmap(image.Bitmap),
                 Width = image.Width, Height = image.Height }));
             return;
         }

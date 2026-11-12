@@ -53,7 +53,7 @@ public partial class MainWindow
             var result = code ? ReadingClipboard.CreateCurrentCodeBlockData(preview) : ReadingClipboard.CreateCurrentTableData(preview);
             if (result is null) throw new IOException("请将光标或选区放在同一个目标块内；内容仍须满足复制上限。");
             Clipboard.SetDataObject(result.Data, true);
-            StatusText.Text = SharingComplete(code ? "已复制当前代码块" : "已复制当前表格", result.Images);
+            StatusText.Text = SharingComplete(code ? "已复制当前代码块" : "已复制当前表格", result);
         }
         catch (Exception ex) when (SharingFailure(ex)) { StatusText.Text = "复制未完成：" + ex.Message; }
     }
@@ -134,7 +134,7 @@ public partial class MainWindow
                     ?? throw new IOException("内容超过安全复制预算或无法序列化。可选择部分内容复制。");
                 token.ThrowIfCancellationRequested();
                 Clipboard.SetDataObject(result.Data, true);
-                StatusText.Text = SharingComplete("已复制全文，可粘贴到支持富文本的应用", result.Images);
+                StatusText.Text = SharingComplete("已复制全文，可粘贴到支持富文本的应用", result);
             }
         }
         catch (OperationCanceledException) { StatusText.Text = export ? "已取消 HTML 导出。" : "已取消全文复制。"; }
@@ -146,6 +146,10 @@ public partial class MainWindow
     private static string SharingComplete(string action, ReadingImageReport images) =>
         $"{action}，含 {images.Embedded} 张图片。" + (images.Incomplete
             ? $" 图片未完整：{images.Description}；已保留明确占位符，可加载完成后重试。" : "");
+
+    private static string SharingComplete(string action, ReadingClipboardResult result) =>
+        SharingComplete(action, result.Images) + (result.DegradationReason is { Length: > 0 } reason
+            ? $" 富文本已降级为纯文本：{reason}" : "");
 
     private static bool SharingFailure(Exception ex) => ex is IOException or UnauthorizedAccessException
         or InvalidOperationException or ArgumentException or NotSupportedException

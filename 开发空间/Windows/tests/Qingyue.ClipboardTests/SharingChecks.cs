@@ -40,6 +40,7 @@ internal static class SharingChecks
         test("v030 atomic HTML writer requires overwrite consent and leaves no cancelled temp files", () => Pump(Overwrite));
         test("v030 atomic HTML writer rejects trailing-dot source aliases", () => Pump(TrailingDot));
         test("v030 portable HTML enforces existing text and image budgets", Budgets);
+        test("v080 CF_HTML fragment is browser-safe and self-contained", BrowserFragment);
         test("v030 block context menu is installed once and uses current selection", ContextMenu);
     }
 
@@ -456,6 +457,40 @@ internal static class SharingChecks
         Check(XDocument.Parse(html).Descendants("img").Count() == 32, "portable export ignored image count budget");
         Check(Property<int>(Property<object>(result, "Images"), "Limited") == 1 && html.Contains("图片未"),
             "portable export silently omitted excessive image");
+    }
+
+    private static void BrowserFragment()
+    {
+        const string mermaid = "sequenceDiagram\nparticipant A\nA->>B: 浏览器😀";
+        Check(MermaidSequence.TryParse(mermaid, out _, out var error), "Mermaid fixture failed: " + error);
+        var preview = new MarkdownPreview(
+            "# 标题\n\n| 列一 | 列二 |\n| --- | --- |\n| 值一 | 值二 |\n\n```text\n代码😀\n```\n\n```mermaid\n"
+            + mermaid + "\n```", 16, 680);
+        Layout(preview, 720);
+        preview.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(preview)!;
+        string cfHtml = (string)result.Data.GetData(DataFormats.Html, false)!;
+        byte[] bytes = Encoding.UTF8.GetBytes(cfHtml);
+        int start = FieldOffset(cfHtml, "StartFragment");
+        int end = FieldOffset(cfHtml, "EndFragment");
+        Check(start >= 0 && end > start && end <= bytes.Length, "CF_HTML fragment offsets are invalid");
+        string fragment = Encoding.UTF8.GetString(bytes, start, end - start);
+        var root = XDocument.Parse("<root>" + fragment + "</root>").Root!;
+        Check(root.Descendants("h1").Any() && root.Descendants("table").Any() &&
+            root.Descendants("pre").Any() && root.Descendants("img").Any(),
+            "browser fragment lost heading, table, code, or Mermaid image");
+        Check(fragment.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "browser fragment contains a non-self-contained Mermaid image");
+        Check(Encoding.UTF8.GetString(bytes, FieldOffset(cfHtml, "StartHTML"), 6) == "<html>",
+            "StartHTML does not point to the HTML document");
+        Check(Encoding.UTF8.GetString(bytes, FieldOffset(cfHtml, "EndHTML") - 7, 7) == "</html>",
+            "EndHTML does not point after the closing HTML tag");
+    }
+
+    private static int FieldOffset(string cfHtml, string field)
+    {
+        int start = cfHtml.IndexOf(field + ":", StringComparison.Ordinal) + field.Length + 1;
+        return int.Parse(cfHtml.AsSpan(start, 10), CultureInfo.InvariantCulture);
     }
 
     private static void ContextMenu()
