@@ -159,6 +159,33 @@ internal static partial class Program
             }
             finally { window.CloseForShutdown(); }
         });
+        await Scenario("bookmark_and_active_document_survive_restart", async root =>
+        {
+            string profile = Path.Combine(root, "profile"), path = Path.Combine(root, "bookmark.md");
+            File.WriteAllText(path, "# 标题\n\n目标段落\n\n结尾");
+            var window = await OpenWindow(profile, false);
+            try
+            {
+                await window.OpenPathsAsync([path]);
+                var tab = window.CurrentTab!;
+                if (!tab.IsReading) window.ToggleReading();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Check(tab.IsReading, "bookmark fixture did not enter reading mode");
+                window.ToggleBookmark();
+                Check(window.CurrentBookmarks(tab).Count == 1, "bookmark fixture did not create bookmark");
+                var bookmark = window.CurrentBookmarks(tab).Single();
+                var saved = await window.PersistWorkspaceAsync();
+                Check(saved.Errors.Count == 0, "bookmark session did not save: " + string.Join("; ", saved.Errors));
+                window.CloseForShutdown();
+                window = await OpenWindow(profile, true);
+                var restored = window.CurrentTab!;
+                Check(string.Equals(restored.File.Path, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase),
+                    "active document did not survive restart");
+                Check(window.CurrentBookmarks(restored).Any(item => item.Id == bookmark.Id
+                    && item.SourceAnchor == bookmark.SourceAnchor), "bookmark did not survive restart");
+            }
+            finally { window.CloseForShutdown(); }
+        });
     }
 
     private static async Task StartupPreservation(string root, bool recoveryEnabled)

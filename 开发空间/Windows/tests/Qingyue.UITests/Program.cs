@@ -58,6 +58,16 @@ internal static class Program
                 window.SelectTab(first);
                 Check(ReferenceEquals(window.CurrentTab?.Editor, first.Editor), "切回标签保留原编辑器");
 
+                var progressTab = window.NewDocument(string.Join("\n", Enumerable.Range(1, 100).Select(i => "第 " + i + " 行")));
+                window.ToggleReading();
+                await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Check(((TextBlock)window.FindName("ReadingStatus")).Text.Contains("%"), "阅读态显示百分比进度");
+                window.ToggleBookmark();
+                Check(window.CurrentBookmarks(progressTab).Count == 1, "当前阅读位置可以添加书签");
+                window.ToggleBookmark();
+                Check(window.CurrentBookmarks(progressTab).Count == 0, "同一位置再次操作可以删除书签");
+                window.ToggleReading();
+
                 string filePath = Path.Combine(root, "中文配置.json");
                 Check(window.SaveTabToPath(first, filePath), "窗口保存到中文路径");
                 first.Editor.AppendText("\n未保存内容");

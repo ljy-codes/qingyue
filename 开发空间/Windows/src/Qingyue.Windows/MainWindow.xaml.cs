@@ -15,12 +15,16 @@ public partial class MainWindow : Window
 {
     private readonly ObservableCollection<EditorTab> tabs = [];
     private readonly WorkspaceStore workspace;
+    private readonly BookmarkStore bookmarks;
     private readonly ReaderSettings settings;
     private readonly string dataDirectory;
     private readonly bool restoreSession;
     private readonly DispatcherTimer persistTimer = new() { Interval = TimeSpan.FromSeconds(1.5) };
+    private readonly DispatcherTimer bookmarkSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly Queue<Action> pendingOpen = new();
     private bool initialized, updatingControls, approvedShutdown, exitInProgress, focusMode;
+    private bool bookmarksDirty;
+    private Task? bookmarkSaveTask;
     private int modalDepth;
     private long outlineGeneration;
     private readonly HashSet<Guid> discardedAtExit = [];
@@ -33,6 +37,7 @@ public partial class MainWindow : Window
         this.restoreSession = restoreSession;
         settings = ReaderSettings.Load(dataDirectory);
         workspace = new WorkspaceStore(dataDirectory);
+        bookmarks = new BookmarkStore(dataDirectory);
         InitializeComponent();
         InitializeEditingInteractions();
         InitializeMarkdownPreview();
@@ -47,6 +52,11 @@ public partial class MainWindow : Window
         ApplySidebar();
         RefreshRecent();
         InstallShortcuts();
+        bookmarkSaveTimer.Tick += async (_, _) =>
+        {
+            bookmarkSaveTimer.Stop();
+            await SaveBookmarksAsync();
+        };
         persistTimer.Tick += async (_, _) =>
         {
             persistTimer.Stop();
@@ -63,6 +73,7 @@ public partial class MainWindow : Window
     {
         if (initialized) return;
         await PrepareRecoveryAsync();
+        await bookmarks.LoadAsync();
         if (restoreSession && settings.RestoreSession)
         {
             try
@@ -221,7 +232,8 @@ public partial class MainWindow : Window
             (!PreviewLimits.CanRender(tab.File.Text, tab.Kind) && tab.IsReading ? " · 超过 50 万正文字符，原文阅读" : "") +
             (tab.File.Path is null ? " · 未命名文档" : " · " + tab.File.Path);
         ReadingTitle.Text = tab.File.Title + (tab.File.IsDirty ? "  •" : "");
-        ReadingStatus.Text = $"{tab.File.Text.Length:N0} 字符 · {(tab.File.IsDirty ? "未保存" : "已保存")}";
+        ReadingStatus.Text = ReadingProgressText(tab);
+        BookmarkButton.Content = CurrentBookmarks(tab).Any() ? "书签已标记" : "添加书签";
         Title = tab.File.Title + (tab.File.IsDirty ? " *" : "") + " · 轻阅";
         RefreshPresentation(tab);
     }
@@ -344,8 +356,11 @@ public partial class MainWindow : Window
         string fullPath = Path.GetFullPath(path);
         if (tabs.Any(t => t != tab && string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase)))
             throw new IOException("该目标已在另一标签中打开，请先关闭目标标签。");
+        string? oldPath = tab.File.Path;
         tab.File.Text = Normalize(tab.Editor.Text);
         tab.File.Save(fullPath, allowOverwrite);
+        bookmarks.MigratePath(tab.File.Id, oldPath, fullPath);
+        bookmarksDirty = true;
         TrackSavedBaseline(tab);
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
@@ -403,6 +418,11 @@ public partial class MainWindow : Window
     {
         var old = tab.File.Path;
         tab.File.Rename(name);
+        if (tab.File.Path is { } newPath)
+        {
+            bookmarks.MigratePath(tab.File.Id, old, newPath);
+            bookmarksDirty = true;
+        }
         OnRecoveryPathRenamed(old, tab.File.Path);
         if (old is not null) settings.Recent.RemoveAll(p => string.Equals(p, old, StringComparison.OrdinalIgnoreCase));
         if (tab.File.Path is not null) AddRecent(tab.File.Path);

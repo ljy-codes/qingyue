@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -12,6 +13,66 @@ public partial class MainWindow
     private int searchOriginAnchor;
     private double searchOriginDelta;
     private bool followingOutline;
+
+    public string ReadingProgressText(EditorTab tab)
+    {
+        int percent = ProgressPercent(tab);
+        return $"进度 {percent}% · {tab.File.Text.Length:N0} 字符 · {(tab.File.IsDirty ? "未保存" : "已保存")}";
+    }
+
+    public IReadOnlyList<DocumentBookmark> CurrentBookmarks(EditorTab tab) => bookmarks.For(tab.File);
+
+    public void ToggleBookmark()
+    {
+        if (CurrentTab is not { } tab) return;
+        if (tab.IsReading) CaptureReadingViewport(tab);
+        int anchor = tab.IsReading
+            ? tab.ViewportAnchor ?? CurrentSourceAnchor(tab)
+            : EditingViewportAnchor(tab);
+        anchor = Math.Clamp(anchor, 0, tab.File.Text.Length);
+        var existing = bookmarks.For(tab.File).FirstOrDefault(item => item.SourceAnchor == anchor);
+        if (existing is not null) bookmarks.Remove(existing.Id);
+        else bookmarks.Add(tab.File, anchor);
+        bookmarksDirty = true;
+        ScheduleBookmarkSave();
+        RefreshReadingProgress(tab);
+    }
+
+    public void NavigateToBookmark(DocumentBookmark bookmark)
+    {
+        var tab = tabs.FirstOrDefault(item => bookmarks.For(item.File).Any(saved => saved.Id == bookmark.Id));
+        if (tab is null && bookmark.Path is { } path && File.Exists(path))
+        {
+            Dispatcher.BeginInvoke(async () =>
+            {
+                await OpenPathsAsync([path]);
+                if (CurrentTab is { } opened) NavigateToBookmark(bookmark);
+            });
+            return;
+        }
+        if (tab is null) return;
+        SelectTab(tab);
+        int anchor = Math.Clamp(bookmark.SourceAnchor, 0, tab.File.Text.Length);
+        if (tab.Kind == TextKind.Markdown)
+        {
+            if (!tab.IsReading) EnterReading(tab, anchor, focus: true);
+            else RestoreReadingViewport(tab, anchor, tab.ViewportDelta);
+        }
+        else if (tab.IsReading)
+        {
+            ToggleReading();
+            tab.Editor.CaretIndex = EditorOffset(tab, anchor);
+            ScrollToCaret(tab);
+            tab.Editor.Focus();
+        }
+        else
+        {
+            tab.Editor.CaretIndex = EditorOffset(tab, anchor);
+            ScrollToCaret(tab);
+            tab.Editor.Focus();
+        }
+        SchedulePersist();
+    }
 
     private WorkspaceEntry CaptureWorkspaceEntry(EditorTab tab)
     {
@@ -32,6 +93,7 @@ public partial class MainWindow
             if (!tab.IsReading || e.VerticalChange == 0 || CurrentTab != tab) return;
             CaptureReadingViewport(tab);
             FollowReadingOutline(tab);
+            RefreshReadingProgress(tab);
             SchedulePersist();
         }));
     }
@@ -48,6 +110,7 @@ public partial class MainWindow
             var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
             tab.ViewportAnchor = tab.Reading.DisplayToSource(tab.Rendered.OffsetAt(pointer));
             tab.ViewportDelta = !rect.IsEmpty && double.IsFinite(rect.Top) ? Math.Clamp(rect.Top, -2000, 2000) : 0;
+            RefreshReadingProgress(tab);
         }
         catch (InvalidOperationException) { /* A layout replacement will provide the next valid viewport. */ }
     }
@@ -83,6 +146,22 @@ public partial class MainWindow
                 FollowReadingOutline(tab);
             }, DispatcherPriority.ContextIdle);
         }, DispatcherPriority.Loaded);
+    }
+
+    private static int ProgressPercent(EditorTab tab)
+    {
+        if (tab.File.Text.Length == 0) return 0;
+        int anchor = Math.Clamp(tab.ViewportAnchor ?? tab.SourceAnchor, 0, tab.File.Text.Length);
+        return anchor >= tab.File.Text.Length - 1
+            ? 100
+            : Math.Clamp((int)Math.Round(anchor * 100d / tab.File.Text.Length), 0, 99);
+    }
+
+    private void RefreshReadingProgress(EditorTab tab)
+    {
+        if (CurrentTab != tab) return;
+        ReadingStatus.Text = ReadingProgressText(tab);
+        BookmarkButton.Content = CurrentBookmarks(tab).Any() ? "书签已标记" : "添加书签";
     }
 
     private static int EditingViewportAnchor(EditorTab tab)

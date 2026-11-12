@@ -144,6 +144,8 @@
           <Button Content="A−" Tag="fontDown" Click="MenuAction" Margin="0,0,6,0" ToolTip="减小字号"/>
           <Button Content="A+" Tag="fontUp" Click="MenuAction" Margin="0,0,6,0" ToolTip="增大字号"/>
           <Button Content="主题" Tag="theme" Click="MenuAction" Margin="0,0,6,0" ToolTip="切换明暗主题"/>
+          <Button x:Name="BookmarkButton" Content="添加书签" Tag="bookmark" Click="MenuAction"
+                  Margin="0,0,6,0" ToolTip="标记当前位置 · Ctrl+D"/>
           <Button x:Name="ReadingCopyButton" Content="复制全文" Tag="copyReading" Click="MenuAction"
                   Visibility="Collapsed" Margin="0,0,6,0" ToolTip="复制富文本、表格和图片"/>
           <Button Content="编辑原文" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}"

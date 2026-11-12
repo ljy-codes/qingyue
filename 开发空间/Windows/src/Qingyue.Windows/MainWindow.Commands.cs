@@ -22,6 +22,7 @@ public partial class MainWindow
         Bind(Key.F, ModifierKeys.Control, "find");
         Bind(Key.H, ModifierKeys.Control, "replace");
         Bind(Key.R, ModifierKeys.Control, "reading");
+        Bind(Key.D, ModifierKeys.Control, "bookmark");
         Bind(Key.B, ModifierKeys.Control, "sidebar");
         Bind(Key.G, ModifierKeys.Control, "goto");
         Bind(Key.F, ModifierKeys.Control | ModifierKeys.Shift, "focus");
@@ -73,6 +74,7 @@ public partial class MainWindow
                     break;
                 case "quit": Close(); break;
                 case "reading": await ToggleReadingAsync(); break;
+                case "bookmark": ToggleBookmark(); break;
                 case "cancelLoading": CancelLoading(); break;
                 case "diagnostics": ShowOperationDiagnostics(); break;
                 case "returnPosition": ReturnToReadingPosition(); break;

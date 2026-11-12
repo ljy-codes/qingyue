@@ -13,6 +13,33 @@ public partial class MainWindow
         persistTimer.Stop(); persistTimer.Start();
     }
 
+    private void ScheduleBookmarkSave()
+    {
+        if (!initialized || exitInProgress) return;
+        bookmarkSaveTimer.Stop();
+        bookmarkSaveTimer.Start();
+    }
+
+    private async Task<BookmarkSaveResult> SaveBookmarksAsync()
+    {
+        if (!bookmarksDirty)
+            return new BookmarkSaveResult(DateTimeOffset.UtcNow, []);
+        if (bookmarkSaveTask is not null)
+        {
+            await bookmarkSaveTask;
+            return new BookmarkSaveResult(DateTimeOffset.UtcNow, []);
+        }
+        var save = bookmarks.SaveAsync();
+        bookmarkSaveTask = save;
+        try
+        {
+            var result = await save;
+            if (result.Errors.Count == 0) bookmarksDirty = false;
+            return result;
+        }
+        finally { bookmarkSaveTask = null; }
+    }
+
     public async Task<WorkspaceSaveResult> PersistWorkspaceAsync()
     {
         try { await PrepareRecoveryAsync(); }
@@ -40,6 +67,8 @@ public partial class MainWindow
             settings.Save(dataDirectory);
         }
         catch (Exception ex) { result.Errors.Add("偏好保存失败：" + ex.Message); }
+        var bookmarkResult = await SaveBookmarksAsync();
+        result.Errors.AddRange(bookmarkResult.Errors);
         return result;
     }
 
@@ -89,7 +118,7 @@ public partial class MainWindow
 
     public void CloseForShutdown()
     {
-        approvedShutdown = true; persistTimer.Stop(); searchGeneration++;
+        approvedShutdown = true; persistTimer.Stop(); bookmarkSaveTimer.Stop(); searchGeneration++;
         Close();
     }
 
