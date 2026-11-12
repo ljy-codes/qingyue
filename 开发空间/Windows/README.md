@@ -16,8 +16,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.6.0-Windows构建1-x64.zip`
-及 `交付产品/轻阅-0.6.0-Windows构建1-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.7.0-Windows构建1-x64.zip`
+及 `交付产品/轻阅-0.7.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：

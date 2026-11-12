@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Windows;
@@ -22,6 +23,9 @@ internal static class SharingChecks
         test("v030 current code copy resolves caret and excludes neighboring blocks", CurrentCode);
         test("v030 current table copy expands a cell and refuses crossing selection", CurrentTable);
         test("v030 HTML export embeds decoded pixels and sanitizes title metadata and resources", Html);
+        test("v070 Mermaid export embeds a self-contained PNG and keeps source text", Mermaid);
+        test("v070 single image selection supplies a Bitmap clipboard flavor", SingleBitmap);
+        test("v070 failed Mermaid export keeps the warning and source without a blank image", MermaidFailure);
         test("v030 HTML image metadata never exposes drive paths with forward slashes", MetadataPaths);
         test("v030 missing failed unsupported and excessive image reports are distinct", ImageReports);
         test("v030 renderer image-limit notice survives export without an invented omission count", ImageLimitNotice);
@@ -160,6 +164,75 @@ internal static class SharingChecks
         bitmap.CopyPixels(bytes, 8, 0);
         Check(bytes.SequenceEqual(new byte[] { 0, 0, 255, 255, 255, 0, 0, 255 }), "export lost image pixels");
         Check(box.Selection.IsEmpty && box.Selection.Start.CompareTo(selected) == 0, "HTML export changed selection");
+    }
+
+    private static void Mermaid()
+    {
+        const string source = "sequenceDiagram\nparticipant A as 前端\nparticipant B as 后端\nA->>B: 请求😀";
+        Check(MermaidSequence.TryParse(source, out var diagram, out var error), "Mermaid fixture failed: " + error);
+        var preview = new MarkdownPreview("```mermaid\n" + source + "\n```", 16, 680);
+        Layout(preview, 720);
+        var diagramBlock = preview.Document.Blocks.OfType<BlockUIContainer>().Single();
+        preview.Selection.Select(diagramBlock.ElementStart, diagramBlock.ElementEnd);
+        var result = ReadingClipboard.CreateFullDocumentData(preview);
+        Check(result is not null, "Mermaid document export returned null");
+        string html = (string)result!.Data.GetData(DataFormats.Html, false)!;
+        string text = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(html.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "Mermaid HTML did not contain a self-contained PNG: " + HtmlFragment(result.Data));
+        Check(text.Contains("sequenceDiagram", StringComparison.Ordinal) &&
+            text.Contains("A->>B: 请求😀", StringComparison.Ordinal),
+            "Mermaid source text was not retained");
+        var image = XDocument.Parse("<root>" + HtmlFragment(result.Data) + "</root>").Descendants("img").Single();
+        using var stream = new MemoryStream(Convert.FromBase64String(
+            ((string)image.Attribute("src")!).Split(',', 2)[1]));
+        var bitmap = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+        Check(bitmap.PixelWidth > 0 && bitmap.PixelHeight > 0, "Mermaid PNG is empty");
+    }
+
+    private static void SingleBitmap()
+    {
+        var box = Box(new Paragraph(new InlineUIContainer(Image())));
+        box.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null, "single image export returned null");
+        Check(result!.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "single image selection did not publish Bitmap");
+        Check(result.Data.GetData(DataFormats.Bitmap, false) is BitmapSource bitmap &&
+            bitmap.PixelWidth == 2 && bitmap.PixelHeight == 1,
+            "Bitmap clipboard flavor did not retain the image pixels");
+    }
+
+    private static void MermaidFailure()
+    {
+        const string source = "sequenceDiagram\nparticipant A\nalt 暂不支持\nA->>B: 原文😀";
+        var block = new ReadingBlock(ReadingBlockKind.Code, source, 0, source.Length, 0)
+        { CodeLanguage = "mermaid" };
+        var panel = new Border
+        {
+            Tag = block,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = "图表暂未显示：语法不受支持" },
+                    new TextBox { Text = source, IsReadOnly = true }
+                }
+            }
+        };
+        var box = Box(new BlockUIContainer(panel) { Tag = block }, new Paragraph(new Run(source)) { Tag = block });
+        box.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null, "failed Mermaid export returned null");
+        string html = (string)result!.Data.GetData(DataFormats.Html, false)!;
+        string text = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(html.Contains("图表暂未显示：语法不受支持", StringComparison.Ordinal),
+            "Mermaid failure warning was dropped from HTML: " + HtmlFragment(result.Data));
+        Check(text.Contains("sequenceDiagram", StringComparison.Ordinal) &&
+            text.Contains("A->>B: 原文😀", StringComparison.Ordinal),
+            "Mermaid failure source was dropped from plain text");
+        Check(!html.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "Mermaid failure published a blank image");
     }
 
     private static void ImageReports()
@@ -415,6 +488,13 @@ internal static class SharingChecks
         return new Image { Source = bitmap };
     }
 
+    private static void Layout(FrameworkElement element, double width)
+    {
+        element.Measure(new Size(width, double.PositiveInfinity));
+        element.Arrange(new Rect(0, 0, width, element.DesiredSize.Height));
+        element.UpdateLayout();
+    }
+
     private static RichTextBox Box(params Block[] blocks)
     {
         var document = new FlowDocument();
@@ -427,6 +507,20 @@ internal static class SharingChecks
         try { await action(); }
         catch (T) { return; }
         throw new InvalidOperationException("Expected " + typeof(T).Name);
+    }
+
+    private static string HtmlFragment(IDataObject data)
+    {
+        string cf = (string)data.GetData(DataFormats.Html, false)!;
+        byte[] bytes = Encoding.UTF8.GetBytes(cf);
+        int Offset(string field)
+        {
+            int start = cf.IndexOf(field + ":", StringComparison.Ordinal) + field.Length + 1;
+            return int.Parse(cf.AsSpan(start, 10), CultureInfo.InvariantCulture);
+        }
+        int start = Offset("StartFragment");
+        int end = Offset("EndFragment");
+        return Encoding.UTF8.GetString(bytes, start, end - start);
     }
 
     private static void Pump(Func<Task> action)

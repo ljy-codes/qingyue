@@ -225,6 +225,7 @@ public static class ReadingClipboard
                     e.DataObject.SetData(DataFormats.Html, payload.Html, false);
                     if (payload.Rtf is not null) e.DataObject.SetData(DataFormats.Rtf, payload.Rtf, false);
                     if (payload.Package is not null) e.DataObject.SetData(DataFormats.XamlPackage, payload.Package, false);
+                    if (payload.Bitmap is not null) e.DataObject.SetData(DataFormats.Bitmap, payload.Bitmap, false);
                     if (!e.DataObject.GetDataPresent(DataFormats.UnicodeText, false))
                         e.DataObject.SetData(DataFormats.UnicodeText, preview.Selection.Text, false);
                 }
@@ -252,15 +253,18 @@ public static class ReadingClipboard
         {
             var export = new Export(range);
             string html = export.Html(document);
+            string plainText = export.PlainText(range.Text);
             // Serialize a detached, whitelisted document. Original image wrappers can
             // be Grids, which WPF's RTF writer does not treat as image objects.
             var safeRange = export.RichRange();
             var data = new DataObject();
-            data.SetData(DataFormats.UnicodeText, range.Text, false);
-            data.SetData(DataFormats.Text, range.Text, false);
+            data.SetData(DataFormats.UnicodeText, plainText, false);
+            data.SetData(DataFormats.Text, plainText, false);
             data.SetData(DataFormats.Html, html, false);
             data.SetData(DataFormats.Rtf, CreateRtf(safeRange), false);
             data.SetData(DataFormats.XamlPackage, CreatePackage(safeRange), false);
+            if (export.SingleBitmap is { } bitmap)
+                data.SetData(DataFormats.Bitmap, bitmap, false);
             return new(data, export.EmbeddedImages, export.OmittedImages) { Images = export.Images };
         }
         catch (Exception ex) when (IsExportFailure(ex)) { return null; }
@@ -320,16 +324,16 @@ public static class ReadingClipboard
         catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
 
-    private sealed record SelectionPayload(string Html, string? Rtf, MemoryStream? Package);
+    private sealed record SelectionPayload(string Html, string? Rtf, MemoryStream? Package, BitmapSource? Bitmap);
 
     private static SelectionPayload PrepareSelection(RichTextBox preview)
     {
         var export = new Export(preview.Selection);
         string html = export.Html(preview.Document);
-        if (export.EmbeddedImages + export.OmittedImages == 0) return new(html, null, null);
+        if (export.EmbeddedImages + export.OmittedImages == 0) return new(html, null, null, null);
         var safeRange = export.RichRange();
         string rtf = CreateRtf(safeRange);
-        return new(html, rtf, CreatePackage(safeRange));
+        return new(html, rtf, CreatePackage(safeRange), export.SingleBitmap);
     }
 
     private static MemoryStream CreatePackage(TextRange range)
@@ -356,7 +360,7 @@ public static class ReadingClipboard
             or NotSupportedException or COMException or System.Security.SecurityException;
 
     private sealed class ExportLimitException : IOException;
-    private sealed record ExportedImage(BitmapImage Bitmap, int Width, int Height);
+    private sealed record ExportedImage(BitmapSource Bitmap, int Width, int Height);
     private enum ImageState { Ready, Pending, Failed, Unsupported, Limited }
 
     private static ImageState ImageStatus(Image image, UIElement? wrapper)
@@ -439,8 +443,12 @@ public static class ReadingClipboard
         private long imagePixels;
         internal int EmbeddedImages { get; private set; }
         internal int OmittedImages { get; private set; }
+        private BitmapSource? singleBitmap;
+        private readonly List<string> mermaidSources = [];
         private int pendingImages, failedImages, unsupportedImages, limitedImages;
         private bool hasUnrenderedImages;
+        internal BitmapSource? SingleBitmap =>
+            EmbeddedImages == 1 && OmittedImages == 0 && textLength == 0 ? singleBitmap : null;
         internal ReadingImageReport Images => new(EmbeddedImages, pendingImages, failedImages, unsupportedImages, limitedImages)
             { HasUnrenderedImages = hasUnrenderedImages };
         internal List<XElement> Elements { get; } = [];
@@ -450,6 +458,16 @@ public static class ReadingClipboard
             var document = new FlowDocument();
             foreach (var element in Elements) document.Blocks.Add(RichBlock(element));
             return new TextRange(document.ContentStart, document.ContentEnd);
+        }
+
+        internal string PlainText(string text)
+        {
+            foreach (string source in mermaidSources.Where(source => !text.Contains(source, StringComparison.Ordinal)))
+                text = string.IsNullOrWhiteSpace(text)
+                    ? source
+                    : text.TrimEnd() + Environment.NewLine + Environment.NewLine + source;
+            if (text.Length > MaximumText) throw new ExportLimitException();
+            return text;
         }
 
         internal string Html(FlowDocument document)
@@ -488,6 +506,10 @@ public static class ReadingClipboard
         private bool SelectedObject(TextElement element) =>
             range.Start.CompareTo(element.ContentEnd) < 0 && range.End.CompareTo(element.ContentStart) > 0
                 && range.Contains(element.ContentStart);
+
+        private bool SelectedBlock(BlockUIContainer block) =>
+            (range.Start.CompareTo(block.ElementStart) <= 0 &&
+                range.End.CompareTo(block.ElementEnd) >= 0) || SelectedObject(block);
 
         private XElement? Block(Block block, int depth)
         {
@@ -580,8 +602,8 @@ public static class ReadingClipboard
                         }
                     }
                     return result.HasElements ? result : null;
-                case BlockUIContainer ui when SelectedObject(ui):
-                    return new XElement("p", ImageContent(ui.Child, depth + 1));
+                case BlockUIContainer ui when SelectedBlock(ui):
+                    return new XElement("p", ImageContent(ui.Child, depth + 1, ui.Tag as ReadingBlock));
                 default:
                     return null;
             }
@@ -658,17 +680,39 @@ public static class ReadingClipboard
             }
         }
 
-        private XElement? ImageContent(UIElement? child, int depth)
+        private XElement? ImageContent(UIElement? child, int depth, ReadingBlock? sourceBlock = null)
         {
+            MermaidSequenceView? mermaid = FindMermaid(child, depth);
+            if (mermaid is not null)
+            {
+                if (sourceBlock is { } source && MermaidBlock.IsMermaid(source))
+                    mermaidSources.Add(source.Text);
+                try
+                {
+                    if (mermaid.CreateClipboardSnapshot() is { } snapshot)
+                        return EmbedBitmap(snapshot, "Mermaid 时序图");
+                }
+                catch (Exception ex) when (IsExportFailure(ex)) { /* Explicit placeholder below. */ }
+                OmittedImages++;
+                limitedImages++;
+                return new XElement("span", "[图表未包含：图形超出复制资源上限或尚未完成布局]");
+            }
+
             Image? image = FindImage(child, depth);
             if (image is null)
             {
                 // The renderer uses one plain notice after its image-control
                 // budget is exhausted. Preserve it without inventing a count.
-                if (child is TextBlock { Text: "图片未显示：本篇图片超过 32 张" })
+                if (FindNotice(child, "图片未显示：本篇图片超过 32 张") is { } limitNotice)
                 {
                     hasUnrenderedImages = true;
-                    return new XElement("span", "[图片未包含：本篇图片超过 32 张]");
+                    return new XElement("span", "[图片未包含：" + limitNotice + "]");
+                }
+                if (FindNotice(child, "图表暂未显示") is { } mermaidNotice)
+                {
+                    if (sourceBlock is { } source && MermaidBlock.IsMermaid(source))
+                        mermaidSources.Add(source.Text);
+                    return new XElement("span", mermaidNotice);
                 }
                 return null;
             }
@@ -709,6 +753,7 @@ public static class ReadingClipboard
                         new XAttribute("style", "max-width:100%;height:auto"));
                     element.AddAnnotation(new ExportedImage(bitmap, displayWidth, displayHeight));
                     EmbeddedImages++;
+                    singleBitmap = EmbeddedImages == 1 ? bitmap : null;
                     imageBytes += (int)stream.Length;
                     imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
                     return element;
@@ -733,6 +778,60 @@ public static class ReadingClipboard
             return new XElement("span", "[图片未包含：" + reason + "]");
         }
 
+        private XElement EmbedBitmap(BitmapSource bitmap, string alt, int? displayWidth = null,
+            int? displayHeight = null)
+        {
+            if (bitmap.PixelWidth is <= 0 or > 4096 || bitmap.PixelHeight is <= 0 or > 4096 ||
+                (long)bitmap.PixelWidth * bitmap.PixelHeight > 16_777_216 ||
+                EmbeddedImages >= MaximumImages ||
+                imagePixels + (long)bitmap.PixelWidth * bitmap.PixelHeight > 48_000_000)
+            {
+                OmittedImages++;
+                limitedImages++;
+                return new XElement("span", "[图片未包含：超过资源上限]");
+            }
+
+            byte[] png;
+            try { png = EncodePng(bitmap); }
+            catch (Exception ex) when (IsExportFailure(ex))
+            {
+                OmittedImages++;
+                limitedImages++;
+                return new XElement("span", "[图片未包含：图片编码失败]");
+            }
+            if (png.Length > MaximumImageBytes || imageBytes + png.Length > MaximumTotalImageBytes)
+            {
+                OmittedImages++;
+                limitedImages++;
+                return new XElement("span", "[图片未包含：超过资源上限]");
+            }
+
+            int width = displayWidth ?? Math.Min(720, bitmap.PixelWidth);
+            int height = displayHeight ?? Math.Max(1, (int)Math.Round(
+                width * (double)bitmap.PixelHeight / bitmap.PixelWidth));
+            var element = new XElement("img",
+                new XAttribute("src", "data:image/png;base64," + Convert.ToBase64String(png)),
+                new XAttribute("alt", alt),
+                new XAttribute("width", width),
+                new XAttribute("height", height),
+                new XAttribute("style", "max-width:100%;height:auto"));
+            element.AddAnnotation(new ExportedImage(bitmap, width, height));
+            EmbeddedImages++;
+            singleBitmap = EmbeddedImages == 1 ? bitmap : null;
+            imageBytes += png.Length;
+            imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
+            return element;
+        }
+
+        private static byte[] EncodePng(BitmapSource bitmap)
+        {
+            using var stream = new MemoryStream();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            encoder.Save(stream);
+            return stream.ToArray();
+        }
+
         private Image? FindImage(UIElement? element, int depth)
         {
             Visit(depth);
@@ -743,6 +842,27 @@ public static class ReadingClipboard
                     if (FindImage(child, depth + 1) is { } found) return found;
             }
             else if (element is Border border) return FindImage(border.Child, depth + 1);
+            return null;
+        }
+
+        private MermaidSequenceView? FindMermaid(UIElement? element, int depth)
+        {
+            Visit(depth);
+            if (element is MermaidSequenceView mermaid) return mermaid;
+            foreach (object child in LogicalTreeHelper.GetChildren(element))
+                if (child is UIElement nested && FindMermaid(nested, depth + 1) is { } found)
+                    return found;
+            return null;
+        }
+
+        private string? FindNotice(UIElement? element, string prefix, int depth = 0)
+        {
+            Visit(depth);
+            if (element is TextBlock text && text.Text.StartsWith(prefix, StringComparison.Ordinal))
+                return text.Text;
+            foreach (object child in LogicalTreeHelper.GetChildren(element))
+                if (child is UIElement nested && FindNotice(nested, prefix, depth + 1) is { } found)
+                    return found;
             return null;
         }
     }

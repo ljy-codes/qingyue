@@ -1,6 +1,7 @@
 param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
 $windowsRoot = Split-Path -Parent $PSScriptRoot
+$env:MSBuildEnableWorkloadResolver = 'false'
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration
 $versionSource = Get-Content -LiteralPath (Join-Path $windowsRoot 'installer/version.nsh') -Raw
 $expectedProductVersion = [regex]::Match($versionSource, '!define VERSION "([^"]+)"').Groups[1].Value

@@ -232,6 +232,9 @@ internal static class Program
             Check((string)native.GetData(DataFormats.UnicodeText, false)! == plain, "native plain text changed");
             Check(!ReferenceEquals(native.GetData(DataFormats.XamlPackage, false), package), "image selection kept stale native package");
             Check(Fragment(native).Contains("<img"), "selection HTML image missing");
+            Check(native.GetDataPresent(DataFormats.Bitmap, false) == !all,
+                all ? "mixed document selection advertised a misleading Bitmap" :
+                "single image selection did not advertise Bitmap through Attach");
         }
     }
 

@@ -15,10 +15,12 @@ $env:DOTNET_CLI_HOME = Join-Path $windowsRoot '.dotnet-home'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+$env:MSBuildEnableWorkloadResolver = 'false'
 $publishClock = [Diagnostics.Stopwatch]::StartNew()
 dotnet publish (Join-Path $windowsRoot 'src/Qingyue.Windows/Qingyue.Windows.csproj') `
     -c Release -r $Runtime --self-contained true -o $stage --nologo --disable-build-servers `
-    -p:UseSharedCompilation=false -p:PublishSingleFile=false -p:PublishTrimmed=false `
+    -p:UseSharedCompilation=false -p:MSBuildEnableWorkloadResolver=false -p:ImportWorkloads=false `
+    -p:PublishSingleFile=false -p:PublishTrimmed=false `
     -p:DebugType=None -p:DebugSymbols=false -m:1
 if ($LASTEXITCODE -ne 0) { throw "发布失败：$LASTEXITCODE；原发布目录保留。" }
 $publishSeconds = $publishClock.Elapsed.TotalSeconds
