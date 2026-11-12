@@ -92,7 +92,7 @@ internal static class Dialogs
         });
         var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(Heading(about ? "轻阅 Qingyue" : "留一点空间，给文字。", 25));
-        var subtitle = new TextBlock { Text = "0.4.0 · Windows 构建 2", Margin = new Thickness(0, 7, 0, 0) };
+        var subtitle = new TextBlock { Text = "0.5.0 · Windows 构建 1", Margin = new Thickness(0, 7, 0, 0) };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         title.Children.Add(subtitle); brand.Children.Add(title); panel.Children.Add(brand);
         panel.Children.Add(Card("从一份新文件开始",

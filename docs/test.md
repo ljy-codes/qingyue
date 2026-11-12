@@ -736,3 +736,55 @@ pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-contract.ps1
 ```
 
 本机安装验证目录为 `D:\Program File\Qingyue`，安装后检查启动、Markdown 图片、复制、搜索、主题、编辑/预览往返、安装登记和卸载入口。真实用户资料不参与彻底清理验收。
+
+## 2026-11-12｜Windows 0.5.0 构建 1
+
+本轮围绕阅读连续性和外部文件更新完成版本收口。阅读标签在外部文件更新后保留文档身份、
+编辑器、搜索焦点、选区、滚动位置和 Markdown 预览状态；重复段落的行尾锚点按原行起点恢复，
+避免跳到下一处同名段落。版本统一为产品 `0.5.0`、Windows 构建 `1`、文件版本 `0.5.0.1`。
+
+### 测试结果
+
+Release 构建 **0 警告、0 错误**，完整回归退出 **0**。本轮关键检查如下：
+
+| 检查 | 结果 |
+| --- | --- |
+| 文件安全 / 核心文本 | 25/25、46/46 |
+| Markdown / 时序图 / Mermaid 绘图 | 21/21、28/28、14/14 |
+| 阅读 / 图片布局 / 富文本复制 | 62/62、30/30、48/48 |
+| 外部文件更新 / 导航 / 草稿恢复 | 83/83、21/21、20/20 |
+| 阅读体验 / 文本位置索引 | 19/19、5/5 |
+| WPF 回归 | 169 项通过 |
+| 阅读指针映射审计 | 0 failures |
+| 安装与默认保留卸载 | 23/23 |
+| 彻底卸载清理 | 10/10 |
+| 安装目录选择 | 10/10 |
+| 安装器主题与单一进度条 | 19/19 |
+
+执行命令：
+
+```powershell
+pwsh -NoProfile -File 开发空间/Windows/scripts/test.ps1 -Configuration Release
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer.ps1 -SkipBuild -NoGui
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-directory.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-purge.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/test-installer-theme.ps1
+```
+
+安装器测试在允许写入当前用户注册表的权限下执行。受限执行环境曾因禁止写入 `HKCU`
+返回注册表错误 54；该结果属于环境限制，提升权限复验后全部通过。
+
+### 交付产物
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.5.0-Windows构建1-x64-setup.exe` | 43,733,084 字节 | `3D1D61D15B8AF61BF6E9B5D9DC5168A8C49D5A899D7065EA69EE385A92A4A1DB` |
+| `交付产品/轻阅-0.5.0-Windows构建1-x64.zip` | 62,242,043 字节 | `51C4F2C51751A6E3328AACE8140887E18E145762B0515DB0523148ED04440793` |
+| 自包含发布目录 | 264 文件，139,093,603 字节 | — |
+
+正式安装包已在本机原位置 `D:\Program File\Qingyue` 完成覆盖安装，安装器退出码为 `0`。
+已核对 `Qingyue.exe` 文件版本 `0.5.0.1`、产品登记 `0.5.0 (Windows 构建 1)`、
+卸载入口和安装位置；用户资料目录未参与清理。
+
+本轮新增和修复文件包括版本配置、关于窗口版本来源、文本锚点映射回归及完整测试脚本。
+没有数据库、Redis、MQ 或外部服务变更，也没有改变用户资料格式。

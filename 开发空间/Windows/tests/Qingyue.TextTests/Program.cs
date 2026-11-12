@@ -536,6 +536,15 @@ var tests = new List<(string Name, Action Run)>
         Check(newText.IndexOf("目标段落", StringComparison.Ordinal) == mapped,
             "外部前置插入后锚点跟随原段落");
         Check(TextAnchorMapper.Map(oldText, "短文", 999) == "短文".Length, "映射结果限制在新文本长度");
+    }),
+    ("anchor mapping keeps repeated line occurrence", () =>
+    {
+        const string line = "正文 **中文** text";
+        string oldText = "# Old title\n\n" + string.Join("\n\n", Enumerable.Repeat(line, 80));
+        string newText = oldText.Replace("Old", "New", StringComparison.Ordinal);
+        int anchor = oldText.IndexOf(line, StringComparison.Ordinal) + line.Length - 1;
+        Check(TextAnchorMapper.Map(oldText, newText, anchor) == anchor,
+            "重复段落行尾映射不能跳到下一处同名段落");
     })
 };
 

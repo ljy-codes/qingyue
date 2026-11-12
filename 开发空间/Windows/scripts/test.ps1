@@ -2,6 +2,20 @@ param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
 $windowsRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot 'build.ps1') -Configuration $Configuration
+$versionSource = Get-Content -LiteralPath (Join-Path $windowsRoot 'installer/version.nsh') -Raw
+$expectedProductVersion = [regex]::Match($versionSource, '!define VERSION "([^"]+)"').Groups[1].Value
+$expectedFileVersion = [regex]::Match($versionSource, '!define BUILD_VERSION "([^"]+)"').Groups[1].Value
+$expectedWindowsBuild = [regex]::Match($versionSource, '!define WINDOWS_BUILD "([^"]+)"').Groups[1].Value
+$builtExe = Join-Path $windowsRoot "src/Qingyue.Windows/bin/$Configuration/net10.0-windows/Qingyue.exe"
+if (-not (Test-Path -LiteralPath $builtExe)) { throw "构建产物不存在：$builtExe" }
+$builtVersion = (Get-Item -LiteralPath $builtExe).VersionInfo.FileVersion
+if ($builtVersion -ne $expectedFileVersion) {
+    throw "文件版本不正确：期望 $expectedFileVersion，实际 $builtVersion"
+}
+if (-not $expectedProductVersion -or -not $expectedWindowsBuild) {
+    throw '版本配置不完整。'
+}
+Write-Output "版本检查通过：产品 $expectedProductVersion · Windows 构建 $expectedWindowsBuild · 文件 $builtVersion"
 foreach ($testName in @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.UITests', 'Qingyue.EditingTests', 'Qingyue.MarkdownTests', 'Qingyue.SequenceTests', 'Qingyue.MermaidViewTests', 'Qingyue.ReadingTests', 'Qingyue.ImageTests', 'Qingyue.ClipboardTests', 'Qingyue.InstanceTests', 'Qingyue.ExternalChangesTests', 'Qingyue.NavigationTests', 'Qingyue.RecoveryTests', 'Qingyue.ReaderExperienceTests')) {
     $framework = if ($testName -in @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.SequenceTests')) { 'net10.0' } else { 'net10.0-windows' }
     $testPath = if ($testName -eq 'Qingyue.RecoveryTests') {

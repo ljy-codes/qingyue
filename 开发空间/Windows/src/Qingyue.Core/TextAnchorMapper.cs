@@ -17,7 +17,11 @@ public static class TextAnchorMapper
         string line = oldText[lineStart..lineEnd];
         if (line.Length > 0)
         {
-            int occurrence = FindClosestLine(newText, line, anchor, oldText.Length);
+            // Repeated lines are common in Markdown/TXT. Match the original
+            // line by its start, then restore the offset within that line.
+            // Using the anchor itself makes a line-end anchor closer to the
+            // next repeated line and moves a selection to the wrong paragraph.
+            int occurrence = FindClosestLine(newText, line, lineStart, oldText.Length);
             if (occurrence >= 0) return Math.Clamp(occurrence + Math.Min(anchor - lineStart, line.Length), 0, newText.Length);
         }
 
