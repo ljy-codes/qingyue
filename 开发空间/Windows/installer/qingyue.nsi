@@ -246,12 +246,15 @@ Section "轻阅" SEC_MAIN
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoModify" 1
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoRepair" 1
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "EstimatedSize" ${ESTIMATED_KB}
+  IfErrors installRegistryFailed
   !if "${REG_ROOT}" != "HKCU"
+    ClearErrors
     DeleteRegKey HKCU "${UNKEY}"
     DeleteRegKey HKCU "${REGKEY}"
     DeleteRegKey /ifempty HKCU "Software\${PRODUCT_ID}"
+    ClearErrors
   !endif
-  IfErrors installRegistryFailed
+  ClearErrors
   CreateShortcut "$SMPROGRAMS\${LINK_NAME}.lnk" "$INSTDIR\Qingyue.exe" "" "$INSTDIR\Qingyue.ico" 0
   ClearErrors
   ${If} $DesktopChoice == ${BST_CHECKED}

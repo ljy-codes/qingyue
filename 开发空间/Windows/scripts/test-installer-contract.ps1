@@ -41,6 +41,10 @@ Assert-Contract '正式安装使用系统级卸载登记并请求管理员权限
     $nsi -match '(?m)^\s*!define REG_ROOT HKLM\s*$' -and
     $nsi -match 'WriteRegStr \$\{REG_ROOT\} "\$\{UNKEY\}" "DisplayName"'
 )
+Assert-Contract '系统登记错误检查不被旧用户登记清理污染' (
+    $nsi -match '(?s)WriteRegDWORD \$\{REG_ROOT\} "\$\{UNKEY\}" "EstimatedSize".*?IfErrors installRegistryFailed.*?DeleteRegKey HKCU "\$\{UNKEY\}"' -and
+    $nsi -notmatch '(?s)DeleteRegKey HKCU "\$\{UNKEY\}".*?IfErrors installRegistryFailed'
+)
 Assert-Contract '卸载默认选择保留用户信息' (
     $nsi -match '(?m)^\s*StrCpy \$PurgeChoice \$\{BST_UNCHECKED\}\s*$'
 )
