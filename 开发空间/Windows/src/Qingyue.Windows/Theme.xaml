@@ -167,7 +167,7 @@
   <Style TargetType="Menu">
     <Setter Property="Background" Value="{DynamicResource PanelBrush}"/>
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
-    <Setter Property="Padding" Value="15,4"/>
+    <Setter Property="Padding" Value="10,1"/>
   </Style>
   <Style TargetType="MenuItem">
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
@@ -204,7 +204,7 @@
   <Style TargetType="TabItem">
     <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
     <Setter Property="Background" Value="{DynamicResource WindowBrush}"/>
-    <Setter Property="Padding" Value="14,8"/>
+    <Setter Property="Padding" Value="10,3"/>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TabItem">

@@ -39,6 +39,7 @@ public partial class MainWindow : Window
         workspace = new WorkspaceStore(dataDirectory);
         bookmarks = new BookmarkStore(dataDirectory);
         InitializeComponent();
+        SourceInitialized += (_, _) => ApplyNativeTitleBarTheme(settings.Dark);
         InitializeEditingInteractions();
         InitializeMarkdownPreview();
         InitializeExternalChanges();

@@ -16,8 +16,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.8.0-Windows构建1-x64.zip`
-及 `交付产品/轻阅-0.8.0-Windows构建1-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.8.0-Windows构建3-x64.zip`
+及 `交付产品/轻阅-0.8.0-Windows构建3-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -47,6 +47,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 手工验收范围与结果见仓库 `docs/test.md`，用户操作见 `操作指导/Windows使用说明.md`。
 
 安装器使用自定义 NSIS 对话框和原生深色控件，提供可选路径、快捷方式、系统卸载入口。
+正式安装以管理员权限写入 `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall`，
+这样 Windows 设置的“已安装的应用”可以稳定发现轻阅；隔离测试包仍使用 HKCU，不触发 UAC。
 默认卸载保留用户数据；彻底清理需明确选择和再次确认，仅作用于轻阅默认数据目录。
 程序文件按构建生成的清单删除，保留未知文件。静默卸载永远保留用户数据。
 

@@ -39,6 +39,12 @@ internal static class Program
                 window.Show();
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                var brandHeader = (FrameworkElement)window.FindName("BrandHeader");
+                var tabRow = (FrameworkElement)window.FindName("TabRow");
+                var editOnlyTools = (FrameworkElement)window.FindName("EditOnlyTools");
+                double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + editOnlyTools.ActualHeight;
+                Check(topChromeHeight <= 120,
+                    $"顶部工具区压缩到正文优先高度（实际 {topChromeHeight:0} 像素）");
                 Build2Checks.CheckEntryPoints(window, Check);
                 var first = window.CurrentTab!;
                 first.Editor.Text = "文档一 😀\n独立撤销";

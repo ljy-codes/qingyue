@@ -2,7 +2,13 @@
 Unicode true
 ManifestDPIAware true
 ManifestDPIAwareness PerMonitorV2
-RequestExecutionLevel user
+!ifndef REG_ROOT
+  !define REG_ROOT HKLM
+!endif
+!ifndef EXECUTION_LEVEL
+  !define EXECUTION_LEVEL admin
+!endif
+RequestExecutionLevel ${EXECUTION_LEVEL}
 !ifndef COMPRESSION_MODE
   !define COMPRESSION_MODE "Solid32"
 !endif
@@ -52,7 +58,7 @@ Caption "轻阅 · 安装向导"
 UninstallCaption "轻阅 · 卸载向导"
 OutFile "${OUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\${PRODUCT_ID}"
-InstallDirRegKey HKCU "${REGKEY}" "InstallLocation"
+InstallDirRegKey ${REG_ROOT} "${REGKEY}" "InstallLocation"
 BrandingText "轻阅 · 本机文本阅读与编辑"
 SetFont "Microsoft YaHei UI" 9
 InstallColors E4EDF7 0C121E
@@ -102,7 +108,7 @@ Function .onInit
   ${If} $Result != ""
     StrCpy $INSTDIR $Result
   ${Else}
-    ReadRegStr $OldLocation HKCU "${REGKEY}" "InstallLocation"
+    ReadRegStr $OldLocation ${REG_ROOT} "${REGKEY}" "InstallLocation"
     ${If} $OldLocation != ""
       StrCpy $INSTDIR $OldLocation
     ${EndIf}
@@ -131,7 +137,7 @@ Function un.onGUIInit
 FunctionEnd
 
 Function LocationPage
-  !insertmacro Header "QINGYUE  /  安装设置" "选择位置，开始轻阅。" "${VERSION} · Windows 构建 ${WINDOWS_BUILD} · 无需管理员权限"
+  !insertmacro Header "QINGYUE  /  安装设置" "选择位置，开始轻阅。" "${VERSION} · Windows 构建 ${WINDOWS_BUILD} · 需要管理员权限完成系统登记"
   !insertmacro NewPage
   !insertmacro Label 0 15 "安装文件夹"
   ${NSD_CreateText} 0 21u 250u 23u "$INSTDIR"
@@ -172,7 +178,7 @@ Function CheckInstall
   ${EndIf}
   QingyueSafety::NormalizePath /NOUNLOAD "$INSTDIR"
   Pop $INSTDIR
-  ReadRegStr $OldLocation HKCU "${REGKEY}" "InstallLocation"
+  ReadRegStr $OldLocation ${REG_ROOT} "${REGKEY}" "InstallLocation"
   ${If} $OldLocation != ""
     QingyueSafety::NormalizePath /NOUNLOAD "$OldLocation"
     Pop $OldLocation
@@ -182,7 +188,7 @@ Function CheckInstall
       Abort
     ${EndIf}
   ${EndIf}
-  ReadRegStr $OldVersion HKCU "${REGKEY}" "BuildVersion"
+  ReadRegStr $OldVersion ${REG_ROOT} "${REGKEY}" "BuildVersion"
   ${If} $OldVersion != ""
     ${VersionCompare} "$OldVersion" "${BUILD_VERSION}" $Result
     ${If} $Result == 1
@@ -228,18 +234,23 @@ Section "轻阅" SEC_MAIN
   IfErrors installMarkerCloseFailed
   QingyueTheme::Progress /NOUNLOAD "98" "正在登记应用与创建快捷方式"
   ClearErrors
-  WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${REGKEY}" "BuildVersion" "${BUILD_VERSION}"
-  WriteRegStr HKCU "${UNKEY}" "DisplayName" "轻阅 · Qingyue"
-  WriteRegStr HKCU "${UNKEY}" "DisplayVersion" "${VERSION} (Windows 构建 ${WINDOWS_BUILD})"
-  WriteRegStr HKCU "${UNKEY}" "Publisher" "轻阅"
-  WriteRegStr HKCU "${UNKEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNKEY}" "DisplayIcon" "$INSTDIR\Qingyue.ico,0"
-  WriteRegStr HKCU "${UNKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-  WriteRegStr HKCU "${UNKEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
-  WriteRegDWORD HKCU "${UNKEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${UNKEY}" "NoRepair" 1
-  WriteRegDWORD HKCU "${UNKEY}" "EstimatedSize" ${ESTIMATED_KB}
+  WriteRegStr ${REG_ROOT} "${REGKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr ${REG_ROOT} "${REGKEY}" "BuildVersion" "${BUILD_VERSION}"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "DisplayName" "轻阅 · Qingyue"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "DisplayVersion" "${VERSION} (Windows 构建 ${WINDOWS_BUILD})"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "Publisher" "轻阅"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "DisplayIcon" "$INSTDIR\Qingyue.ico,0"
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "UninstallString" '"$INSTDIR\Uninstall.exe"'
+  WriteRegStr ${REG_ROOT} "${UNKEY}" "QuietUninstallString" '"$INSTDIR\Uninstall.exe" /S'
+  WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoModify" 1
+  WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoRepair" 1
+  WriteRegDWORD ${REG_ROOT} "${UNKEY}" "EstimatedSize" ${ESTIMATED_KB}
+  !if "${REG_ROOT}" != "HKCU"
+    DeleteRegKey HKCU "${UNKEY}"
+    DeleteRegKey HKCU "${REGKEY}"
+    DeleteRegKey /ifempty HKCU "Software\${PRODUCT_ID}"
+  !endif
   IfErrors installRegistryFailed
   CreateShortcut "$SMPROGRAMS\${LINK_NAME}.lnk" "$INSTDIR\Qingyue.exe" "" "$INSTDIR\Qingyue.ico" 0
   ClearErrors

@@ -129,7 +129,15 @@ $arguments = @('/INPUTCHARSET','UTF8','/V3',"/DBUILD_DIR=$build","/DICON_FILE=$i
     "/DINSTALL_FILES=$installFile","/DREMOVE_FILES=$removeFile","/DPREFLIGHT_FILES=$preflightFile","/DOUT_FILE=$outfile",
     "/DESTIMATED_KB=$([math]::Ceiling($payloadBytes / 1024))",
     "/DESTIMATED_MB=$([math]::Ceiling($payloadBytes / 1MB))","/DCOMPRESSION_MODE=$CompressionMode")
-if ($TestBuild) { $arguments += @('/DPRODUCT_ID=QingyueInstallerTest','/DDATA_LEAF=QingyueInstallerTest','/DLINK_NAME=轻阅安装器测试') }
+if ($TestBuild) {
+    $arguments += @(
+        '/DPRODUCT_ID=QingyueInstallerTest',
+        '/DDATA_LEAF=QingyueInstallerTest',
+        '/DLINK_NAME=轻阅安装器测试',
+        '/DREG_ROOT=HKCU',
+        '/DEXECUTION_LEVEL=user'
+    )
+}
 $arguments += Join-Path $source 'qingyue.nsi'
 $compileClock = [Diagnostics.Stopwatch]::StartNew()
 & $NsisPath @arguments

@@ -8,11 +8,11 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\Qingyue.ico</ApplicationIcon>
     <Version>0.8.0</Version>
-    <FileVersion>0.8.0.1</FileVersion>
+    <FileVersion>0.8.0.3</FileVersion>
     <AssemblyVersion>0.8.0.0</AssemblyVersion>
-    <InformationalVersion>0.8.0+windows-build.1</InformationalVersion>
+    <InformationalVersion>0.8.0+windows-build.3</InformationalVersion>
     <Product>轻阅 Qingyue</Product>
-    <Description>轻量的本地文本阅读与编辑工具 · Windows 0.8.0 构建 1</Description>
+    <Description>轻量的本地文本阅读与编辑工具 · Windows 0.8.0 构建 3</Description>
     <Copyright>轻阅 · 本机文本阅读与编辑</Copyright>
   </PropertyGroup>
   <ItemGroup>

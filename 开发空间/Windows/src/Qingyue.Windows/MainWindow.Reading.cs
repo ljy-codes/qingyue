@@ -230,6 +230,7 @@ public partial class MainWindow
         Resources[SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
         Resources[SystemColors.WindowBrushKey] = Resources["PanelBrush"];
         Resources[SystemColors.WindowTextBrushKey] = Resources["TextBrush"];
+        ApplyNativeTitleBarTheme(dark);
         var accents = new[] { "AccentTextBrush", "SyntaxKeyBrush", "SyntaxStringBrush", "SyntaxValueBrush", "SyntaxCommentBrush", "UnsavedBrush", "SavedBrush" };
         var accentColors = dark
             ? new[] { "#88C8FF", "#88C8FF", "#FFD096", "#74DEC7", "#BAC5BA", "#FFBE72", "#74D6AD" }

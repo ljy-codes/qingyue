@@ -36,6 +36,11 @@ Assert-Contract '安装卸载不额外拦截运行中的轻阅进程' (
     $nsi -notmatch 'QingyueSafety::IsBusy' -and
     $safety -notmatch 'IsBusy|CreateToolhelp32Snapshot|Qingyue\.exe'
 )
+Assert-Contract '正式安装使用系统级卸载登记并请求管理员权限' (
+    $nsi -match '(?m)^\s*RequestExecutionLevel \$\{EXECUTION_LEVEL\}\s*$' -and
+    $nsi -match '(?m)^\s*!define REG_ROOT HKLM\s*$' -and
+    $nsi -match 'WriteRegStr \$\{REG_ROOT\} "\$\{UNKEY\}" "DisplayName"'
+)
 Assert-Contract '卸载默认选择保留用户信息' (
     $nsi -match '(?m)^\s*StrCpy \$PurgeChoice \$\{BST_UNCHECKED\}\s*$'
 )

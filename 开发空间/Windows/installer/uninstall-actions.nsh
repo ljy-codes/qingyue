@@ -1,4 +1,7 @@
 ﻿; Shared production removal actions; the test harness supplies an isolated identity.
+!ifndef REG_ROOT
+  !define REG_ROOT HKCU
+!endif
 !macro QingyueRemoveActions
   ${If} $PurgeChoice == ${BST_CHECKED}
     QingyueSafety::PurgeInstall /NOUNLOAD "$INSTDIR" "$UserDataPath" "${PRODUCT_ID}"
@@ -31,6 +34,11 @@
     Delete "$INSTDIR\Uninstall.exe"
     RMDir "$INSTDIR"
   ${EndIf}
+  DeleteRegKey ${REG_ROOT} "${UNKEY}"
+  DeleteRegKey ${REG_ROOT} "${REGKEY}"
+  DeleteRegKey /ifempty ${REG_ROOT} "Software\${PRODUCT_ID}"
+  ; Remove the previous per-user registration so a system install cannot
+  ; leave a stale entry behind in the current user's app list.
   DeleteRegKey HKCU "${UNKEY}"
   DeleteRegKey HKCU "${REGKEY}"
   DeleteRegKey /ifempty HKCU "Software\${PRODUCT_ID}"
