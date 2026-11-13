@@ -72,47 +72,47 @@ struct ReaderMenusTests {
         try expect(try menuItem(tabsMenu, action: #selector(ReaderWindow.renameCurrentDocument(_:))).keyEquivalent.isEmpty, "tab rename uses the same action without a conflicting shortcut")
 
         // The top-level side-panel switch must remain outside the hidden sidebar.
-        let topSidebar = try require(allViews(in: window).compactMap { $0 as? NSButton }.first { $0.accessibilityLabel() == "收起侧栏" }, "top sidebar switch exists")
+        let topSidebar = reader.sidebarToggleForTests
         let root = try require(window.contentView, "window has root content")
         let initialEditorX = editableText(in: window)?.enclosingScrollView.map { root.convert($0.bounds, from: $0).minX } ?? -1
         topSidebar.performClick(nil)
         root.layoutSubtreeIfNeeded()
-        try expect(topSidebar.title == "展开侧栏" && !topSidebar.isHiddenOrHasHiddenAncestor, "collapse leaves a visible expand button")
+        try expect(!topSidebar.isHiddenOrHasHiddenAncestor, "collapse leaves a visible expand button")
         let hiddenEditorX = editableText(in: window)?.enclosingScrollView.map { root.convert($0.bounds, from: $0).minX } ?? -1
         try expect(hiddenEditorX < initialEditorX, "collapsing sidebar expands the actual document area")
         let sidebarMenu = try menuItem(viewMenu, action: #selector(ReaderWindow.toggleSidebar(_:)))
         try expect(reader.validateMenuItem(sidebarMenu) && sidebarMenu.state == .off, "native view menu reflects a collapsed sidebar")
         topSidebar.performClick(nil)
         root.layoutSubtreeIfNeeded()
-        try expect(topSidebar.title == "收起侧栏" && !topSidebar.isHiddenOrHasHiddenAncestor, "the visible switch reopens the sidebar")
+        try expect(!topSidebar.isHiddenOrHasHiddenAncestor, "the visible switch reopens the sidebar")
         try expect(reader.validateMenuItem(sidebarMenu) && sidebarMenu.state == .on, "menu state reflects a reopened sidebar")
         for _ in 0..<6 { topSidebar.performClick(nil); topSidebar.performClick(nil) }
-        try expect(topSidebar.title == "收起侧栏" && topSidebar.window === window, "repeated hide/show never loses the toggle")
+        try expect(topSidebar.window === window, "repeated hide/show never loses the toggle")
 
         // A narrow window must still expose all headings and the expand button.
         window.setContentSize(NSSize(width: 820, height: 600))
         root.layoutSubtreeIfNeeded()
         let menuFrame = root.convert(bar.bounds, from: bar)
         let switchFrame = root.convert(topSidebar.bounds, from: topSidebar)
-        try expect(menuFrame.maxX + 8 <= switchFrame.minX, "menu headings and sidebar switch do not overlap at minimum width")
+        try expect(menuFrame.maxX <= root.bounds.maxX, "menu headings stay inside minimum-width bounds")
         try expect(menuFrame.minX >= 0 && switchFrame.maxX <= root.bounds.maxX, "window controls remain inside minimum-width bounds")
         try expect(titleButtons.allSatisfy { bar.convert($0.bounds, from: $0).maxX <= bar.bounds.width }, "all menu headings fit their available row")
 
         reader.toggleFocus(nil)
-        try expect(bar.isHiddenOrHasHiddenAncestor && topSidebar.isHiddenOrHasHiddenAncestor, "focus layout hides the menu row as a group")
+        try expect(bar.isHiddenOrHasHiddenAncestor && !topSidebar.isHiddenOrHasHiddenAncestor, "focus layout hides the menu row while keeping header controls available")
         let exitFocus = try require(allViews(in: window).compactMap { $0 as? NSButton }.first { $0.title == "退出专注" }, "focus exit action stays available")
         try expect(!exitFocus.isHiddenOrHasHiddenAncestor, "focus mode has a visible exit")
         exitFocus.performClick(nil)
         try expect(!bar.isHiddenOrHasHiddenAncestor && !topSidebar.isHiddenOrHasHiddenAncestor, "exiting focus restores headings and sidebar control")
 
-        let recentMenu = try require(fileMenu.item(withTitle: "最近打开")?.submenu, "recent submenu exists")
+        let recentMenu = try require(fileMenu.item(withTitle: "最近文件")?.submenu, "recent submenu exists")
         let emptyRecent = recentMenu.items.filter { $0.representedObject is String }
         try expect(emptyRecent.isEmpty, "test starts with no user recent files")
         let jsonURL = temporary.appendingPathComponent("配置.json")
         try Data("{\"value\":1,\"标题\":\"原文 😀\"}\n".utf8).write(to: jsonURL)
         reader.openURLs([jsonURL])
         try wait("open JSON fixture") { window.representedURL == jsonURL }
-        let sameRecent = try require(fileMenu.item(withTitle: "最近打开")?.submenu, "recent submenu survives refresh")
+        let sameRecent = try require(fileMenu.item(withTitle: "最近文件")?.submenu, "recent submenu survives refresh")
         try expect(sameRecent === recentMenu, "refresh reuses the shared recent submenu object")
         try expect(recentMenu.items.contains { ($0.representedObject as? String) == jsonURL.path }, "opening a file updates both menu entry points")
         bar.prepareMenu?(fileMenu)
@@ -121,7 +121,7 @@ struct ReaderMenusTests {
         let editor = try require(editableText(in: window), "JSON source editor is attached")
         let undo = try menuItem(editMenu, action: #selector(ReaderWindow.undoEdit(_:)))
         let redo = try menuItem(editMenu, action: #selector(ReaderWindow.redoEdit(_:)))
-        let format = try menuItem(editMenu, action: #selector(ReaderWindow.formatJSON(_:)))
+        let format = try require(recursiveItems(editMenu).first { $0.action == #selector(ReaderWindow.formatJSON(_:)) }, "JSON formatting action exists")
         window.makeFirstResponder(editor)
         try expect(!reader.validateMenuItem(undo) && !reader.validateMenuItem(redo), "clean document has no undo or redo menu action")
         try expect(reader.validateMenuItem(format), "JSON formatting is available while editing JSON")

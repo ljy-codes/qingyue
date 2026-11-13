@@ -4,7 +4,7 @@
 
 A lightweight local text reader and editor for macOS and Windows.
 
-macOS 当前为 **0.1.0 · Mac 构建 5**，功能对齐基线为 Windows 0.3.0。下载：[Mac 构建 5 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)；[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.1.0 · Mac 构建 6**，界面与功能参照 Windows 0.3.0 主基线；Windows 最新分支已进入 0.8.0，后续能力按 Mac build 7+ 分阶段移植。下载：[Mac 构建 6 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)；[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
@@ -16,6 +16,12 @@ Markdown 默认全宽预览，支持本地与内嵌图片、50 万正文字符�
 `mermaid` 围栏支持离线时序图预览，支持范围及源码回退见 Windows 使用说明。
 本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)，操作差异见 [Windows 使用说明](操作指导/Windows使用说明.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
+
+## Mac 构建 6 的界面对齐
+
+Mac 主窗口改为与 Windows 0.3.0 相同的信息层级：窗口菜单、品牌操作栏、全宽标签、跨窗口搜索、左侧最近文件/目录、右侧上下文工具栏与正文、底部状态及类型/编码/换行选项。深浅主题使用同一组色值，常用按钮的位置、名称和显隐规则对齐。系统标题栏、Mac 快捷键和文件面板保留平台行为。
+
+界面执行与验收结果见 [Mac 构建 6 界面对齐](docs/Mac构建6界面对齐.md)。此前构建 5 的功能、图标与资源边界保持，Windows 工程不因此修改。
 
 ## Mac 构建 5 的功能对齐
 

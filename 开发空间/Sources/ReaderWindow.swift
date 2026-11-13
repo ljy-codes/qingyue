@@ -35,6 +35,7 @@ final class ReaderTab {
 }
 
 final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSSplitViewDelegate {
+    var sidebarToggleForTests: NSButton { sidebarToggleButton }
     private var tabs: [ReaderTab] = []
     private var current = 0
     private var changing = false
@@ -91,9 +92,21 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let sidebarMode = NSSegmentedControl(labels: ["目录", "最近"], trackingMode: .selectOne, target: nil, action: nil)
     private var outlineButtons: [(Int, ActionButton)] = []
     private var ruler: LineNumberRuler!
-    private let tools = NSStackView()
-    private let toolsContainer = NSView()
+    private let tools = WindowsFlowToolbar()
+    private let toolsContainer = ColorView()
+    private let tabRow = ColorView()
+    private let workspaceBody = NSView()
+    private let footer = ColorView()
+    private var clearRecentButton: ActionButton!
+    private var sidebarRecentButton: ActionButton!
+    private var sidebarOutlineButton: ActionButton!
+    private var toolbarCopyButton: ActionButton!
+    private var toolbarOptions: WindowsPopupButton!
+    private var returnPositionButton: ActionButton!
+    private let presentationHint = NSTextField(labelWithString: "")
     private let searchBar = NSStackView()
+    private let replaceBar = NSStackView()
+    private var replacementVisible = false
     private let searchContainer = NSView()
     private let searchOptionsRow = NSStackView()
     private let caseCheck = NSButton(checkboxWithTitle: "区分大小写", target: nil, action: nil)
@@ -117,9 +130,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let replaceField = NSTextField()
     private let statusLeft = NSTextField(labelWithString: "就绪")
     private let statusRight = NSTextField(labelWithString: "行 1，列 1")
-    private let kindPopup = NSPopUpButton()
-    private let codecPopup = NSPopUpButton()
-    private let endingPopup = NSPopUpButton()
+    private let kindPopup = WindowsPopupButton()
+    private let codecPopup = WindowsPopupButton()
+    private let endingPopup = WindowsPopupButton()
     private var sidebarWidth: NSLayoutConstraint!
     private var rulerWidth: NSLayoutConstraint!
     private var searchHeight: NSLayoutConstraint!
@@ -168,9 +181,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
 
     init(supportDirectory: URL? = nil) {
         supportOverride = supportDirectory
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 762), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         win.title = "轻阅"
-        win.minSize = NSSize(width: 820, height: 500)
+        win.minSize = NSSize(width: 820, height: 492)
         win.isReleasedWhenClosed = false
         win.tabbingMode = .disallowed
         super.init(window: win)
@@ -214,188 +227,130 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func buildInterface() {
         guard let window = window else { return }
         window.contentView = root
-        add(menuRow, to: root); add(windowMenuBar, to: menuRow)
+        func identify(_ view: NSView, _ name: String) { view.identifier = NSUserInterfaceItemIdentifier(name) }
+        identify(menuRow, "QingyueMenuRow"); identify(header, "QingyueHeader"); identify(tabRow, "QingyueTabRow")
+        identify(searchContainer, "QingyueSearchPanel"); identify(workspaceBody, "QingyueBody"); identify(sidebar, "QingyueSidebar")
+        identify(toolsContainer, "QingyueContextToolbar"); identify(footer, "QingyueFooter")
+        [menuRow, header, tabRow, searchContainer, workspaceBody, footer].forEach { add($0, to: root) }
+        add(windowMenuBar, to: menuRow)
         windowMenuBar.prepareMenu = { [weak self] _ in self?.refreshRecentMenu() }
-        sidebarToggleButton = button("收起侧栏", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
-        add(sidebarToggleButton, to: menuRow)
-        let shareActions = stack([
-            button("复制全文（含图片）") { [weak self] in self?.copyReadingFull(nil) },
-            button("导出 HTML") { [weak self] in self?.exportReadingHTML(nil) }
-        ], spacing: 6)
-        add(shareActions, to: menuRow)
-        add(header, to: root)
-        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
-        subtitle.font = .systemFont(ofSize: 11)
-        branding = NSStackView(views: [titleLabel, subtitle]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3
-        add(branding, to: header)
-        let open = button("打开", symbol: "folder", primary: true) { [weak self] in self?.openDocument(nil) }
-        let new = button("新建", symbol: "plus") { [weak self] in self?.newDocument(nil) }
-        let save = button("保存", symbol: "square.and.arrow.down") { [weak self] in _ = self?.saveCurrent() }
-        themeButton = button("明亮", symbol: "sun.max") { [weak self] in self?.toggleTheme(nil) }
-        readButton = button("阅读模式", symbol: "book") { [weak self] in self?.toggleReading(nil) }
-        let settings = button("设置") { [weak self] in self?.showPreferences(nil) }
+        sidebarToggleButton = button("", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
+        sidebarToggleButton.setAccessibilityLabel("显示或隐藏侧栏"); sidebarToggleButton.toolTip = "显示 / 隐藏侧栏 · ⌘B"
+        sidebarToggleButton.setAccessibilityIdentifier("QingyueSidebarToggle")
+        sidebarToggleButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        add(sidebarToggleButton, to: header)
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold); subtitle.font = .systemFont(ofSize: 11)
+        branding = NSStackView(views: [titleLabel, subtitle]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3; add(branding, to: header)
+        let open = button("打开文件") { [weak self] in self?.openDocument(nil) }
+        let save = button("保存") { [weak self] in _ = self?.saveCurrent() }
+        readButton = button("阅读模式", primary: true) { [weak self] in self?.toggleReading(nil) }
         focusButton = button("专注") { [weak self] in self?.toggleFocus(nil) }
-        focusHiddenActions = [new, open, save, themeButton, settings]
-        let headerActions = stack([new, open, save, readButton, focusButton, themeButton, settings], spacing: 7)
-        add(headerActions, to: header)
-
-        sidebar.radius = 10; add(sidebar, to: root)
-        sideTitle.font = .systemFont(ofSize: 12, weight: .semibold)
-        add(sideTitle, to: sidebar)
-        sidebarMode.selectedSegment = 1; sidebarMode.target = self; sidebarMode.action = #selector(sidebarModeChanged)
-        sidebarMode.font = .systemFont(ofSize: 11); add(sidebarMode, to: sidebar)
-        let recentScroll = NSScrollView(); recentScroll.contentView = FlippedClipView(); recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true; recentScroll.autohidesScrollers = true
-        recentStack.orientation = .vertical; recentStack.alignment = .leading; recentStack.spacing = 7; recentStack.translatesAutoresizingMaskIntoConstraints = false
-        recentScroll.documentView = recentStack; add(recentScroll, to: sidebar)
-        sideNote.font = .systemFont(ofSize: 11); add(sideNote, to: sidebar)
-        let sideBottom = button("收起侧栏", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
-        add(sideBottom, to: sidebar)
-
-        canvas.radius = 10; add(canvas, to: root)
-        tabsStack.orientation = .horizontal; tabsStack.alignment = .centerY; tabsStack.spacing = 4
-        tabsStack.translatesAutoresizingMaskIntoConstraints = false
+        let headerActions = stack([open, save, readButton, focusButton], spacing: 8); add(headerActions, to: header)
+        // Theme/settings remain in their menu locations, as in Windows.
+        themeButton = button("切换明暗主题") { [weak self] in self?.toggleTheme(nil) }
+        tabsStack.orientation = .horizontal; tabsStack.alignment = .centerY; tabsStack.spacing = 3; tabsStack.translatesAutoresizingMaskIntoConstraints = false
         tabsStack.reorder = { [weak self] id, insertion in self?.reorderTab(id: id, insertion: insertion) }
-        tabScroll.drawsBackground = false; tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.scrollerStyle = .overlay
-        tabScroll.documentView = tabsStack; add(tabScroll, to: canvas)
+        tabScroll.drawsBackground = false; tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.scrollerStyle = .overlay; tabScroll.documentView = tabsStack; add(tabScroll, to: tabRow)
+        let plus = button("+") { [weak self] in self?.newDocument(nil) }; plus.font = .systemFont(ofSize: 20); plus.setAccessibilityLabel("新建文档"); add(plus, to: tabRow)
+        let tabGesture = NSClickGestureRecognizer(target: self, action: #selector(tabBlankDoubleClick(_:))); tabGesture.numberOfClicksRequired = 2; tabScroll.addGestureRecognizer(tabGesture)
 
-        kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged)
-        kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文件类型")
-        formatButton = button("格式化") { [weak self] in self?.formatDocument(nil) }
-        splitButton = button("MD分屏") { [weak self] in self?.toggleSplitPreview(nil) }
-        structureButton = button("JSON结构") { [weak self] in self?.showJSONStructure(nil) }
-        wrapButton = button("自动换行 ✓") { [weak self] in self?.toggleWrap(nil) }
-        let less = button("A−") { [weak self] in self?.changeFont(-1) }
-        let more = button("A+") { [weak self] in self?.changeFont(1) }
-        let find = button("查找", symbol: "magnifyingglass") { [weak self] in self?.showFind(nil) }
-        let outline = button("目录") { [weak self] in self?.showOutline(nil) }
-        tools.orientation = .horizontal; tools.alignment = .centerY; tools.spacing = 7
-        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        [kindPopup, formatButton, splitButton, structureButton, spacer, less, more, wrapButton, outline, find].forEach { tools.addArrangedSubview($0) }
-        add(toolsContainer, to: canvas); add(tools, to: toolsContainer)
-
-        searchField.placeholderString = "查找文本"; searchField.font = .systemFont(ofSize: 12); searchField.setAccessibilityLabel("查找文本")
-        searchField.target = self; searchField.action = #selector(findNext); searchField.delegate = self
-        replaceField.placeholderString = "替换为"; replaceField.font = .systemFont(ofSize: 12); replaceField.setAccessibilityLabel("替换为")
-        replaceField.delegate = self
-        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
-        replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
-        searchBar.orientation = .horizontal; searchBar.alignment = .centerY; searchBar.spacing = 6
-        replacementButtons = [button("替换") { [weak self] in self?.replaceOne(nil) }, button("全部") { [weak self] in self?.replaceAll(nil) }]
-        [searchField, replaceField,
-         button("上一个") { [weak self] in self?.find(backward: true) },
-         button("下一个") { [weak self] in self?.find(backward: false) },
-         replacementButtons[0], replacementButtons[1],
-         button("×") { [weak self] in self?.hideFind() }].forEach { searchBar.addArrangedSubview($0) }
-        add(searchContainer, to: canvas); add(searchBar, to: searchContainer); searchBar.isHidden = true
-        searchOptionsRow.orientation = .horizontal; searchOptionsRow.alignment = .centerY; searchOptionsRow.spacing = 12
-        for c in [caseCheck, regexCheck, wordCheck] { c.font = .systemFont(ofSize: 11); c.target = self; c.action = #selector(searchOptionsChanged) }
+        searchField.placeholderString = "输入查找内容"; searchField.font = .systemFont(ofSize: 13); searchField.setAccessibilityLabel("查找文本"); searchField.target = self; searchField.action = #selector(findNext); searchField.delegate = self
+        replaceField.placeholderString = "替换内容；正则捕获组使用 $1"; replaceField.font = .systemFont(ofSize: 13); replaceField.setAccessibilityLabel("替换为"); replaceField.delegate = self
+        for row in [searchBar, replaceBar, searchOptionsRow] { row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 8; add(row, to: searchContainer) }
+        let previous = button("上一个") { [weak self] in self?.find(backward: true) }
+        let next = button("下一个") { [weak self] in self?.find(backward: false) }
+        let close = button("关闭") { [weak self] in self?.hideFind() }; close.toolTip = "Esc"
+        [searchField, previous, next, close].forEach { searchBar.addArrangedSubview($0) }
+        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        replacementButtons = [button("替换") { [weak self] in self?.replaceOne(nil) }, button("全部替换") { [weak self] in self?.replaceAll(nil) }]
+        [replaceField, replacementButtons[0], replacementButtons[1]].forEach { replaceBar.addArrangedSubview($0) }; replaceField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for c in [caseCheck, regexCheck, wordCheck] { c.font = .systemFont(ofSize: 12); c.target = self; c.action = #selector(searchOptionsChanged) }
         findCounter.font = .systemFont(ofSize: 11); findCounter.lineBreakMode = .byTruncatingTail
         [caseCheck, regexCheck, wordCheck, findCounter].forEach { searchOptionsRow.addArrangedSubview($0) }
-        add(searchOptionsRow, to: searchContainer); searchOptionsRow.isHidden = true
+        searchContainer.isHidden = true; replaceBar.isHidden = true
+
+        add(sidebar, to: workspaceBody); add(canvas, to: workspaceBody)
+        let sideTabs = NSStackView(); sideTabs.orientation = .horizontal; sideTabs.spacing = 0
+        sidebarRecentButton = button("最近打开") { [weak self] in self?.setSidebarOutline(false) }
+        sidebarOutlineButton = button("文档目录") { [weak self] in self?.setSidebarOutline(true) }
+        [sidebarRecentButton!, sidebarOutlineButton!].forEach { b in b.controlHeight = 34; b.cornerRadius = 0; b.horizontalPadding = 10; sideTabs.addArrangedSubview(b) }; add(sideTabs, to: sidebar)
+        let recentScroll = NSScrollView(); recentScroll.contentView = FlippedClipView(); recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true; recentScroll.autohidesScrollers = true
+        recentStack.orientation = .vertical; recentStack.alignment = .leading; recentStack.spacing = 4; recentStack.translatesAutoresizingMaskIntoConstraints = false
+        recentScroll.documentView = recentStack; add(recentScroll, to: sidebar)
+        clearRecentButton = button("清除最近记录") { [weak self] in self?.clearRecent(nil) }; clearRecentButton.font = .systemFont(ofSize: 11); add(clearRecentButton, to: sidebar)
+        sideNote.stringValue = "留一点空间给阅读。\n⌘O 打开 · ⌘R 阅读"; sideNote.font = .systemFont(ofSize: 11); add(sideNote, to: sidebar)
+
+        add(toolsContainer, to: canvas); add(tools, to: toolsContainer)
+        formatButton = button("格式化", primary: true) { [weak self] in self?.formatDocument(nil) }
+        structureButton = button("JSON 结构") { [weak self] in self?.showJSONStructure(nil) }
+        splitButton = button("分屏编辑") { [weak self] in self?.toggleSplitPreview(nil) }
+        toolbarCopyButton = button("复制全文（含图片）") { [weak self] in self?.copyReadingFull(nil) }
+        toolbarOptions = WindowsPopupButton(frame: .zero, pullsDown: true); toolbarOptions.font = .systemFont(ofSize: 12); toolbarOptions.setAccessibilityLabel("复制 / 导出")
+        let options = NSMenu(); options.autoenablesItems = true
+        options.addItem(NSMenuItem(title: "复制 / 导出 ▾", action: nil, keyEquivalent: ""))
+        for (title, action) in [("复制全文纯文本", #selector(copyReadingPlain(_:))), ("复制 Markdown 源文", #selector(copyMarkdownSource(_:))), ("复制当前代码块", #selector(copyCodeBlock(_:))), ("复制当前表格", #selector(copyTableBlock(_:))), ("导出 HTML（含图片）…", #selector(exportReadingHTML(_:)))] { let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; options.addItem(i) }
+        toolbarOptions.menu = options
+        returnPositionButton = button("返回位置") { [weak self] in self?.returnReadingPosition(nil) }; returnPositionButton.toolTip = "返回目录跳转前的阅读位置 · ⌥←"
+        presentationHint.font = .systemFont(ofSize: 11); presentationHint.lineBreakMode = .byTruncatingTail
+        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, returnPositionButton!, presentationHint].forEach { tools.addArrangedSubview($0) }
+        // Retain legacy actions only through menus, rather than scattering controls.
+        wrapButton = button("自动折行") { [weak self] in self?.toggleWrap(nil) }
+        kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged); kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文档语言")
+        codecPopup.addItems(withTitles: TextCodec.allCases.map { $0.label }); codecPopup.target = self; codecPopup.action = #selector(codecChanged); codecPopup.font = .systemFont(ofSize: 11); codecPopup.setAccessibilityLabel("保存编码")
+        endingPopup.addItems(withTitles: ["LF · Unix / macOS", "CRLF · Windows", "CR · 旧版 Mac", "混合换行"]); endingPopup.target = self; endingPopup.action = #selector(endingChanged); endingPopup.font = .systemFont(ofSize: 11); endingPopup.setAccessibilityLabel("文件换行方式")
+        [statusLeft, statusRight, kindPopup, codecPopup, endingPopup].forEach { add($0, to: footer) }
+        statusLeft.font = .systemFont(ofSize: 11); statusLeft.lineBreakMode = .byTruncatingMiddle; statusLeft.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusRight.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
 
         editor.isRichText = false; editor.importsGraphics = false; editor.allowsUndo = true
-        editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false
-        editor.isAutomaticTextReplacementEnabled = false; editor.isAutomaticSpellingCorrectionEnabled = false
-        editor.isAutomaticLinkDetectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false
-        editor.isAutomaticDataDetectionEnabled = false
-        editor.isGrammarCheckingEnabled = false; editor.usesFindBar = false
-        editor.textContainerInset = NSSize(width: 18, height: 20)
-        editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false
-        editor.autoresizingMask = [.width]
-        editor.minSize = .zero; editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区")
-        editor.cancelHandler = { [weak self] in self?.cancelFind() }
-        editor.filesDropped = { [weak self] urls in self?.openURLs(urls) }
-        editor.registerForDraggedTypes([.fileURL])
-        editorScroll.hasVerticalScroller = true; editorScroll.hasHorizontalScroller = false; editorScroll.autohidesScrollers = true
-        editorScroll.borderType = .noBorder; editorScroll.documentView = editor
-        editorScroll.contentView.postsBoundsChangedNotifications = true
-        ruler = LineNumberRuler(editor: editor, scroll: editorScroll)
-        // Keep the gutter outside the scroll view; native overlay rulers use a
-        // negative clip origin that conflicts with restoring text scroll positions.
-        add(ruler, to: canvas)
-        documentSplit.isVertical = true; documentSplit.dividerStyle = .thin; documentSplit.delegate = self
-        documentSplit.addSubview(editorScroll); documentSplit.addSubview(previewScroll)
-        editorScroll.translatesAutoresizingMaskIntoConstraints = true
-        previewScroll.translatesAutoresizingMaskIntoConstraints = true
-        add(documentSplit, to: canvas)
-        previewScroll.hasVerticalScroller = true; previewScroll.hasHorizontalScroller = false; previewScroll.autohidesScrollers = true
-        previewScroll.documentView = preview; previewScroll.contentView.postsBoundsChangedNotifications = true
-        preview.copyReading = { [weak self] range in self?.copyReadingRange(range) }
-        preview.menuBuilder = { [weak self] offset in self?.readingContextMenu(offset: offset) ?? NSMenu() }
-        preview.openAttachment = { [weak self] attachment in self?.showAttachment(attachment) }
-        let tabGesture = NSClickGestureRecognizer(target: self, action: #selector(tabBlankDoubleClick(_:))); tabGesture.numberOfClicksRequired = 2; tabScroll.addGestureRecognizer(tabGesture)
-        preview.isEditable = false; preview.isSelectable = true; preview.isRichText = true
-        preview.textContainerInset = NSSize(width: 32, height: 26); preview.autoresizingMask = [.width]
-        preview.isVerticallyResizable = true; preview.setAccessibilityLabel("阅读区")
-        preview.delegate = self
-        preview.textContainer?.widthTracksTextView = true
-        add(statusLeft, to: root); add(statusRight, to: root)
-        statusLeft.font = .systemFont(ofSize: 11); statusLeft.lineBreakMode = .byTruncatingMiddle
-        statusLeft.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        statusRight.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-        codecPopup.addItems(withTitles: TextCodec.allCases.map { $0.label }); codecPopup.font = .systemFont(ofSize: 10)
-        codecPopup.target = self; codecPopup.action = #selector(codecChanged); codecPopup.setAccessibilityLabel("保存编码")
-        endingPopup.addItems(withTitles: ["LF", "CRLF", "CR", "混合"]); endingPopup.font = .systemFont(ofSize: 10)
-        endingPopup.target = self; endingPopup.action = #selector(endingChanged); endingPopup.setAccessibilityLabel("换行符")
-        add(codecPopup, to: root); add(endingPopup, to: root)
-        sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 170)
-        rulerWidth = ruler.widthAnchor.constraint(equalToConstant: showLineNumbers ? 48 : 0)
-        ruler.isHidden = !showLineNumbers
-        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0)
-        tabsHeight = tabScroll.heightAnchor.constraint(equalToConstant: 39)
-        toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 36)
-        headerHeight = header.heightAnchor.constraint(equalToConstant: 54)
-        menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 34)
-        canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 12)
-        canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16)
-        statusNormalTrailing = statusRight.trailingAnchor.constraint(equalTo: codecPopup.leadingAnchor, constant: -12)
-        statusReadingTrailing = statusRight.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20)
+        editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false; editor.isAutomaticSpellingCorrectionEnabled = false; editor.isAutomaticLinkDetectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false; editor.isAutomaticDataDetectionEnabled = false; editor.isGrammarCheckingEnabled = false; editor.usesFindBar = false
+        editor.textContainerInset = NSSize(width: 18, height: 20); editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.minSize = .zero; editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区"); editor.cancelHandler = { [weak self] in self?.cancelFind() }; editor.filesDropped = { [weak self] in self?.openURLs($0) }; editor.registerForDraggedTypes([.fileURL])
+        editorScroll.hasVerticalScroller = true; editorScroll.hasHorizontalScroller = false; editorScroll.autohidesScrollers = true; editorScroll.borderType = .noBorder; editorScroll.documentView = editor; editorScroll.contentView.postsBoundsChangedNotifications = true
+        ruler = LineNumberRuler(editor: editor, scroll: editorScroll); add(ruler, to: canvas)
+        documentSplit.isVertical = true; documentSplit.dividerStyle = .thin; documentSplit.delegate = self; documentSplit.addSubview(editorScroll); documentSplit.addSubview(previewScroll); editorScroll.translatesAutoresizingMaskIntoConstraints = true; previewScroll.translatesAutoresizingMaskIntoConstraints = true; add(documentSplit, to: canvas)
+        previewScroll.hasVerticalScroller = true; previewScroll.autohidesScrollers = true; previewScroll.documentView = preview; previewScroll.contentView.postsBoundsChangedNotifications = true
+        preview.copyReading = { [weak self] in self?.copyReadingRange($0) }; preview.menuBuilder = { [weak self] in self?.readingContextMenu(offset: $0) ?? NSMenu() }; preview.openAttachment = { [weak self] in self?.showAttachment($0) }
+        preview.isEditable = false; preview.isSelectable = true; preview.isRichText = true; preview.textContainerInset = NSSize(width: 32, height: 26); preview.autoresizingMask = [.width]; preview.isVerticallyResizable = true; preview.setAccessibilityLabel("阅读区"); preview.delegate = self; preview.textContainer?.widthTracksTextView = true
+        sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 218); rulerWidth = ruler.widthAnchor.constraint(equalToConstant: showLineNumbers ? 48 : 0)
+        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0); tabsHeight = tabRow.heightAnchor.constraint(equalToConstant: 44); toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 49); headerHeight = header.heightAnchor.constraint(equalToConstant: 78); menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 30)
+        canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor); canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: workspaceBody.leadingAnchor)
+        // Legacy footer trailing constraints remain inactive; footer has one shared layout.
+        statusNormalTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
+        statusReadingTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
         NSLayoutConstraint.activate([
-            menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            menuRow.topAnchor.constraint(equalTo: root.topAnchor, constant: 5), menuRowHeight,
-            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor), windowMenuBar.trailingAnchor.constraint(lessThanOrEqualTo: shareActions.leadingAnchor, constant: -12),
-            shareActions.trailingAnchor.constraint(equalTo: sidebarToggleButton.leadingAnchor, constant: -12), shareActions.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor),
-            windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 30),
-            sidebarToggleButton.trailingAnchor.constraint(equalTo: menuRow.trailingAnchor), sidebarToggleButton.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), sidebarToggleButton.widthAnchor.constraint(equalToConstant: 104),
-            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22), header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            header.topAnchor.constraint(equalTo: menuRow.bottomAnchor, constant: 10), headerHeight,
-            branding.leadingAnchor.constraint(equalTo: header.leadingAnchor), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), sidebar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14), sidebarWidth,
-            sidebar.bottomAnchor.constraint(equalTo: statusLeft.topAnchor, constant: -14),
-            sideTitle.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideTitle.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 16),
-            sidebarMode.topAnchor.constraint(equalTo: sideTitle.bottomAnchor, constant: 8), sidebarMode.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 10), sidebarMode.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -10),
-            recentScroll.topAnchor.constraint(equalTo: sidebarMode.bottomAnchor, constant: 10), recentScroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8),
-            recentScroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8), recentScroll.bottomAnchor.constraint(equalTo: sideNote.topAnchor, constant: -16),
-            recentStack.leadingAnchor.constraint(equalTo: recentScroll.contentView.leadingAnchor), recentStack.topAnchor.constraint(equalTo: recentScroll.contentView.topAnchor),
-            recentStack.widthAnchor.constraint(equalTo: recentScroll.contentView.widthAnchor),
-            sideNote.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideNote.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8),
-            sideNote.bottomAnchor.constraint(equalTo: sideBottom.topAnchor, constant: -14), sideBottom.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8), sideBottom.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8),
-            sideBottom.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -10),
-            canvasInsetLeading, canvas.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            canvas.topAnchor.constraint(equalTo: sidebar.topAnchor), canvas.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-            tabScroll.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 8), tabScroll.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 10),
-            tabScroll.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -10), tabsHeight,
-            tabsStack.leadingAnchor.constraint(equalTo: tabScroll.contentView.leadingAnchor), tabsStack.topAnchor.constraint(equalTo: tabScroll.contentView.topAnchor), tabsStack.heightAnchor.constraint(equalToConstant: 32),
-            toolsContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 12), toolsContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -12),
-            toolsContainer.topAnchor.constraint(equalTo: tabScroll.bottomAnchor, constant: 4), toolsHeight,
-            tools.leadingAnchor.constraint(equalTo: toolsContainer.leadingAnchor), tools.trailingAnchor.constraint(equalTo: toolsContainer.trailingAnchor),
-            tools.centerYAnchor.constraint(equalTo: toolsContainer.centerYAnchor), tools.heightAnchor.constraint(equalToConstant: 36),
-            searchContainer.topAnchor.constraint(equalTo: toolsContainer.bottomAnchor, constant: 5), searchContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 12),
-            searchContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -12), searchHeight,
-            searchBar.topAnchor.constraint(equalTo: searchContainer.topAnchor, constant: 2), searchBar.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor),
-            searchBar.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor), searchBar.heightAnchor.constraint(equalToConstant: 32),
-            searchOptionsRow.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor), searchOptionsRow.trailingAnchor.constraint(lessThanOrEqualTo: searchContainer.trailingAnchor),
-            searchOptionsRow.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 3), searchOptionsRow.heightAnchor.constraint(equalToConstant: 24),
-            ruler.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 1), ruler.topAnchor.constraint(equalTo: documentSplit.topAnchor), ruler.bottomAnchor.constraint(equalTo: documentSplit.bottomAnchor), rulerWidth,
-            documentSplit.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 6), documentSplit.leadingAnchor.constraint(equalTo: ruler.trailingAnchor),
-            documentSplit.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -1), documentSplit.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -1),
-            statusLeft.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22), statusLeft.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), statusLeft.heightAnchor.constraint(equalToConstant: 18),
-            statusLeft.trailingAnchor.constraint(lessThanOrEqualTo: statusRight.leadingAnchor, constant: -12),
-            statusNormalTrailing, statusRight.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor),
-            codecPopup.trailingAnchor.constraint(equalTo: endingPopup.leadingAnchor, constant: -8), codecPopup.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor), codecPopup.widthAnchor.constraint(equalToConstant: 124),
-            endingPopup.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), endingPopup.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor), endingPopup.widthAnchor.constraint(equalToConstant: 74)
+            menuRow.topAnchor.constraint(equalTo: root.topAnchor), menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), menuRowHeight,
+            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor, constant: 10), windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 28), windowMenuBar.trailingAnchor.constraint(lessThanOrEqualTo: menuRow.trailingAnchor, constant: -10),
+            header.topAnchor.constraint(equalTo: menuRow.bottomAnchor), header.leadingAnchor.constraint(equalTo: root.leadingAnchor), header.trailingAnchor.constraint(equalTo: root.trailingAnchor), headerHeight,
+            sidebarToggleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 20), sidebarToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            branding.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: 14), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -20), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor), headerActions.leadingAnchor.constraint(greaterThanOrEqualTo: branding.trailingAnchor, constant: 12),
+            tabRow.topAnchor.constraint(equalTo: header.bottomAnchor), tabRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), tabRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), tabsHeight,
+            tabScroll.leadingAnchor.constraint(equalTo: tabRow.leadingAnchor), tabScroll.topAnchor.constraint(equalTo: tabRow.topAnchor), tabScroll.bottomAnchor.constraint(equalTo: tabRow.bottomAnchor), tabScroll.trailingAnchor.constraint(equalTo: plus.leadingAnchor, constant: -5),
+            plus.trailingAnchor.constraint(equalTo: tabRow.trailingAnchor, constant: -5), plus.centerYAnchor.constraint(equalTo: tabRow.centerYAnchor), plus.widthAnchor.constraint(equalToConstant: 40),
+            tabsStack.leadingAnchor.constraint(equalTo: tabScroll.contentView.leadingAnchor), tabsStack.topAnchor.constraint(equalTo: tabScroll.contentView.topAnchor), tabsStack.heightAnchor.constraint(equalTo: tabScroll.contentView.heightAnchor),
+            searchContainer.topAnchor.constraint(equalTo: tabRow.bottomAnchor), searchContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor), searchContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor), searchHeight,
+            searchBar.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 18), searchBar.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -18), searchBar.topAnchor.constraint(equalTo: searchContainer.topAnchor, constant: 10), searchBar.heightAnchor.constraint(equalToConstant: 32),
+            searchOptionsRow.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 5), searchOptionsRow.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor), searchOptionsRow.heightAnchor.constraint(equalToConstant: 23), searchOptionsRow.trailingAnchor.constraint(lessThanOrEqualTo: searchBar.trailingAnchor),
+            replaceBar.topAnchor.constraint(equalTo: searchOptionsRow.bottomAnchor, constant: 6), replaceBar.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor), replaceBar.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor), replaceBar.heightAnchor.constraint(equalToConstant: 32),
+            workspaceBody.topAnchor.constraint(equalTo: searchContainer.bottomAnchor), workspaceBody.leadingAnchor.constraint(equalTo: root.leadingAnchor), workspaceBody.trailingAnchor.constraint(equalTo: root.trailingAnchor), workspaceBody.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            sidebar.topAnchor.constraint(equalTo: workspaceBody.topAnchor), sidebar.bottomAnchor.constraint(equalTo: workspaceBody.bottomAnchor), sidebar.leadingAnchor.constraint(equalTo: workspaceBody.leadingAnchor), sidebarWidth,
+            sideTabs.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideTabs.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -14), sideTabs.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 18),
+            recentScroll.topAnchor.constraint(equalTo: sideTabs.bottomAnchor, constant: 12), recentScroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), recentScroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), recentScroll.bottomAnchor.constraint(equalTo: clearRecentButton.topAnchor, constant: -10),
+            recentStack.leadingAnchor.constraint(equalTo: recentScroll.contentView.leadingAnchor), recentStack.topAnchor.constraint(equalTo: recentScroll.contentView.topAnchor), recentStack.widthAnchor.constraint(equalTo: recentScroll.contentView.widthAnchor),
+            clearRecentButton.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), clearRecentButton.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), clearRecentButton.bottomAnchor.constraint(equalTo: sideNote.topAnchor, constant: -18),
+            sideNote.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 20), sideNote.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), sideNote.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -20),
+            canvasInsetLeading, canvas.trailingAnchor.constraint(equalTo: workspaceBody.trailingAnchor), canvas.topAnchor.constraint(equalTo: workspaceBody.topAnchor), canvas.bottomAnchor.constraint(equalTo: workspaceBody.bottomAnchor),
+            toolsContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor), toolsContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor), toolsContainer.topAnchor.constraint(equalTo: canvas.topAnchor), toolsHeight,
+            tools.leadingAnchor.constraint(equalTo: toolsContainer.leadingAnchor, constant: 12), tools.trailingAnchor.constraint(equalTo: toolsContainer.trailingAnchor, constant: -12), tools.topAnchor.constraint(equalTo: toolsContainer.topAnchor, constant: 8), tools.bottomAnchor.constraint(equalTo: toolsContainer.bottomAnchor, constant: -8),
+            ruler.leadingAnchor.constraint(equalTo: canvas.leadingAnchor), ruler.topAnchor.constraint(equalTo: documentSplit.topAnchor), ruler.bottomAnchor.constraint(equalTo: documentSplit.bottomAnchor), rulerWidth,
+            documentSplit.topAnchor.constraint(equalTo: toolsContainer.bottomAnchor), documentSplit.leadingAnchor.constraint(equalTo: ruler.trailingAnchor), documentSplit.trailingAnchor.constraint(equalTo: canvas.trailingAnchor), documentSplit.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor), footer.trailingAnchor.constraint(equalTo: root.trailingAnchor), footer.bottomAnchor.constraint(equalTo: root.bottomAnchor), footer.heightAnchor.constraint(equalToConstant: 50),
+            statusLeft.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), statusLeft.topAnchor.constraint(equalTo: footer.topAnchor, constant: 7), statusLeft.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -12),
+            statusRight.leadingAnchor.constraint(equalTo: statusLeft.leadingAnchor), statusRight.topAnchor.constraint(equalTo: statusLeft.bottomAnchor, constant: 3), statusRight.bottomAnchor.constraint(lessThanOrEqualTo: footer.bottomAnchor, constant: -7),
+            kindPopup.trailingAnchor.constraint(equalTo: codecPopup.leadingAnchor, constant: -14), kindPopup.widthAnchor.constraint(equalToConstant: 143), kindPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            codecPopup.trailingAnchor.constraint(equalTo: endingPopup.leadingAnchor, constant: -14), codecPopup.widthAnchor.constraint(equalToConstant: 131), codecPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            endingPopup.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), endingPopup.widthAnchor.constraint(equalToConstant: 171), endingPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor)
         ])
     }
 
@@ -406,9 +361,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func applyTheme() {
         if followSystemAppearance { dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
         window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.panel
-        menuRow.color = theme.window
-        windowMenuBar.applyAppearance(foreground: theme.text, background: theme.window, highlight: theme.selection)
+        root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.editor
+        menuRow.color = theme.panel; tabRow.color = theme.window; footer.color = theme.panel; toolsContainer.color = theme.panel
+        for view in [menuRow, header, tabRow, sidebar, toolsContainer, footer] { view.wantsLayer = true; view.layer?.borderColor = theme.border.cgColor; view.layer?.borderWidth = 0.5 }
+        windowMenuBar.applyAppearance(foreground: theme.text, background: theme.panel, highlight: theme.hover)
+        for popup in [kindPopup, codecPopup, endingPopup, toolbarOptions!] { popup.applyTheme(theme) }
+        for field in [searchField, replaceField] { field.backgroundColor = theme.editor; field.textColor = theme.text }
+        presentationHint.textColor = theme.muted
         titleLabel.textColor = theme.text; subtitle.textColor = theme.muted; sideTitle.textColor = theme.muted; sideNote.textColor = theme.muted
         statusLeft.textColor = theme.muted; statusRight.textColor = theme.muted
         findCounter.textColor = theme.muted
@@ -416,14 +375,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         editor.selectedTextAttributes = [.backgroundColor: theme.selection, .foregroundColor: theme.text]
         previewScroll.backgroundColor = theme.editor
         editorScroll.backgroundColor = theme.editor; preview.backgroundColor = theme.editor; preview.textColor = theme.text
-        ruler.ink = theme.muted; ruler.background = theme.editor; ruler.needsDisplay = true
+        ruler.ink = theme.muted; ruler.background = theme.panel; ruler.savedInk = theme.saved; ruler.unsavedInk = theme.unsaved; ruler.needsDisplay = true
         for b in buttons { style(b) }
         themeButton.title = followSystemAppearance ? "随系统" : (dark ? "明亮" : "深色")
         refreshTabs(); refreshRecent(); scheduleHighlight()
         if reading || active?.splitPreview == true { renderReading() }
     }
     private func style(_ b: ActionButton) {
-        b.fill = b.isEmphasized ? theme.accent : theme.border
+        b.fill = b.isEmphasized ? theme.accent : theme.button; b.hoverFill = theme.hover; b.borderColor = theme.border
         b.ink = b.isEmphasized ? .white : theme.text
     }
     private func refreshTabs() {
@@ -437,7 +396,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.selectTab(i) }
                 }
                 b.doubleClickHandler = { [weak self] in self?.renameDocument(id: id) }
-                b.tabID = id
+                b.tabID = id; b.controlHeight = 42; b.cornerRadius = 0; b.borderColor = .clear
                 b.widthAnchor.constraint(equalToConstant: 116).isActive = true
                 let context = NSMenu()
                 for (title, action) in [("重命名…", #selector(renameContextTab(_:))), ("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("关闭全部标签", #selector(closeAllTabs(_:))), ("向左移动", #selector(moveContextLeft(_:))), ("向右移动", #selector(moveContextRight(_:))), ("切换此文件草稿恢复", #selector(toggleContextRecovery(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
@@ -447,8 +406,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                 let x = ActionButton("×") { [weak self] in
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.closeTab(i) }
                 }
-                x.fill = theme.panel; x.ink = theme.muted
-                x.widthAnchor.constraint(equalToConstant: 48).isActive = true; x.setAccessibilityLabel("关闭 \(tab.file.title)")
+                x.fill = .clear; x.ink = theme.muted; x.borderColor = .clear; x.cornerRadius = 0; x.controlHeight = 22; x.horizontalPadding = 0
+                x.widthAnchor.constraint(equalToConstant: 22).isActive = true; x.setAccessibilityLabel("关闭 \(tab.file.title)")
                 tabsStack.addArrangedSubview(stack([b, x], spacing: 0)); tabTitleButtons.append(b)
             }
         }
@@ -456,7 +415,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let b = tabTitleButtons[index]
             let title = (tab.file.isDirty ? "● " : "") + tab.file.title
             if b.title != title { b.title = title }
-            b.fill = index == current ? theme.accent : theme.panel; b.ink = index == current ? .white : theme.muted
+            b.fill = index == current ? theme.tabSelected : theme.window; b.ink = index == current ? theme.text : theme.muted
+            b.bottomAccent = index == current ? theme.accent : .clear; b.borderColor = .clear; b.hoverFill = theme.hover
+            if let cell = b.superview { cell.wantsLayer = true; cell.layer?.backgroundColor = b.fill.cgColor; cell.layer?.borderWidth = 0
+                if let close = cell.subviews.compactMap({ $0 as? ActionButton }).first(where: { $0 !== b }) { close.ink = theme.muted; close.fill = b.fill; close.hoverFill = theme.hover }
+            }
             b.toolTip = tab.file.url?.path ?? "尚未保存的文档"
             b.constraints.first(where: { $0.firstAttribute == .width && $0.relation == .equal })?.constant = min(210, max(116, CGFloat(tab.file.title.count * 8 + 36)))
         }
@@ -468,17 +431,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         recentStack.arrangedSubviews.forEach { recentStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         outlineButtons = []
         if outlineMode { refreshOutlineSidebar(); return }
-        sideTitle.stringValue = "最近打开"
+        updateSidebarTabs()
         let files = recent.filter { FileManager.default.fileExists(atPath: $0) }
         if files.isEmpty {
             let hint = label("打开文件后\n会显示在这里", 12); hint.maximumNumberOfLines = 0
             recentStack.addArrangedSubview(hint)
         }
-        for path in files.prefix(12) {
-            let b = ActionButton(URL(fileURLWithPath: path).lastPathComponent) { [weak self] in self?.openURLs([URL(fileURLWithPath: path)]) }
-            b.font = .systemFont(ofSize: 11); b.toolTip = path; b.fill = theme.panel; b.ink = theme.text
-            recentStack.addArrangedSubview(b)
-            b.widthAnchor.constraint(equalTo: recentStack.widthAnchor).isActive = true
+        for path in files.prefix(15) {
+            let row = RecentFileRow(url: URL(fileURLWithPath: path), foreground: theme.text, muted: theme.muted) { [weak self] in self?.openURLs([URL(fileURLWithPath: path)]) }
+            row.rowColor = theme.selection; recentStack.addArrangedSubview(row); row.widthAnchor.constraint(equalTo: recentStack.widthAnchor).isActive = true
         }
     }
     private func remember(_ url: URL) {
@@ -1006,29 +967,43 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func updateModeControls() {
         let hideSidebar = focused || !showingSidebar
         sidebar.isHidden = hideSidebar
-        sidebarToggleButton.title = showingSidebar ? "收起侧栏" : "展开侧栏"
-        sidebarToggleButton.setAccessibilityLabel(sidebarToggleButton.title)
-        menuRow.isHidden = focused; menuRowHeight.constant = focused ? 0 : 34
+        sidebarToggleButton.title = ""; sidebarToggleButton.setAccessibilityLabel(showingSidebar ? "收起侧栏" : "展开侧栏")
+        sidebarToggleButton.toolTip = (showingSidebar ? "收起侧栏" : "展开侧栏") + " · ⌘B"
+        menuRow.isHidden = focused; menuRowHeight.constant = focused ? 0 : 30
         canvasInsetLeading.isActive = !hideSidebar; canvasFullLeading.isActive = hideSidebar
-        tabsHeight.constant = focused ? 0 : 39; tabScroll.isHidden = focused
-        toolsHeight.constant = focused ? 0 : 36; tools.isHidden = focused
-        headerHeight.constant = focused ? 38 : 54; branding.isHidden = focused
-        for action in focusHiddenActions { action.isHidden = focused }
+        tabsHeight.constant = focused ? 0 : 44; tabRow.isHidden = focused
+        headerHeight.constant = 78; branding.isHidden = false
         focusButton.title = focused ? "退出专注" : "专注"
         readButton.title = reading ? "编辑原文" : "返回预览"
-        kindPopup.isHidden = reading; formatButton.isHidden = false; wrapButton.isHidden = reading
-        replaceField.isHidden = reading; replacementButtons.forEach { $0.isHidden = reading }
-        codecPopup.isHidden = reading || focused; endingPopup.isHidden = reading || focused
-        statusLeft.isHidden = focused
-        statusNormalTrailing.isActive = !reading && !focused; statusReadingTrailing.isActive = reading || focused
-        editorScroll.isHidden = reading
-        previewScroll.isHidden = !reading && !(active?.splitPreview ?? false)
-        splitButton.isHidden = active?.kind != .markdown
-        structureButton.isHidden = active?.kind != .json && active?.kind != .jsonc
-        layoutDocumentPanes()
+        let kind = active?.kind
+        let md = kind == .markdown, json = kind == .json || kind == .jsonc
+        splitButton.isHidden = !md; splitButton.title = active?.splitPreview == true ? "关闭分屏" : "分屏编辑"
+        structureButton.isHidden = !json
+        toolbarCopyButton.isHidden = !md || (!reading && active?.splitPreview != true)
+        toolbarOptions.isHidden = !md
+        returnPositionButton.isEnabled = active?.navigation.isEmpty == false
+        formatButton.title = kind == .plain ? "整理 TXT" : "格式化"
+        presentationHint.stringValue = md ? (reading ? "Markdown 预览 · 需要修改时点击编辑原文" : active?.splitPreview == true ? "左侧编辑 · 右侧预览" : "Markdown 原文 · 可开启分屏编辑") : ""
+        kindPopup.isHidden = false; codecPopup.isHidden = false; endingPopup.isHidden = false; statusLeft.isHidden = false
+        replaceBar.isHidden = !replacementVisible
+        editorScroll.isHidden = reading; previewScroll.isHidden = !reading && active?.splitPreview != true
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
-        window?.contentView?.layoutSubtreeIfNeeded()
+        window?.contentView?.layoutSubtreeIfNeeded(); updateContextToolbar()
+        layoutDocumentPanes(); updateSidebarTabs()
     }
+    private func updateContextToolbar() {
+        let width = max(100, canvas.bounds.width - 24)
+        let height = tools.arrange(width: width)
+        if abs(toolsHeight.constant - (height + 16)) > 0.5 { toolsHeight.constant = height + 16 }
+    }
+    private func updateSidebarTabs() {
+        clearRecentButton.isHidden = outlineMode
+        for (button, selected) in [(sidebarRecentButton, !outlineMode), (sidebarOutlineButton, outlineMode)] {
+            guard let button = button else { continue }; button.fill = selected ? theme.panel : theme.window; button.ink = selected ? theme.text : theme.muted
+            button.borderColor = .clear; button.bottomAccent = selected ? theme.accent : .clear; button.hoverFill = theme.hover
+        }
+    }
+    private func setSidebarOutline(_ value: Bool) { outlineMode = value; refreshRecent() }
     @objc func toggleWrap(_ sender: Any?) { wrapping.toggle(); UserDefaults.standard.set(wrapping, forKey: "wrapping"); wrapButton.title = wrapping ? "自动换行 ✓" : "自动换行"; updateWrap() }
     private func updateWrap() {
         editorScroll.hasHorizontalScroller = !wrapping && !reading
@@ -1046,6 +1021,26 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func increaseFont(_ sender: Any?) { changeFont(1) }
     @objc func decreaseFont(_ sender: Any?) { changeFont(-1) }
+    @objc func validateDocument(_ sender: Any?) {
+        guard let tab = active else { return }
+        let diagnostic = TextFeatures.diagnostic(tab.file.text, kind: tab.kind)
+        let supported = tab.kind == .json || tab.kind == .jsonc
+        updateStatus(diagnostic ?? (supported ? "检查通过" : tab.kind == .yaml ? "未发现缩进 Tab（仅基础检查）" : "此类型没有完整校验器"))
+    }
+    @objc func toggleLineNumbers(_ sender: Any?) {
+        showLineNumbers.toggle(); UserDefaults.standard.set(showLineNumbers, forKey: "lineNumbers"); updateModeControls()
+    }
+    @objc func changeReadingWidth(_ sender: NSMenuItem) {
+        let anchor = currentSourceOffset(); readingWidth = CGFloat(sender.tag == 5000 ? 1_000_000 : sender.tag)
+        UserDefaults.standard.set(Double(readingWidth), forKey: "readingWidth"); updateReadingWidth(); scrollToSource(anchor)
+    }
+    @objc func closeOtherDocuments(_ sender: Any?) {
+        guard let id = active?.file.id else { return }; let item = NSMenuItem(); item.representedObject = id; closeOtherTabs(item)
+    }
+    @objc func showDiagnostics(_ sender: Any?) {
+        let details = ["Mac 0.1.0 · 构建 6", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
+        _ = alert("打开与阅读诊断", details.joined(separator: "\n"), buttons: ["关闭"])
+    }
     @objc func showPreferences(_ sender: Any?) {
         let a = NSAlert(); a.messageText = "阅读与编辑设置"; a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
         let numbers = NSButton(checkboxWithTitle: "编辑时显示行号", target: nil, action: nil); numbers.state = showLineNumbers ? .on : .off
@@ -1150,6 +1145,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         liveResizeAnchor = nil
     }
     func windowDidResize(_ notification: Notification) {
+        if toolsHeight != nil { updateContextToolbar() }
         layoutDocumentPanes()
         guard reading, let anchor = liveResizeAnchor ?? active?.sourceAnchor else { updateWrap(); return }
         updateReadingWidth(); scrollToSource(anchor)
@@ -1236,12 +1232,20 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
 
     @objc func showFind(_ sender: Any?) {
         if !searchVisible { searchReturnOffset = currentSourceOffset() }
-        searchVisible = true; searchBar.isHidden = false; searchOptionsRow.isHidden = false; searchHeight.constant = 66
+        replacementVisible = false; showSearchPanel()
+    }
+    @objc func showReplace(_ sender: Any?) {
+        if !searchVisible { searchReturnOffset = currentSourceOffset() }
+        replacementVisible = true; showSearchPanel()
+    }
+    private func showSearchPanel() {
+        searchVisible = true; searchContainer.isHidden = false; searchBar.isHidden = false; searchOptionsRow.isHidden = false
+        replaceBar.isHidden = !replacementVisible; searchHeight.constant = replacementVisible ? 110 : 76
         if displayedTextView.selectedRange().length > 0 { searchField.stringValue = (displayedTextView.string as NSString).substring(with: displayedTextView.selectedRange()) }
         scheduleSearch(); window?.makeFirstResponder(searchField)
     }
     private func hideFind() {
-        searchVisible = false; searchBar.isHidden = true; searchOptionsRow.isHidden = true; searchHeight.constant = 0
+        searchVisible = false; replacementVisible = false; searchContainer.isHidden = true; searchBar.isHidden = true; searchOptionsRow.isHidden = true; replaceBar.isHidden = true; searchHeight.constant = 0
         searchVersion += 1; searchTask?.cancel(); searchMatches = []; searchReady = false; pendingFind = nil
         paintSearchMatches(); if let offset = searchReturnOffset { scrollToSource(offset) }; searchReturnOffset = nil
         window?.makeFirstResponder(displayedTextView)
@@ -1459,7 +1463,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         if reading { toggleReading(nil) }
         tab.splitPreview.toggle(); updateModeControls()
         if tab.splitPreview { renderReading() }
-        splitButton.title = tab.splitPreview ? "关闭分屏" : "MD分屏"
+        splitButton.title = tab.splitPreview ? "关闭分屏" : "分屏编辑"
     }
     private func scheduleSplitRender() {
         splitTask?.cancel(); active?.mediaGeneration += 1; active?.mediaTask?.cancel(); active?.mediaTask = nil
@@ -1469,15 +1473,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func pushNavigation() {
         guard let tab = active else { return }
-        tab.navigation.append(currentSourceOffset()); if tab.navigation.count > 64 { tab.navigation.removeFirst() }
+        tab.navigation.append(currentSourceOffset()); if tab.navigation.count > 64 { tab.navigation.removeFirst() }; returnPositionButton.isEnabled = true
     }
     @objc func returnReadingPosition(_ sender: Any?) {
         guard let offset = active?.navigation.popLast() else { return }
-        scrollToSource(offset); updateStatus("已返回跳转前位置")
+        scrollToSource(offset); returnPositionButton.isEnabled = active?.navigation.isEmpty == false; updateStatus("已返回跳转前位置")
     }
     @objc private func sidebarModeChanged() { outlineMode = sidebarMode.selectedSegment == 0; refreshRecent() }
     private func refreshOutlineSidebar() {
-        sideTitle.stringValue = "文档目录"
+        updateSidebarTabs()
         let headings = active?.rendered?.headings ?? []
         if headings.isEmpty { recentStack.addArrangedSubview(label("暂无可识别的章节")); return }
         for heading in headings.prefix(500) {
@@ -1571,7 +1575,12 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                         if wasDirty || tab.file.isDirty { self.updateStatus("磁盘文件已变化 · 当前修改已保留，保存时需处理冲突"); return }
                         self.stashCurrent()
                         let replacement = ReaderTab(updated); replacement.isReading = tab.isReading; replacement.splitPreview = tab.splitPreview
-                        replacement.sourceAnchor = tab.sourceAnchor; replacement.hasWorkspacePosition = true; replacement.recoverDraft = tab.recoverDraft
+                        replacement.sourceAnchor = TextAnchorMapper.map(oldText: oldText, newText: updated.text, oldAnchor: tab.sourceAnchor)
+                        let selectionStart = TextAnchorMapper.map(oldText: oldText, newText: updated.text, oldAnchor: tab.selection.location)
+                        let selectionEnd = TextAnchorMapper.map(oldText: oldText, newText: updated.text,
+                                                                 oldAnchor: tab.selection.location + tab.selection.length)
+                        replacement.selection = NSRange(location: selectionStart, length: max(0, selectionEnd - selectionStart))
+                        replacement.hasWorkspacePosition = true; replacement.recoverDraft = tab.recoverDraft
                         replacement.automaticKind = tab.automaticKind; if !tab.automaticKind { replacement.kind = tab.kind }
                         self.tabs[self.current] = replacement; self.selectTab(self.current, stash: false); self.updateStatus("已读取磁盘最新内容")
                     case .failure: self.updateStatus("磁盘文件暂不可读 · 窗口正文已保留，可重试")
