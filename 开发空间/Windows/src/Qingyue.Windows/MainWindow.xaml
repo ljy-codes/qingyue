@@ -103,6 +103,7 @@
       <MenuItem Header="帮助(_H)">
         <MenuItem Header="Windows 使用说明" Tag="help" Click="MenuAction"/>
         <MenuItem Header="打开与阅读诊断…" Tag="diagnostics" Click="MenuAction"/>
+        <MenuItem Header="检查更新" Tag="update" Click="MenuAction"/>
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>

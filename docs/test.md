@@ -1,5 +1,36 @@
 # Windows 验收记录
 
+## 2026-11-16｜Windows 0.10.0 构建 1
+
+本轮汇总安装器修复、GitHub Release 更新入口、GFM 引用链接和离线 Mermaid 流程图。
+完整 Release 回归脚本退出码为 `0`，构建版本检查为 `0.10.0.1`。
+本机未安装 NSIS，因此只生成并验收自包含便携目录和 ZIP；未使用旧版本安装包替代本轮产物。
+
+### 完整回归
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 构建与版本检查 | 通过，0 警告、0 错误 |
+| FileTests | 25/25 |
+| TextTests | 47/47 |
+| WPF/UI 流程 | 30/30、96/96、21/21、20/20 |
+| Markdown | 25/25 |
+| Sequence | 29/29 |
+| MermaidView | 15/15 |
+| Reading | 65/65 |
+| Image | 33/33 |
+| Clipboard | 56/56 |
+| ReaderExperience | 19/19 |
+| TextPosition | 5/5 |
+| WPF 审计 | 0 failures |
+
+### 交付产物
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.10.0-Windows构建1-x64.zip` | 62,274,732 字节 | `11B3B1576D4C232F2BF8F4B46F69287D6E5197D2F7541BDF46291B0C394C7D5D` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 291,840 字节 | `263B70CC557583CFC520B0E5FB7A3B3725D95420565CD5364D42B6BA30619D0A` |
+
 ## 2026-11-13｜Windows 0.8.0 构建 4
 
 本轮修复正式安装器在 `98%` 阶段因清理不存在的旧用户注册表项污染

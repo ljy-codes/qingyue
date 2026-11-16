@@ -17,6 +17,8 @@ public partial class MainWindow : Window
     private readonly WorkspaceStore workspace;
     private readonly BookmarkStore bookmarks;
     private readonly ReaderSettings settings;
+    private readonly UpdateService updateService;
+    private readonly bool startupUpdateCheckEnabled;
     private readonly string dataDirectory;
     private readonly bool restoreSession;
     private readonly DispatcherTimer persistTimer = new() { Interval = TimeSpan.FromSeconds(1.5) };
@@ -31,11 +33,14 @@ public partial class MainWindow : Window
     public IReadOnlyList<EditorTab> Tabs => tabs;
     public EditorTab? CurrentTab => TabStrip.SelectedItem as EditorTab;
 
-    public MainWindow(string dataDirectory, bool restoreSession = true)
+    public MainWindow(string dataDirectory, bool restoreSession = true,
+        UpdateService? updateService = null, bool enableStartupUpdateCheck = true)
     {
         this.dataDirectory = dataDirectory;
         this.restoreSession = restoreSession;
         settings = ReaderSettings.Load(dataDirectory);
+        this.updateService = updateService ?? new UpdateService(CurrentApplicationVersion());
+        startupUpdateCheckEnabled = enableStartupUpdateCheck;
         workspace = new WorkspaceStore(dataDirectory);
         bookmarks = new BookmarkStore(dataDirectory);
         InitializeComponent();
@@ -108,7 +113,11 @@ public partial class MainWindow : Window
         initialized = true;
         RefreshCurrent();
         QueueExternalRefresh(CurrentTab);
+        ScheduleStartupUpdateCheck();
     }
+
+    private static Version CurrentApplicationVersion() =>
+        typeof(MainWindow).Assembly.GetName().Version ?? new Version(0, 0, 0);
 
     private EditorTab AddDocument(DocumentFile file)
     {

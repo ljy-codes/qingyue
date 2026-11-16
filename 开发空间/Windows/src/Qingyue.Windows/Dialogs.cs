@@ -80,6 +80,35 @@ internal static class Dialogs
         return dialog.ShowDialog();
     }
 
+    public static bool? UpdateAvailable(Window owner, UpdateCheckResult result, Action openReleasePage)
+    {
+        var dialog = Shell(owner, "发现轻阅更新", 540);
+        var panel = new StackPanel { Margin = new Thickness(28) };
+        panel.Children.Add(Heading("发现新版本 " + result.LatestVersion, 21));
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"当前版本：{result.CurrentVersion}\n\n更新通过 GitHub Release 提供，打开发布页后可下载最新安装包。",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 18, 0, 24)
+        });
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var later = new Button { Content = "稍后", IsCancel = true, Margin = new Thickness(0, 0, 10, 0) };
+        var open = PrimaryButton("打开发布页");
+        open.Click += (_, _) =>
+        {
+            openReleasePage();
+            dialog.DialogResult = true;
+        };
+        actions.Children.Add(later);
+        actions.Children.Add(open);
+        panel.Children.Add(actions);
+        dialog.Content = panel;
+        return dialog.ShowDialog();
+    }
+
     public static Window CreateHelp(Window owner, bool about)
     {
         var dialog = Shell(owner, about ? "关于轻阅" : "轻阅使用指南", 660);
@@ -92,7 +121,7 @@ internal static class Dialogs
         });
         var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(Heading(about ? "轻阅 Qingyue" : "留一点空间，给文字。", 25));
-        var subtitle = new TextBlock { Text = "0.8.0 · Windows 构建 4", Margin = new Thickness(0, 7, 0, 0) };
+        var subtitle = new TextBlock { Text = "0.10.0 · Windows 构建 1", Margin = new Thickness(0, 7, 0, 0) };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         title.Children.Add(subtitle); brand.Children.Add(title); panel.Children.Add(brand);
         panel.Children.Add(Card("从一份新文件开始",

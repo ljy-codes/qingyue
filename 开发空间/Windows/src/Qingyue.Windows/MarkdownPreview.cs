@@ -236,13 +236,14 @@ public sealed class MarkdownPreview : RichTextBox
             }
             else if (block.Kind == ReadingBlockKind.Table)
             {
-                var table = TablePreview(parsedBlock.Text, source, images);
+                var table = TablePreview(parsedBlock.Text, source, images, model.ReferenceDefinitions);
                 table.Tag = block;
                 document.Blocks.InsertBefore(paragraph, table);
                 document.Blocks.Remove(paragraph);
             }
             else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
-                DecorateInline(paragraph, InlineSource(source, block.Kind), parsedBlock.Text, images);
+                DecorateInline(paragraph, InlineSource(source, block.Kind), parsedBlock.Text, images,
+                    model.ReferenceDefinitions);
 
             if (block.Kind == ReadingBlockKind.ListItem)
             {
@@ -316,10 +317,11 @@ public sealed class MarkdownPreview : RichTextBox
     private enum InlineFormat { None = 0, Code = 1, Strong = 2, Emphasis = 4, Strike = 8, Link = 16, Image = 32 }
     private readonly record struct Fragment(string Text, InlineFormat Format, string? ImageKey = null);
 
-    private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images)
+    private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images,
+        IReadOnlyDictionary<string, string> references)
     {
         var fragments = new List<Fragment>();
-        ParseInline(source, fragments);
+        ParseInline(source, fragments, references);
         // ReadingModel is authoritative. If its grammar changes or falls back to raw text,
         // keep its original Run rather than risk dropping, adding or moving visible text.
         if (!string.Equals(string.Concat(fragments.Select(f => f.Text)), expected, StringComparison.Ordinal)) return;
@@ -351,7 +353,9 @@ public sealed class MarkdownPreview : RichTextBox
         }
     }
 
-    private static void ParseInline(string text, List<Fragment> output, InlineFormat format = InlineFormat.None, int depth = 0)
+    private static void ParseInline(string text, List<Fragment> output,
+        IReadOnlyDictionary<string, string> references,
+        InlineFormat format = InlineFormat.None, int depth = 0)
     {
         if (depth >= 8) { output.Add(new(text, format)); return; }
         int cursor = 0;
@@ -360,14 +364,26 @@ public sealed class MarkdownPreview : RichTextBox
             if (match.Index > cursor) output.Add(new(text[cursor..match.Index], format));
             cursor = match.Index + match.Length;
             if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
+            else if (match.Groups[9].Success)
+                output.Add(new(match.Groups[9].Value, format | InlineFormat.Link));
+            else if (match.Groups[10].Success)
+            {
+                string referenceKey = match.Groups[11].Value;
+                if (referenceKey.Length == 0) referenceKey = match.Groups[10].Value;
+                if (references.ContainsKey(NormalizeReferenceKey(referenceKey)))
+                    ParseInline(match.Groups[10].Value, output, references, format | InlineFormat.Link, depth + 1);
+                else
+                    output.Add(new(match.Value, format));
+            }
             else if (match.Value.StartsWith("![", StringComparison.Ordinal))
             {
                 var title = new List<Fragment>();
-                ParseInline(match.Groups[1].Value, title, format | InlineFormat.Image, depth + 1);
+                ParseInline(match.Groups[1].Value, title, references, format | InlineFormat.Image, depth + 1);
                 output.Add(new("[图片：" + string.Concat(title.Select(f => f.Text)) + "]", format | InlineFormat.Image,
                     match.Groups[1].Value));
             }
-            else if (match.Value[0] == '[') ParseInline(match.Groups[2].Value, output, format | InlineFormat.Link, depth + 1);
+            else if (match.Value[0] == '[')
+                ParseInline(match.Groups[2].Value, output, references, format | InlineFormat.Link, depth + 1);
             else if (match.Value[0] == '`') output.Add(new(match.Groups[3].Value, format | InlineFormat.Code));
             else if (MarkdownSyntax.IsIntrawordUnderscore(text, match)) output.Add(new(match.Value, format));
             else
@@ -376,12 +392,30 @@ public sealed class MarkdownPreview : RichTextBox
                 {
                     if (!match.Groups[group].Success) continue;
                     var decoration = group <= 5 ? InlineFormat.Strong : group <= 7 ? InlineFormat.Emphasis : InlineFormat.Strike;
-                    ParseInline(match.Groups[group].Value, output, format | decoration, depth + 1);
+                    ParseInline(match.Groups[group].Value, output, references, format | decoration, depth + 1);
                     break;
                 }
             }
         }
         if (cursor < text.Length) output.Add(new(text[cursor..], format));
+    }
+
+    private static string NormalizeReferenceKey(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        bool whitespace = false;
+        foreach (char character in value.Trim())
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                whitespace = true;
+                continue;
+            }
+            if (whitespace && builder.Length > 0) builder.Append(' ');
+            whitespace = false;
+            builder.Append(char.ToLowerInvariant(character));
+        }
+        return builder.ToString();
     }
 
     private void AppendImage(Paragraph paragraph, MarkdownImageReference reference, MarkdownImages images)
@@ -421,7 +455,8 @@ public sealed class MarkdownPreview : RichTextBox
         _ => false
     };
 
-    private Table TablePreview(string text, string source, MarkdownImages images)
+    private Table TablePreview(string text, string source, MarkdownImages images,
+        IReadOnlyDictionary<string, string> references)
     {
         var rows = text.Split('\n').Select(line => line.Split('\t')).ToArray();
         var sourceLines = source.Split('\n');
@@ -447,7 +482,7 @@ public sealed class MarkdownPreview : RichTextBox
             {
                 var paragraph = new Paragraph(new Run(images.RestoreLabels(value))) { Margin = new Thickness(0) };
                 if (index < sourceRows.Length && sourceRows[index].Length == rows[index].Length)
-                    DecorateInline(paragraph, sourceRows[index][column], value, images);
+                    DecorateInline(paragraph, sourceRows[index][column], value, images, references);
                 string separator = column < separators.Length ? separators[column] : "";
                 paragraph.TextAlignment = separator.EndsWith(':')
                     ? separator.StartsWith(':') ? TextAlignment.Center : TextAlignment.Right : TextAlignment.Left;

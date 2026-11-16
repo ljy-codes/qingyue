@@ -106,7 +106,7 @@ internal static class Program
                 var saved = await window.PersistWorkspaceAsync();
                 Check(saved.Errors.Count == 0, "含视口的新会话可安全保存");
                 window.CloseForShutdown();
-                window = new MainWindow(Path.Combine(root, "profile"));
+                window = new MainWindow(Path.Combine(root, "profile"), enableStartupUpdateCheck: false);
                 window.Show();
                 await window.InitializeAsync();
                 await Idle(window);

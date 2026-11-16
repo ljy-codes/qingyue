@@ -139,6 +139,7 @@ public partial class MainWindow
                     Modal(() => Dialogs.CreateHelp(this, false).ShowDialog());
                     break;
                 case "about": Modal(() => Dialogs.CreateHelp(this, true).ShowDialog()); break;
+                case "update": await CheckForUpdatesAsync(manual: true); break;
                 default:
                     if (action.StartsWith("width:") && double.TryParse(action[6..], out double width))
                     { settings.ReadingWidth = width; UpdateReadingWidths(); SchedulePersist(); }

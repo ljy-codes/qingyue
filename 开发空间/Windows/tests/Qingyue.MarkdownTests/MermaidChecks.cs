@@ -45,6 +45,32 @@ internal static class MermaidChecks
             throw new Exception("预览不应把 Markdown 围栏作为普通正文显示");
     }
 
+    internal static void FlowchartPreview()
+    {
+        const string source = """
+            # 发布流程
+
+            ```mermaid
+            flowchart LR
+            A[提交] -->|校验| B(处理)
+            B -.-> C{通过?}
+            C ==> D[[完成]]
+            ```
+            """;
+        var preview = new MarkdownPreview(source, 16, 680);
+        var panel = preview.Document.Blocks.OfType<BlockUIContainer>().Single().Child;
+        if (!Descendants(panel).OfType<MermaidFlowchartView>().Any())
+            throw new Exception("flowchart Mermaid 围栏应显示流程图控件");
+        if (Descendants(panel).OfType<MermaidSequenceView>().Any())
+            throw new Exception("flowchart 不得误用时序图控件");
+        if (!Descendants(panel).OfType<TextBlock>().Any(text => text.Text.Contains("流程图")))
+            throw new Exception("流程图标题没有显示");
+        var rendered = new RenderedReading(ReadingModel.Build(source, TextKind.Markdown));
+        if (!rendered.Document.Blocks.OfType<BlockUIContainer>().Any(block =>
+                Descendants(block.Child).OfType<MermaidFlowchartView>().Any()))
+            throw new Exception("完整阅读模式没有显示流程图控件");
+    }
+
     internal static void FencesAndFallback()
     {
         var model = ReadingModel.Build(Source, TextKind.Markdown);

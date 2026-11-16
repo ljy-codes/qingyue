@@ -30,7 +30,6 @@ RequestExecutionLevel ${EXECUTION_LEVEL}
 !include FileFunc.nsh
 !include WordFunc.nsh
 !include x64.nsh
-!include "uninstall-actions.nsh"
 !include "uninstall-pages.nsh"
 !include "wizard-pages.nsh"
 !insertmacro VersionCompare
@@ -47,6 +46,20 @@ RequestExecutionLevel ${EXECUTION_LEVEL}
 !include "version.nsh"
 !define REGKEY "Software\${PRODUCT_ID}\Windows"
 !define UNKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_ID}"
+!define ASSOCIATION_ROOT "Software\Classes"
+!define ASSOCIATION_PROGID "Qingyue.Document"
+
+!macro QingyueRegisterAssociation EXT
+  WriteRegStr ${REG_ROOT} "${ASSOCIATION_ROOT}\.${EXT}\OpenWithProgids" "${ASSOCIATION_PROGID}" ""
+!macroend
+
+!macro QingyueUnregisterAssociation EXT
+  DeleteRegValue ${REG_ROOT} "${ASSOCIATION_ROOT}\.${EXT}\OpenWithProgids" "${ASSOCIATION_PROGID}"
+  DeleteRegKey /ifempty ${REG_ROOT} "${ASSOCIATION_ROOT}\.${EXT}\OpenWithProgids"
+  DeleteRegKey /ifempty ${REG_ROOT} "${ASSOCIATION_ROOT}\.${EXT}"
+!macroend
+
+!include "uninstall-actions.nsh"
 
 !addplugindir "${BUILD_DIR}"
 ChangeUI IDD_INST "${BUILD_DIR}\wizard.dll"
@@ -246,6 +259,35 @@ Section "轻阅" SEC_MAIN
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoModify" 1
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "NoRepair" 1
   WriteRegDWORD ${REG_ROOT} "${UNKEY}" "EstimatedSize" ${ESTIMATED_KB}
+  WriteRegStr ${REG_ROOT} "${ASSOCIATION_ROOT}\${ASSOCIATION_PROGID}" "" "轻阅文本文档"
+  WriteRegStr ${REG_ROOT} "${ASSOCIATION_ROOT}\${ASSOCIATION_PROGID}" "FriendlyTypeName" "轻阅文本文档"
+  WriteRegStr ${REG_ROOT} "${ASSOCIATION_ROOT}\${ASSOCIATION_PROGID}\DefaultIcon" "" '"$INSTDIR\Qingyue.ico,0"'
+  WriteRegStr ${REG_ROOT} "${ASSOCIATION_ROOT}\${ASSOCIATION_PROGID}\shell\open\command" "" '"$INSTDIR\Qingyue.exe" "%1"'
+  !insertmacro QingyueRegisterAssociation txt
+  !insertmacro QingyueRegisterAssociation log
+  !insertmacro QingyueRegisterAssociation md
+  !insertmacro QingyueRegisterAssociation markdown
+  !insertmacro QingyueRegisterAssociation mdown
+  !insertmacro QingyueRegisterAssociation mkd
+  !insertmacro QingyueRegisterAssociation json
+  !insertmacro QingyueRegisterAssociation jsonc
+  !insertmacro QingyueRegisterAssociation yaml
+  !insertmacro QingyueRegisterAssociation yml
+  !insertmacro QingyueRegisterAssociation ini
+  !insertmacro QingyueRegisterAssociation cfg
+  !insertmacro QingyueRegisterAssociation conf
+  !insertmacro QingyueRegisterAssociation properties
+  !insertmacro QingyueRegisterAssociation env
+  !insertmacro QingyueRegisterAssociation xml
+  !insertmacro QingyueRegisterAssociation xaml
+  !insertmacro QingyueRegisterAssociation svg
+  !insertmacro QingyueRegisterAssociation plist
+  !insertmacro QingyueRegisterAssociation csproj
+  !insertmacro QingyueRegisterAssociation csv
+  !insertmacro QingyueRegisterAssociation tsv
+  !ifdef TEST_ASSOCIATION_EXTENSION
+    !insertmacro QingyueRegisterAssociation ${TEST_ASSOCIATION_EXTENSION}
+  !endif
   IfErrors installRegistryFailed
   !if "${REG_ROOT}" != "HKCU"
     ClearErrors

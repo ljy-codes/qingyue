@@ -35,6 +35,7 @@ internal static class Program
             {
                 var started = Stopwatch.StartNew();
                 JsonSyntaxChecks.Check(Check);
+                UpdateServiceChecks.Run(Check);
                 window = new MainWindow(Path.Combine(root, "profile"), restoreSession: false);
                 window.Show();
                 await window.InitializeAsync();
@@ -163,7 +164,7 @@ internal static class Program
                 var persisted = await window.PersistWorkspaceAsync();
                 Check(persisted.Errors.Count == 0, "更新草稿与会话成功：" + string.Join(';', persisted.Errors));
                 window.CloseForShutdown();
-                window = new MainWindow(Path.Combine(root, "profile"));
+                window = new MainWindow(Path.Combine(root, "profile"), enableStartupUpdateCheck: false);
                 window.Show();
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);

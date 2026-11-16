@@ -11,5 +11,7 @@
     <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
     <Compile Include="../../src/Qingyue.Windows/MermaidSequenceView.cs" Link="MermaidSequenceView.cs"
              Condition="Exists('../../src/Qingyue.Windows/MermaidSequenceView.cs')" />
+    <Compile Include="../../src/Qingyue.Windows/MermaidFlowchartView.cs" Link="MermaidFlowchartView.cs"
+             Condition="Exists('../../src/Qingyue.Windows/MermaidFlowchartView.cs')" />
   </ItemGroup>
 </Project>

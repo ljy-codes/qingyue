@@ -53,7 +53,8 @@ internal static class Program
             ("source and line limits include comments", SourceAndLineLimits),
             ("participant and event label boundaries", LabelLimits),
             ("failed parse leaves no partial result or later state", FailureIsolation),
-            ("adversarial and random malformed inputs never throw", Adversarial)
+            ("adversarial and random malformed inputs never throw", Adversarial),
+            ("flowchart directions, shapes, labels and limits", FlowchartChecks.Run)
         };
         int failed = 0;
         foreach (var (name, run) in tests)

@@ -332,6 +332,29 @@ var tests = new List<(string Name, Action Run)>
         var found = Find(model.VisibleText, "加粗", "", new()).Single();
         Equal("加粗", model.VisibleText.Substring(found.Start, found.Length));
     }),
+    ("reading/markdown GFM autolinks and reference links", () =>
+    {
+        const string input = """
+            [guide]: https://example.test/guide "指南"
+
+            <https://example.test> <mailto:reader@example.test>
+            [文档][guide]
+            [未解析][missing]
+            """;
+        var model = Build(input, TextKind.Markdown);
+        Check(model.VisibleText.Contains("https://example.test", StringComparison.Ordinal),
+            "HTTP autolink should expose its readable URL");
+        Check(model.VisibleText.Contains("mailto:reader@example.test", StringComparison.Ordinal),
+            "mailto autolink should expose its readable address");
+        Check(model.VisibleText.Contains("文档", StringComparison.Ordinal) &&
+              !model.VisibleText.Contains("[文档][guide]", StringComparison.Ordinal),
+            "reference link should resolve to its label");
+        Check(model.VisibleText.Contains("[未解析][missing]", StringComparison.Ordinal),
+            "unresolved reference link should remain literal");
+        Check(!model.VisibleText.Contains("[guide]:", StringComparison.Ordinal),
+            "reference definition should not become visible paragraph text");
+        VerifyBlocks(model);
+    }),
     ("reading/markdown block kinds and fenced headings", () =>
     {
         var model = Build("Setext\n===\n\n- [x] done\n- [ ] todo\n> quote\n\n```md\n# hidden\n```\n\n---\n\n普通段落\n下一行", TextKind.Markdown);

@@ -276,7 +276,7 @@ internal static partial class Program
 
     private static async Task<MainWindow> OpenWindow(string profile, bool restoreSession)
     {
-        var window = new MainWindow(profile, restoreSession)
+        var window = new MainWindow(profile, restoreSession, enableStartupUpdateCheck: false)
         { ShowActivated = false, ShowInTaskbar = false, Left = -16000, Top = -16000 };
         window.Show();
         // Only the real initializer may call PrepareRecoveryAsync; do not mask missing integration.

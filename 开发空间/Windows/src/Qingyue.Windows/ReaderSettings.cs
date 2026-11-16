@@ -15,6 +15,7 @@ public sealed class ReaderSettings
     public double ReadingWidth { get; set; } = 720;
     public double Width { get; set; } = 1120;
     public double Height { get; set; } = 790;
+    public DateTimeOffset? LastUpdateCheckUtc { get; set; }
     public List<string> Recent { get; set; } = [];
     public List<string> ExcludedDraftPaths { get; set; } = [];
 

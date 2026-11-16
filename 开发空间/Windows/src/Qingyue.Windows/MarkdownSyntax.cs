@@ -10,7 +10,7 @@ public static class MarkdownSyntax
     // Kept compatible with ReadingModel's lightweight inline grammar. No backtracking,
     // document parsing, font changes, or editor mutations on the keystroke path.
     internal static readonly Regex InlinePattern = Pattern(
-        @"\\[\\`*{}\[\]()#+\-.!_>|~]|!\[([^\]\r\n]*)\]\([^)\r\n]*\)|\[([^\]\r\n]*)\]\([^)\r\n]*\)|`([^`\r\n]+)`|\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|\*([^*\r\n]+)\*|_([^_\r\n]+)_|~~([^~\r\n]+)~~");
+        @"\\[\\`*{}\[\]()#+\-.!_>|~]|!\[([^\]\r\n]*)\]\([^)\r\n]*\)|\[([^\]\r\n]*)\]\([^)\r\n]*\)|`([^`\r\n]+)`|\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|\*([^*\r\n]+)\*|_([^_\r\n]+)_|~~([^~\r\n]+)~~|<((?:https?://|mailto:)[^<>\s]+)>|\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]");
     internal static readonly Regex HeadingPattern = Pattern(@"^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$");
     internal static readonly Regex ListPattern = Pattern(@"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+");
     internal static readonly Regex QuotePattern = Pattern(@"^ {0,3}>[ \t]?");

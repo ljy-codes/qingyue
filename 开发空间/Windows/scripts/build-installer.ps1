@@ -2,6 +2,12 @@ param(
     [switch]$SkipPublish,
     [switch]$TestBuild,
     [switch]$FullPayload,
+    [switch]$Sign,
+    [string]$CertificatePath = $env:QINGYUE_SIGN_CERT_PATH,
+    [string]$CertificatePassword = $env:QINGYUE_SIGN_CERT_PASSWORD,
+    [string]$CertificateThumbprint = $env:QINGYUE_SIGN_CERT_THUMBPRINT,
+    [string]$TimestampUrl = $env:QINGYUE_SIGN_TIMESTAMP_URL,
+    [string]$SignToolPath = $env:QINGYUE_SIGNTOOL_PATH,
     [ValidateSet('Solid32','Solid8','Lzma8','Zlib')][string]$CompressionMode = 'Solid32',
     [string]$NsisPath = "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe"
 )
@@ -135,19 +141,56 @@ if ($TestBuild) {
         '/DDATA_LEAF=QingyueInstallerTest',
         '/DLINK_NAME=轻阅安装器测试',
         '/DREG_ROOT=HKCU',
-        '/DEXECUTION_LEVEL=user'
+        '/DEXECUTION_LEVEL=user',
+        '/DTEST_ASSOCIATION_EXTENSION=qingyue-installer-test'
     )
 }
 $arguments += Join-Path $source 'qingyue.nsi'
 $compileClock = [Diagnostics.Stopwatch]::StartNew()
 & $NsisPath @arguments
 if ($LASTEXITCODE) { throw "NSIS 编译失败：$LASTEXITCODE" }
+$signature = Get-AuthenticodeSignature -LiteralPath $outfile
+$signed = $false
+if ($Sign) {
+    if (-not $SignToolPath) {
+        $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+        $SignToolPath = Get-ChildItem -LiteralPath $sdkRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object {
+                $candidate = Join-Path $_.FullName 'x64/signtool.exe'
+                if (Test-Path -LiteralPath $candidate) { $candidate; break }
+            }
+    }
+    if (-not $SignToolPath -or -not (Test-Path -LiteralPath $SignToolPath)) {
+        throw '已请求签名，但未找到 signtool.exe。请设置 QINGYUE_SIGNTOOL_PATH。'
+    }
+    if (-not $CertificatePath -and -not $CertificateThumbprint) {
+        throw '已请求签名，但未提供 QINGYUE_SIGN_CERT_PATH 或 QINGYUE_SIGN_CERT_THUMBPRINT。'
+    }
+    $signArguments = @('sign', '/fd', 'SHA256')
+    if ($CertificatePath) {
+        if (-not (Test-Path -LiteralPath $CertificatePath)) { throw "签名证书不存在：$CertificatePath" }
+        $signArguments += @('/f', $CertificatePath)
+        if ($CertificatePassword) { $signArguments += @('/p', $CertificatePassword) }
+    } else {
+        $signArguments += @('/sha1', ($CertificateThumbprint -replace '\s', ''))
+    }
+    if ($TimestampUrl) { $signArguments += @('/tr', $TimestampUrl, '/td', 'SHA256') }
+    $signArguments += $outfile
+    & $SignToolPath @signArguments
+    if ($LASTEXITCODE) { throw "安装器签名失败：$LASTEXITCODE" }
+    $signature = Get-AuthenticodeSignature -LiteralPath $outfile
+    if (-not $signature.SignerCertificate) { throw "签名完成但未检测到签名证书：$($signature.Status)" }
+    $signed = $true
+}
 $result = [ordered]@{
     createdAt = (Get-Date).ToString('o'); testBuild = [bool]$TestBuild; fullPayload = [bool]$FullPayload
     productVersion=$productVersion; fileVersion=$buildVersion; windowsBuild=$windowsBuild
     compressionMode=$CompressionMode
     installer = $outfile; length = (Get-Item -LiteralPath $outfile).Length
     sha256 = (Get-FileHash -LiteralPath $outfile -Algorithm SHA256).Hash
+    signed = $signed; signatureStatus = [string]$signature.Status
+    signerSubject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { $null }
     payloadFiles = $files.Count; payloadBytes = $payloadBytes
     nsisSeconds=[math]::Round($compileClock.Elapsed.TotalSeconds,3)
     totalSeconds=[math]::Round($totalClock.Elapsed.TotalSeconds,3)

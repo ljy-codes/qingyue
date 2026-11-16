@@ -37,6 +37,7 @@ internal static class Program
             ("existing mapping and visible text", Mapping),
             ("block hierarchy and literal code", Blocks),
             ("preview inline styles and inert content", InlinePreview),
+            ("preview GFM autolinks and reference links", GfmPreview),
             ("preview lists and table grid", ListsAndTables),
             ("preview one-dash table syntax", () => TableSyntaxCompatibility(1)),
             ("preview two-dash table syntax", () => TableSyntaxCompatibility(2)),
@@ -53,6 +54,7 @@ internal static class Program
             ("markdown outline preserves heading levels and source ranges", Outline),
             ("text diff marks changed lines and keeps line numbers", Diff),
             ("pasted Markdown shows a sequence diagram", MermaidChecks.Preview),
+            ("pasted Markdown shows a flowchart", MermaidChecks.FlowchartPreview),
             ("Mermaid fences, literal code and failure recovery", MermaidChecks.FencesAndFallback),
             ("Mermaid reader preserves search and source mapping", MermaidChecks.ReadingMapping),
             ("Mermaid has visible geometry and overflow scrolling", MermaidChecks.Layout),
@@ -67,6 +69,20 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--screenshots") Screenshots(args[1]);
         Console.WriteLine($"Markdown checks: {tests.Length - failed}/{tests.Length} passed");
         return failed == 0 ? 0 : 1;
+    }
+
+    private static void GfmPreview()
+    {
+        const string input = "[guide]: https://example.test/guide \"指南\"\n\n" +
+            "<https://example.test> <mailto:reader@example.test>\n[文档][guide]\n[未解析][missing]";
+        var preview = new MarkdownPreview(input, 16, 680);
+        string visible = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text;
+        Check(visible.Contains("https://example.test", StringComparison.Ordinal), "HTTP autolink preview text");
+        Check(visible.Contains("mailto:reader@example.test", StringComparison.Ordinal), "mailto autolink preview text");
+        Check(visible.Contains("文档", StringComparison.Ordinal) &&
+            !visible.Contains("[文档][guide]", StringComparison.Ordinal), "reference link preview text");
+        Check(visible.Contains("[未解析][missing]", StringComparison.Ordinal), "unresolved reference stays visible");
+        Check(!visible.Contains("[guide]:", StringComparison.Ordinal), "reference definition stays hidden");
     }
 
     private static void Mapping()

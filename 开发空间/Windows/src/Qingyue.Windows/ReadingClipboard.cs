@@ -796,15 +796,22 @@ public static class ReadingClipboard
 
         private XElement? ImageContent(UIElement? child, int depth, ReadingBlock? sourceBlock = null)
         {
-            MermaidSequenceView? mermaid = FindMermaid(child, depth);
+            FrameworkElement? mermaid = FindMermaid(child, depth);
             if (mermaid is not null)
             {
                 if (sourceBlock is { } source && MermaidBlock.IsMermaid(source))
                     mermaidSources.Add(source.Text);
                 try
                 {
-                    if (mermaid.CreateClipboardSnapshot() is { } snapshot)
-                        return EmbedBitmap(snapshot, "Mermaid 时序图");
+                    BitmapSource? snapshot = mermaid switch
+                    {
+                        MermaidSequenceView sequence => sequence.CreateClipboardSnapshot(),
+                        MermaidFlowchartView flowchart => flowchart.CreateClipboardSnapshot(),
+                        _ => null
+                    };
+                    if (snapshot is not null)
+                        return EmbedBitmap(snapshot,
+                            mermaid is MermaidFlowchartView ? "Mermaid 流程图" : "Mermaid 时序图");
                 }
                 catch (Exception ex) when (IsExportFailure(ex)) { /* Explicit placeholder below. */ }
                 OmittedImages++;
@@ -966,10 +973,10 @@ public static class ReadingClipboard
             return null;
         }
 
-        private MermaidSequenceView? FindMermaid(UIElement? element, int depth)
+        private FrameworkElement? FindMermaid(UIElement? element, int depth)
         {
             Visit(depth);
-            if (element is MermaidSequenceView mermaid) return mermaid;
+            if (element is MermaidSequenceView or MermaidFlowchartView) return (FrameworkElement)element;
             foreach (object child in LogicalTreeHelper.GetChildren(element))
                 if (child is UIElement nested && FindMermaid(nested, depth + 1) is { } found)
                     return found;
