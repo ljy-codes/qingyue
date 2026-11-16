@@ -358,6 +358,7 @@ public partial class MainWindow
         if (!result.TryApply(discardLocalChanges)) return;
         cancellationToken.ThrowIfCancellationRequested();
         string newText = tab.File.Text;
+        RepairAnnotationsAfterTextChange(tab, oldText, newText, refresh: false);
         anchor = TextAnchorMapper.Map(oldText, newText, anchor);
         viewportAnchor = TextAnchorMapper.Map(oldText, newText, viewportAnchor);
         selectionStart = TextAnchorMapper.Map(oldText, newText, selectionStart);

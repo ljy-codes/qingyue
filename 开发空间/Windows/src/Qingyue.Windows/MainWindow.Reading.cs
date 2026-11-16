@@ -55,8 +55,10 @@ public partial class MainWindow
         if (snapToBlockStart) tab.SourceAnchor = SnapToReadingBlockStart(model, tab.SourceAnchor);
         var rendered = PreviewLimits.CanRender(tab.File.Text, tab.Kind)
             ? tab.Kind == TextKind.Markdown
-                ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
-                : new RenderedReading(model, sourcePath: tab.File.Path)
+                ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path,
+                    CurrentReadingPresentation(), settings.ReadingWidth)
+                : new RenderedReading(model, sourcePath: tab.File.Path,
+                    presentation: CurrentReadingPresentation())
             : null;
         PublishReading(tab, model, rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
     }
@@ -182,8 +184,11 @@ public partial class MainWindow
     private void UpdateReadingWidth(EditorTab tab)
     {
         if (tab.Rendered is null) return;
-        tab.Rendered.UpdatePresentation(tab.Preview, settings.FontSize + 1, settings.ReadingWidth);
+        tab.Rendered.UpdatePresentation(tab.Preview, CurrentReadingPresentation(), settings.ReadingWidth);
     }
+
+    private ReadingPresentation CurrentReadingPresentation() =>
+        settings.ToPresentation() with { FontSize = settings.FontSize + 1 };
 
     private void UpdateReadingWidths()
     {
@@ -215,30 +220,32 @@ public partial class MainWindow
         ApplySidebar();
     }
 
-    public void ApplyTheme(bool dark)
+    public void ApplyTheme(bool dark) =>
+        ApplyTheme(dark ? ReaderThemeKind.Dark : ReaderThemeKind.Light);
+
+    public void ApplyTheme(ReaderThemeKind theme)
     {
-        settings.Dark = dark;
-        var names = new[] { "WindowBrush", "PanelBrush", "EditorBrush", "ReadingBrush", "ReadingPanelBrush",
-            "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush",
-            "SearchHighlightBrush", "SearchHighlightBorderBrush" };
-        var colors = dark
-            ? new[] { "#191B1F", "#23262B", "#2A2825", "#2A2825", "#23262B", "#E8E2D8", "#BEB8AE", "#4B4D52", "#2F6FDB", "#355A91", "#34383F", "#80F2C14D", "#D5E1A128" }
-            : new[] { "#F6F4EF", "#EFEAE2", "#FFFDF8", "#FFFDF8", "#EFEAE2", "#262A2F", "#6B6A66", "#D8D1C5", "#2F6FDB", "#D7E5FA", "#F3EDE4", "#80F2C14D", "#D5E1A128" };
-        for (int i = 0; i < names.Length; i++)
-            Resources[names[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[i]));
-        Resources[SystemColors.MenuBrushKey] = Resources["PanelBrush"];
-        Resources[SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
-        Resources[SystemColors.WindowBrushKey] = Resources["PanelBrush"];
-        Resources[SystemColors.WindowTextBrushKey] = Resources["TextBrush"];
-        ApplyNativeTitleBarTheme(dark);
+        settings.Theme = ReaderTheme.NormalizeName(theme.ToString(), theme == ReaderThemeKind.Dark);
+        settings.Dark = theme == ReaderThemeKind.Dark;
+        ReaderTheme.Apply(Resources, theme);
+        ApplyNativeTitleBarTheme(settings.Dark);
         var accents = new[] { "AccentTextBrush", "SyntaxKeyBrush", "SyntaxStringBrush", "SyntaxValueBrush", "SyntaxCommentBrush", "UnsavedBrush", "SavedBrush" };
-        var accentColors = dark
+        var accentColors = settings.Dark
             ? new[] { "#88C8FF", "#88C8FF", "#FFD096", "#74DEC7", "#BAC5BA", "#FFBE72", "#74D6AD" }
             : new[] { "#1F60BD", "#175BB5", "#A64A0A", "#087563", "#5C6D59", "#A95A00", "#19764E" };
         for (int i = 0; i < accents.Length; i++)
             Resources[accents[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(accentColors[i]));
         foreach (var tab in tabs) RefreshSyntax(tab);
         SchedulePersist();
+    }
+
+    private void ShowReadingAppearance()
+    {
+        var selection = Modal(() => ReadingAppearanceDialog.Show(this, settings));
+        if (selection is null) return;
+        selection.ApplyTo(settings);
+        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
+        ApplyEditorSettings();
     }
 }
 

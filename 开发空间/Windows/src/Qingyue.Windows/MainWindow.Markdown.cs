@@ -92,7 +92,7 @@ public partial class MainWindow
             // Keep the control lightweight while the real document is built in the
             // cancellable async pipeline. An empty document also gives the user an
             // immediate, stable host while a large Markdown file is being prepared.
-            markdownPreview = new MarkdownPreview("", settings.FontSize + 1, settings.ReadingWidth, tab.File.Path,
+            markdownPreview = new MarkdownPreview("", CurrentReadingPresentation(), settings.ReadingWidth, tab.File.Path,
                 includeDiagramSource: true);
             ReadingClipboard.Attach(markdownPreview, () => true,
                 reason => StatusText.Text = "复制已降级：" + reason);
@@ -112,7 +112,7 @@ public partial class MainWindow
         {
             if (markdownFont != settings.FontSize || markdownWidth != settings.ReadingWidth)
             {
-                markdownPreview.UpdatePresentation(settings.FontSize + 1, settings.ReadingWidth);
+                markdownPreview.UpdatePresentation(CurrentReadingPresentation(), settings.ReadingWidth);
                 markdownFont = settings.FontSize;
                 markdownWidth = settings.ReadingWidth;
             }
@@ -178,7 +178,7 @@ public partial class MainWindow
             var model = await Task.Run(() => ReadingModel.Build(text, TextKind.Markdown),
                 cancellation.Token).WaitAsync(cancellation.Token);
             var document = await MarkdownPreview.BuildDocumentAsync(model, text, tab.File.Path,
-                settings.FontSize + 1, settings.ReadingWidth, cancellation.Token);
+                CurrentReadingPresentation(), settings.ReadingWidth, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (markdownPreviewCancellation != cancellation || generation != markdownPreviewGeneration ||
                 CurrentTab != tab || markdownTab != tab || tab.IsReading ||

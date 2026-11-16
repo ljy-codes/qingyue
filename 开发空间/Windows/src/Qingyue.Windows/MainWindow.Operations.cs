@@ -81,8 +81,9 @@ public partial class MainWindow
             if (PreviewLimits.CanRender(request.Text, request.Kind))
                 rendered = request.Kind == TextKind.Markdown
                     ? await RenderedReading.MarkdownAsync(model, request.Text, request.SourcePath,
-                        request.FontSize, request.ReadingWidth, request.Token)
-                    : new RenderedReading(model, sourcePath: path);
+                        request.Presentation, request.ReadingWidth, request.Token)
+                    : new RenderedReading(model, sourcePath: path,
+                        presentation: request.Presentation);
             request.Token.ThrowIfCancellationRequested();
             if (!IsCurrentMarkdownRenderRequest(request, expected)) return false;
             PublishReading(tab, model, rendered, request.Text, request.SourcePath,
@@ -183,6 +184,7 @@ public partial class MainWindow
         internal TextKind Kind { get; }
         internal double FontSize { get; }
         internal double ReadingWidth { get; }
+        internal ReadingPresentation Presentation { get; set; }
         internal long Generation { get; }
         internal CancellationTokenSource Cancellation { get; }
         internal CancellationToken Token => Cancellation.Token;
@@ -196,6 +198,7 @@ public partial class MainWindow
             Kind = kind;
             FontSize = fontSize;
             ReadingWidth = readingWidth;
+            Presentation = new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13);
             Generation = generation;
             Cancellation = cancellation;
         }
@@ -211,7 +214,10 @@ public partial class MainWindow
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
         markdownRenderCancellation = cancellation;
         return new MarkdownRenderRequest(tab, text, sourcePath, kind, settings.FontSize + 1,
-            settings.ReadingWidth, ++markdownRenderGeneration, cancellation);
+            settings.ReadingWidth, ++markdownRenderGeneration, cancellation)
+        {
+            Presentation = CurrentReadingPresentation()
+        };
     }
 
     private bool IsCurrentMarkdownRenderRequest(MarkdownRenderRequest request, ExternalFileRefresh expected) =>

@@ -17,7 +17,14 @@ public sealed partial class RenderedReading
     internal static RenderedReading Markdown(ReadingModel model, string text, string? sourcePath,
         double fontSize, double readingWidth)
     {
-        var preview = new MarkdownPreview(text, fontSize, readingWidth, sourcePath, includeDiagramSource: true);
+        return Markdown(model, text, sourcePath,
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+    }
+
+    internal static RenderedReading Markdown(ReadingModel model, string text, string? sourcePath,
+        ReadingPresentation presentation, double readingWidth)
+    {
+        var preview = new MarkdownPreview(text, presentation, readingWidth, sourcePath, includeDiagramSource: true);
         var document = preview.Document;
         preview.Document = new FlowDocument();
         return new RenderedReading(model, document);
@@ -30,6 +37,11 @@ public sealed partial class RenderedReading
     /// </summary>
     public static async Task<RenderedReading> MarkdownAsync(ReadingModel model, string original,
         string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
+        => await MarkdownAsync(model, original, sourcePath,
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth, token);
+
+    public static async Task<RenderedReading> MarkdownAsync(ReadingModel model, string original,
+        string? sourcePath, ReadingPresentation presentation, double readingWidth, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(original);
@@ -37,7 +49,8 @@ public sealed partial class RenderedReading
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA ||
             SynchronizationContext.Current is not DispatcherSynchronizationContext)
             throw new InvalidOperationException("MarkdownAsync must be called on the WPF UI dispatcher.");
-        var document = await MarkdownPreview.BuildDocumentAsync(model, original, sourcePath, fontSize, readingWidth, token);
+        var document = await MarkdownPreview.BuildDocumentAsync(model, original, sourcePath,
+            presentation, readingWidth, token);
         token.ThrowIfCancellationRequested();
         var map = await RichDocumentMap.CreateAsync(document, model, token);
         token.ThrowIfCancellationRequested();

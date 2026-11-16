@@ -22,6 +22,7 @@ public partial class MainWindow
         Bind(Key.F, ModifierKeys.Control, "find");
         Bind(Key.H, ModifierKeys.Control, "replace");
         Bind(Key.R, ModifierKeys.Control, "reading");
+        Bind(Key.A, ModifierKeys.Control | ModifierKeys.Shift, "annotate");
         Bind(Key.D, ModifierKeys.Control, "bookmark");
         Bind(Key.B, ModifierKeys.Control, "sidebar");
         Bind(Key.G, ModifierKeys.Control, "goto");
@@ -76,6 +77,7 @@ public partial class MainWindow
                     break;
                 case "quit": Close(); break;
                 case "reading": await ToggleReadingAsync(); break;
+                case "annotate": CaptureAnnotation(); break;
                 case "bookmark": ToggleBookmark(); break;
                 case "cancelLoading": CancelLoading(); break;
                 case "diagnostics": ShowOperationDiagnostics(); break;
@@ -85,6 +87,7 @@ public partial class MainWindow
                 case "wrap": settings.Wrap = !settings.Wrap; ApplyEditorSettings(); break;
                 case "lines": settings.LineNumbers = !settings.LineNumbers; ApplyEditorSettings(); break;
                 case "theme": ApplyTheme(!settings.Dark); break;
+                case "appearance": ShowReadingAppearance(); break;
                 case "fontUp": settings.FontSize = Math.Min(30, settings.FontSize + 1); ApplyEditorSettings(); break;
                 case "fontDown": settings.FontSize = Math.Max(10, settings.FontSize - 1); ApplyEditorSettings(); break;
                 case "find": ShowSearch(false); break;
@@ -133,6 +136,8 @@ public partial class MainWindow
                 case "copyCodeBlock": CopyReadingCodeBlock(); break;
                 case "copyTable": CopyReadingTable(); break;
                 case "exportHtml": await ShareReadingWithProgressAsync(true); break;
+                case "exportBriefMarkdown": await ExportReadingBriefAsync(false); break;
+                case "exportBriefHtml": await ExportReadingBriefAsync(true); break;
                 case "drafts": await ShowDraftSettingsAsync(); break;
                 case "externalAccept": await AcceptExternalVersionAsync(); break;
                 case "externalKeep": await KeepExternalEditAsync(); break;

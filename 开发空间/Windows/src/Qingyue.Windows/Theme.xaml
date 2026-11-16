@@ -20,6 +20,11 @@
   <SolidColorBrush x:Key="SavedBrush" Color="#7BDEB3"/>
   <SolidColorBrush x:Key="SearchHighlightBrush" Color="#80F2C14D"/>
   <SolidColorBrush x:Key="SearchHighlightBorderBrush" Color="#D5E1A128"/>
+  <SolidColorBrush x:Key="AnnotationAmberBrush" Color="#B8792E"/>
+  <SolidColorBrush x:Key="AnnotationBlueBrush" Color="#4F8CC9"/>
+  <SolidColorBrush x:Key="AnnotationGreenBrush" Color="#4C9B73"/>
+  <SolidColorBrush x:Key="AnnotationRoseBrush" Color="#C56B78"/>
+  <SolidColorBrush x:Key="AnnotationVioletBrush" Color="#8870C2"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.MenuBrushKey}" Color="#23262B"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.MenuTextBrushKey}" Color="#E8E2D8"/>
   <SolidColorBrush x:Key="{x:Static SystemColors.WindowBrushKey}" Color="#23262B"/>

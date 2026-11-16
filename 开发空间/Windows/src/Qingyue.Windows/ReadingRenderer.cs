@@ -24,8 +24,12 @@ public sealed partial class RenderedReading
     };
 
     public RenderedReading(ReadingModel model, bool renderMermaid = true, string? sourcePath = null,
-        string? sourceText = null)
+        string? sourceText = null, ReadingPresentation? presentation = null)
     {
+        var normalized = (presentation ?? ReadingPresentation.Default).Normalize();
+        Document.FontFamily = new FontFamily(normalized.FontFamily);
+        Document.FontSize = normalized.FontSize;
+        Document.LineHeight = normalized.FontSize * normalized.LineHeight;
         Document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         var diagramBudget = new MermaidBlock.Budget();
         // Core intentionally exposes only visible image labels. The host can supply the
@@ -36,7 +40,7 @@ public sealed partial class RenderedReading
             var run = new Run(block.Text);
             runs.Add((block.DisplayStart, run));
             var paragraph = new Paragraph(run) { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
-            StyleBlock(paragraph, block, Document.FontSize);
+            StyleBlock(paragraph, block, normalized);
             if (renderMermaid && MermaidBlock.IsMermaid(block))
             {
                 if (diagramBudget.TakeBlock(block))
@@ -73,8 +77,16 @@ public sealed partial class RenderedReading
     }
 
     // Style only: the single Run and its text must stay intact for PointerAt/OffsetAt.
-    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block, double fontSize)
+    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block, double fontSize) =>
+        StyleBlock(paragraph, block, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13));
+
+    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block,
+        ReadingPresentation presentation)
     {
+        presentation = presentation.Normalize();
+        double fontSize = presentation.FontSize;
+        paragraph.Margin = new Thickness(0, 0, 0, presentation.ParagraphSpacing);
         switch (block.Kind)
         {
             case ReadingBlockKind.Heading:
@@ -84,7 +96,7 @@ public sealed partial class RenderedReading
                 paragraph.SetResourceReference(Paragraph.ForegroundProperty,
                     level == 1 ? "AccentTextBrush" : level == 2 ? "SyntaxKeyBrush" : "TextBrush");
                 paragraph.Margin = new Thickness(0, fontSize * (level switch { 1 => 1.75, 2 => 1.5, _ => 1.25 }), 0, fontSize * .75);
-                paragraph.LineHeight = paragraph.FontSize * 1.4;
+                paragraph.LineHeight = paragraph.FontSize * Math.Min(1.75, presentation.LineHeight);
                 paragraph.KeepWithNext = true;
                 break;
             case ReadingBlockKind.Code:
@@ -144,32 +156,51 @@ public sealed partial class RenderedReading
     /// contain Document. Selection pointers, mapping and decoded images stay valid.
     /// </summary>
     public void UpdatePresentation(RichTextBox host, double fontSize, double readingWidth)
+        => UpdatePresentation(host, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    public void UpdatePresentation(RichTextBox host, ReadingPresentation presentation, double readingWidth)
     {
         ArgumentNullException.ThrowIfNull(host);
         if (!ReferenceEquals(host.Document, Document))
             throw new ArgumentException("The host must contain this reading document.", nameof(host));
-        ApplyPresentation(host, fontSize, readingWidth);
+        ApplyPresentation(host, presentation, readingWidth);
     }
 
     internal static void ApplyPresentation(RichTextBox host, double fontSize, double readingWidth)
+        => ApplyPresentation(host, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    internal static void ApplyPresentation(RichTextBox host, ReadingPresentation value, double readingWidth)
     {
         host.VerifyAccess();
+        var presentation = value.Normalize();
+        double fontSize = presentation.FontSize;
         if (!double.IsFinite(fontSize) || fontSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(readingWidth));
         var document = host.Document;
         double oldFontSize = document.FontSize;
-        bool fontChanged = oldFontSize != fontSize || document.LineHeight != fontSize * 1.75;
+        bool fontChanged = oldFontSize != fontSize
+            || document.LineHeight != fontSize * presentation.LineHeight
+            || !string.Equals(document.FontFamily.Source, presentation.FontFamily, StringComparison.OrdinalIgnoreCase);
         var oldPadding = document.PagePadding;
         double vertical = host.VerticalOffset, horizontal = host.HorizontalOffset;
         if (fontChanged)
         {
+            document.FontFamily = new FontFamily(presentation.FontFamily);
             document.FontSize = fontSize;
-            document.LineHeight = fontSize * 1.75;
+            document.LineHeight = fontSize * presentation.LineHeight;
             foreach (var block in document.Blocks)
-                UpdateBlockPresentation(block, fontSize, fontSize / oldFontSize);
+                UpdateBlockPresentation(block, presentation, fontSize / oldFontSize);
         }
+        else
+        {
+            foreach (var block in document.Blocks)
+                UpdateBlockPresentation(block, presentation, 1);
+        }
+        host.FontFamily = new FontFamily(presentation.FontFamily);
         if (host.FontSize != fontSize) host.FontSize = fontSize;
         ApplyPageLayout(host, readingWidth);
         if (!fontChanged && oldPadding == document.PagePadding) return;
@@ -190,15 +221,16 @@ public sealed partial class RenderedReading
         caption.FontSize = Math.Max(11, fontSize * .8);
     }
 
-    private static void UpdateBlockPresentation(Block block, double fontSize, double ratio)
+    private static void UpdateBlockPresentation(Block block, ReadingPresentation presentation, double ratio)
     {
+        double fontSize = presentation.FontSize;
         switch (block)
         {
             case Paragraph paragraph:
                 if (paragraph.Tag is ReadingBlock source)
                 {
                     var margin = paragraph.Margin;
-                    StyleBlock(paragraph, source, fontSize);
+                    StyleBlock(paragraph, source, presentation);
                     // Rich lists put indentation on the outer List, not its paragraphs.
                     if (paragraph.Parent is ListItem) paragraph.Margin = margin;
                 }
@@ -206,17 +238,17 @@ public sealed partial class RenderedReading
                 break;
             case System.Windows.Documents.List list:
                 foreach (var item in list.ListItems)
-                    foreach (var child in item.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                    foreach (var child in item.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case Table table:
                 table.FontSize = fontSize * .9;
                 foreach (var group in table.RowGroups)
                     foreach (var row in group.Rows)
                         foreach (var cell in row.Cells)
-                            foreach (var child in cell.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                            foreach (var child in cell.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case Section section:
-                foreach (var child in section.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                foreach (var child in section.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case BlockUIContainer { Tag: ReadingBlock diagramSource, Child: FrameworkElement diagram }
                 when MermaidBlock.IsMermaid(diagramSource):

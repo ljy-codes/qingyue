@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly WorkspaceStore workspace;
     private readonly BookmarkStore bookmarks;
     private readonly ReadingListStore readingList;
+    private readonly AnnotationStore annotations;
     private readonly LocalWorkspaceScanner workspaceScanner = new();
     private readonly ReaderSettings settings;
     private readonly UpdateService updateService;
@@ -48,6 +49,7 @@ public partial class MainWindow : Window
         workspace = new WorkspaceStore(dataDirectory);
         bookmarks = new BookmarkStore(dataDirectory);
         readingList = new ReadingListStore(dataDirectory);
+        annotations = new AnnotationStore(dataDirectory);
         InitializeComponent();
         SourceInitialized += (_, _) => ApplyNativeTitleBarTheme(settings.Dark);
         InitializeEditingInteractions();
@@ -61,7 +63,7 @@ public partial class MainWindow : Window
         WorkspaceTypeFilter.SelectedIndex = 0;
         Width = Math.Min(settings.Width, SystemParameters.WorkArea.Width);
         Height = Math.Min(settings.Height, SystemParameters.WorkArea.Height);
-        ApplyTheme(settings.Dark);
+        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
         ApplySidebar();
         RefreshRecent();
         InstallShortcuts();
@@ -88,6 +90,7 @@ public partial class MainWindow : Window
         await PrepareRecoveryAsync();
         await bookmarks.LoadAsync();
         await readingList.LoadAsync();
+        await annotations.LoadAsync();
         RefreshReadingList();
         if (restoreSession && settings.RestoreSession)
         {
@@ -121,6 +124,9 @@ public partial class MainWindow : Window
         if (tabs.Count == 0) NewDocument();
         initialized = true;
         RefreshCurrent();
+        RefreshAnnotations();
+        RefreshAnnotationHighlights();
+        if (annotations.LastWarning is not null) StatusText.Text = annotations.LastWarning;
         if (readingList.LastWarning is not null) StatusText.Text = readingList.LastWarning;
         if (settings.WorkspaceRoot is { } root && Directory.Exists(root))
             await ScanWorkspaceAsync(root);
@@ -139,9 +145,12 @@ public partial class MainWindow : Window
         AttachSyntax(tab);
         tab.Editor.TextChanged += (_, _) =>
         {
+            string oldText = tab.File.Text;
             tab.File.Text = Normalize(tab.Editor.Text);
             tab.Reading = null;
             tab.Rendered = null;
+            if (!string.Equals(oldText, tab.File.Text, StringComparison.Ordinal))
+                RepairAnnotationsAfterTextChange(tab, oldText, tab.File.Text);
             RefreshAutomaticKind(tab);
             tab.NotifyChanged();
             tab.UpdateLineNumbers();
@@ -152,10 +161,16 @@ public partial class MainWindow : Window
             }
             SchedulePersist();
         };
-        tab.Editor.SelectionChanged += (_, _) => { if (CurrentTab == tab) RefreshLocation(); };
-        tab.Preview.SelectionChanged += (_, _) => { if (CurrentTab == tab) RefreshLocation(); };
-        tab.Preview.Loaded += (_, _) => UpdateReadingWidth(tab);
-        tab.Preview.SizeChanged += (_, _) => UpdateReadingWidth(tab);
+        tab.Editor.SelectionChanged += (_, _) =>
+        {
+            if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
+        };
+        tab.Preview.SelectionChanged += (_, _) =>
+        {
+            if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
+        };
+        tab.Preview.Loaded += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
+        tab.Preview.SizeChanged += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
         AttachReadingNavigation(tab);
         ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading,
             reason => StatusText.Text = "复制已降级：" + reason);
@@ -218,6 +233,8 @@ public partial class MainWindow : Window
         }
         RefreshStatus();
         RefreshBookmarks();
+        RefreshAnnotations();
+        RefreshAnnotationHighlights();
         RefreshLocation();
         QueueSearch();
         SchedulePersist();
@@ -401,6 +418,8 @@ public partial class MainWindow : Window
         tab.File.Save(fullPath, allowOverwrite);
         bookmarks.MigratePath(tab.File.Id, oldPath, fullPath);
         bookmarksDirty = true;
+        annotations.MigratePath(tab.File.Id, oldPath, fullPath);
+        annotationsDirty = true;
         TrackSavedBaseline(tab);
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
@@ -469,6 +488,8 @@ public partial class MainWindow : Window
         {
             bookmarks.MigratePath(tab.File.Id, old, newPath);
             bookmarksDirty = true;
+            annotations.MigratePath(tab.File.Id, old, newPath);
+            annotationsDirty = true;
         }
         OnRecoveryPathRenamed(old, tab.File.Path);
         if (old is not null) settings.Recent.RemoveAll(p => string.Equals(p, old, StringComparison.OrdinalIgnoreCase));

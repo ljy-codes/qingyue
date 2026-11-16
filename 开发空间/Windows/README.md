@@ -17,8 +17,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 这些构建命令生成产物，不自动安装或签名。
 
 输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
-`交付产品/轻阅-0.11.0-Windows构建1-x64.zip` 和
-`交付产品/轻阅-0.11.0-Windows构建1-x64-setup.exe`。
+`交付产品/轻阅-0.12.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.12.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -40,9 +40,15 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.NavigationTests`：打开取消、真实视口、查找返回与目录跳转。
 - `tests/Qingyue.RecoveryTests`：未加载草稿保护、改名中断和退出冻结。
 - `tests/Qingyue.ReaderExperienceTests`：图片窗口、表格对齐、展开阅读及资源边界。
+- `tests/Qingyue.AnnotationTests`：批注存储、路径迁移、锚点修复与阅读简报安全。
+- `tests/Qingyue.ReadingOutcomeTests`：阅读外观、主题画刷、批注选区、高亮与简报导出。
 
 当前版本支持 `mermaid` 围栏中的离线 `sequenceDiagram` 和有限 `flowchart` / `graph` 流程图，不引入 WebView 或脚本运行时。
 语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。
+
+0.12.0 增加当前文档批注与阅读简报。批注、书签、设置、阅读清单和恢复数据默认写入
+`%LOCALAPPDATA%\\Qingyue`；批注文件为 `Annotations.json`，原文仍需用户明确保存。
+本版本只支持本机数据，不提供账号、云同步或历史数据迁移。
 
 测试产物在 `artifacts`，不纳入 Git。GUI 流程测试需要可用的 Windows 交互桌面。
 手工验收范围与结果见仓库 `docs/test.md`，用户操作见 `操作指导/Windows使用说明.md`。

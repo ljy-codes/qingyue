@@ -1,11 +1,13 @@
 using System.IO;
 using System.Text.Json;
+using Qingyue.Core;
 
 namespace Qingyue.Windows;
 
 public sealed class ReaderSettings
 {
     public bool Dark { get; set; } = true;
+    public string Theme { get; set; } = "Dark";
     public bool Wrap { get; set; } = true;
     public bool LineNumbers { get; set; } = true;
     public bool Sidebar { get; set; } = true;
@@ -13,6 +15,9 @@ public sealed class ReaderSettings
     public bool RestoreSession { get; set; } = true;
     public double FontSize { get; set; } = 15;
     public double ReadingWidth { get; set; } = 720;
+    public string FontFamily { get; set; } = ReadingFontCatalog.Fallback;
+    public double LineHeight { get; set; } = 1.75;
+    public double ParagraphSpacing { get; set; } = 13;
     public double Width { get; set; } = 1120;
     public double Height { get; set; } = 790;
     public DateTimeOffset? LastUpdateCheckUtc { get; set; }
@@ -28,9 +33,18 @@ public sealed class ReaderSettings
         try
         {
             if (new FileInfo(path).Length > 1024 * 1024) return new();
-            var value = JsonSerializer.Deserialize<ReaderSettings>(System.IO.File.ReadAllText(path)) ?? new();
+            string json = System.IO.File.ReadAllText(path);
+            var value = JsonSerializer.Deserialize<ReaderSettings>(json) ?? new();
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty(nameof(Theme), out _))
+                value.Theme = value.Dark ? "Dark" : "Light";
+            value.Theme = ReaderTheme.NormalizeName(value.Theme, value.Dark);
             value.FontSize = double.IsFinite(value.FontSize) ? Math.Clamp(value.FontSize, 10, 30) : 15;
             value.ReadingWidth = double.IsFinite(value.ReadingWidth) ? Math.Clamp(value.ReadingWidth, 400, 5000) : 720;
+            value.FontFamily = ReadingFontCatalog.Normalize(value.FontFamily);
+            value.LineHeight = double.IsFinite(value.LineHeight) ? Math.Clamp(value.LineHeight, 1.1, 3.2) : 1.75;
+            value.ParagraphSpacing = double.IsFinite(value.ParagraphSpacing)
+                ? Math.Clamp(value.ParagraphSpacing, 0, 48) : 13;
             value.Width = double.IsFinite(value.Width) ? Math.Clamp(value.Width, 820, 3200) : 1120;
             value.Height = double.IsFinite(value.Height) ? Math.Clamp(value.Height, 520, 2160) : 790;
             value.Recent = (value.Recent ?? []).Where(Path.IsPathFullyQualified).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToList();
@@ -42,6 +56,9 @@ public sealed class ReaderSettings
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(); }
     }
+
+    public ReadingPresentation ToPresentation() =>
+        new ReadingPresentation(ReadingFontCatalog.Normalize(FontFamily), FontSize, LineHeight, ParagraphSpacing).Normalize();
 
     public void Save(string root)
     {

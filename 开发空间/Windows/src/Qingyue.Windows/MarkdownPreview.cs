@@ -22,13 +22,22 @@ public sealed class MarkdownPreview : RichTextBox
 {
     private const int SynchronousPreviewCharacterLimit = 32_000;
     private double readingWidth;
+    private ReadingPresentation presentation;
     private readonly string? sourcePath;
     private readonly bool includeDiagramSource;
     private string? renderedText;
 
     public MarkdownPreview(string text, double fontSize, double readingWidth, string? sourcePath = null,
         bool includeDiagramSource = false)
-        : this(fontSize, readingWidth, sourcePath, includeDiagramSource)
+        : this(new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13),
+            readingWidth, sourcePath, includeDiagramSource)
+    {
+        Update(text);
+    }
+
+    public MarkdownPreview(string text, ReadingPresentation presentation, double readingWidth,
+        string? sourcePath = null, bool includeDiagramSource = false)
+        : this(presentation, readingWidth, sourcePath, includeDiagramSource)
     {
         Update(text);
     }
@@ -45,15 +54,18 @@ public sealed class MarkdownPreview : RichTextBox
             MarkdownImages.Extract(text).References.Count == 0;
     }
 
-    private MarkdownPreview(double fontSize, double readingWidth, string? sourcePath, bool includeDiagramSource)
+    private MarkdownPreview(ReadingPresentation value, double readingWidth, string? sourcePath,
+        bool includeDiagramSource)
     {
+        presentation = value.Normalize();
+        double fontSize = presentation.FontSize;
         if (!double.IsFinite(fontSize) || fontSize <= 0) throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0) throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
         this.sourcePath = sourcePath;
         this.includeDiagramSource = includeDiagramSource;
         FontSize = fontSize;
-        FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
+        FontFamily = new FontFamily(presentation.FontFamily);
         IsReadOnly = true;
         IsUndoEnabled = false;
         IsDocumentEnabled = false;
@@ -87,14 +99,19 @@ public sealed class MarkdownPreview : RichTextBox
     /// rebuilding text, images or selection. Later Update(text) uses these settings.
     /// </summary>
     public void UpdatePresentation(double fontSize, double readingWidth)
+        => UpdatePresentation(new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    public void UpdatePresentation(ReadingPresentation value, double readingWidth)
     {
         VerifyAccess();
-        if (!double.IsFinite(fontSize) || fontSize <= 0)
-            throw new ArgumentOutOfRangeException(nameof(fontSize));
+        if (!double.IsFinite(value.FontSize) || value.FontSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
-        RenderedReading.ApplyPresentation(this, fontSize, readingWidth);
+        presentation = value.Normalize();
+        RenderedReading.ApplyPresentation(this, presentation, readingWidth);
     }
 
     // Keep failure handling at the document-building boundary; the delegate also lets the
@@ -115,7 +132,7 @@ public sealed class MarkdownPreview : RichTextBox
             string safeText = MarkdownImages.Extract(text).FallbackText(text);
             document = new FlowDocument(new Paragraph(new Run(safeText)) { Margin = new Thickness(0) })
             {
-                FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
+                FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
                 ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left
             };
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
@@ -137,8 +154,13 @@ public sealed class MarkdownPreview : RichTextBox
 
     internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
         string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
+        => await BuildDocumentAsync(model, text, sourcePath,
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth, token);
+
+    internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
+        string? sourcePath, ReadingPresentation presentation, double readingWidth, CancellationToken token)
     {
-        var builder = new MarkdownPreview(fontSize, readingWidth, sourcePath, includeDiagramSource: true);
+        var builder = new MarkdownPreview(presentation, readingWidth, sourcePath, includeDiagramSource: true);
         // No WPF object escapes to the worker. Only the image projection and pure
         // ReadingModel parsing run there; the original model is supplied by the host.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -187,7 +209,7 @@ public sealed class MarkdownPreview : RichTextBox
     {
         var document = new FlowDocument
         {
-            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
+            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
             ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left,
             PagePadding = new Thickness(36, 28, 36, 60)
         };
@@ -217,7 +239,7 @@ public sealed class MarkdownPreview : RichTextBox
             var paragraph = new Paragraph(new Run(block.Text))
             { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
             document.Blocks.Add(paragraph);
-            RenderedReading.StyleBlock(paragraph, block, FontSize);
+            RenderedReading.StyleBlock(paragraph, block, presentation);
             string source = projected.Substring(parsedBlock.SourceStart, parsedBlock.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
             if (MermaidBlock.IsMermaid(block))
             {

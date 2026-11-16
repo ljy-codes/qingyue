@@ -91,6 +91,8 @@ public partial class MainWindow
         result.Errors.AddRange(bookmarkResult.Errors);
         var readingListResult = await SaveReadingListAsync();
         result.Errors.AddRange(readingListResult.Errors);
+        var annotationResult = await SaveAnnotationsAsync();
+        result.Errors.AddRange(annotationResult.Errors);
         return result;
     }
 

@@ -121,7 +121,7 @@ internal static class Dialogs
         });
         var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(Heading(about ? "轻阅 Qingyue" : "留一点空间，给文字。", 25));
-        var subtitle = new TextBlock { Text = "0.11.0 · Windows 构建 1", Margin = new Thickness(0, 7, 0, 0) };
+        var subtitle = new TextBlock { Text = "0.12.0 · Windows 构建 1", Margin = new Thickness(0, 7, 0, 0) };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         title.Children.Add(subtitle); brand.Children.Add(title); panel.Children.Add(brand);
         panel.Children.Add(Card("从一份新文件开始",
@@ -130,6 +130,8 @@ internal static class Dialogs
             "Markdown 打开即预览；图片可点击放大，宽表格可展开阅读。\n滚动位置随会话保存；退出查找返回原阅读位置。", "Ctrl+R  预览 / 编辑    Alt+←  返回位置"));
         panel.Children.Add(Card("读完，方便带走",
             "“复制”提供富文本、纯文本和 Markdown；代码块和表格可单独复制。\n从文件菜单导出 HTML，可将已加载图片内嵌带走。打开与复制准备均可取消。", "Ctrl+C  复制选区    文件 → 导出 HTML"));
+        panel.Children.Add(Card("把阅读留下来",
+            "选中文字后点击“摘录”，可以保存引文、备注、标签和颜色；批注保存在本机并可从侧栏跳回原文。\n当前文档还能导出 Markdown 或 HTML 阅读简报，包含章节、进度和定位状态。", "Ctrl+Shift+A  摘录    视图 → 阅读外观"));
         panel.Children.Add(Card("每一次修改，都看得见",
             "行号旁橙色表示尚未保存，绿色表示本次会话已保存的修改。\n恢复草稿只保存在本机；修改原文件仍需点击保存。", "Ctrl+S  保存    Ctrl+Z  撤销"));
         panel.Children.Add(new TextBlock
