@@ -77,5 +77,7 @@ public sealed record ReadingBlock(
     int DisplayStart, int Level = 0)
 {
     public string? CodeLanguage { get; init; }
+    // Paragraph/code blocks owned by the list item at the zero-based Level.
+    public bool ListContinuation { get; init; }
 }
 public sealed record ReadingHeading(string Title, int SourceStart, int DisplayStart, int Level = 1);

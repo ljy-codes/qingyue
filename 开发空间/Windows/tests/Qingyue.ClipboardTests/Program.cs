@@ -37,6 +37,9 @@ internal static class Program
         Test("real native selection copy adds image-bearing RTF for full and partial image selections", NativeSelectedImages);
         Test("WPF default in-memory paste chooses a complete image-bearing selection format", NativeDefaultPaste);
         Test("line breaks code quote emphasis and ordered list semantics survive export", Formatting);
+        Test("Markdown nested mixed lists export real parent child HTML", NestedListClipboardChecks.Structure);
+        Test("Markdown zero and discontinuous ordered children retain numbers", NestedListClipboardChecks.Numbering);
+        Test("partial nested list copy excludes parents and siblings", NestedListClipboardChecks.Partial);
         Test("rectangular selection excludes adjacent image-only cells", RectangularImages);
         Test("unknown UI containers are not exported as missing images", UnknownUi);
         Test("blank table cells retain their column position in HTML and native rich formats", EmptyCells);

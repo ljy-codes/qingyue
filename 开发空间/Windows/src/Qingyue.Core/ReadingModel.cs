@@ -114,7 +114,7 @@ public sealed class ReadingModel
         new(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromMilliseconds(350));
     private static readonly Regex Atx = Pattern(@"^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$");
     private static readonly Regex Fence = Pattern(@"^ {0,3}(`{3,}|~{3,})(.*)$");
-    private static readonly Regex List = Pattern(@"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+(.*)$");
+    private static readonly Regex List = Pattern(@"^(?<indent>[ \t]*)(?:[-+*]|[0-9]{1,9}[.)])[ \t]+(?<body>.*)$");
     private static readonly Regex Quote = Pattern(@"^ {0,3}>[ \t]?(.*)$");
     private static readonly Regex Task = Pattern(@"^\[([ xX])\][ \t]+(.*)$");
     private static readonly Regex TableSeparator = Pattern(@"^:?-+:?$");
@@ -131,12 +131,15 @@ public sealed class ReadingModel
         var references = CollectReferenceDefinitions(lines);
         var blocks = new List<ReadingBlock>();
         var headings = new List<ReadingHeading>();
+        var listParents = new List<(int Indent, int ContentIndent)>();
+        bool afterBlank = false;
         int display = 0;
-        void Add(ReadingBlockKind kind, string value, int first, int last, int level = 0)
+        void Add(ReadingBlockKind kind, string value, int first, int last, int level = 0,
+            bool listContinuation = false)
         {
             if (blocks.Count > 0) display++;
             var block = new ReadingBlock(kind, value, lines[first].Start,
-                lines[last].End - lines[first].Start, display, level);
+                lines[last].End - lines[first].Start, display, level) { ListContinuation = listContinuation };
             blocks.Add(block);
             if (kind == ReadingBlockKind.Heading && headings.Count < MaximumHeadings)
                 headings.Add(new(value, block.SourceStart, display, level));
@@ -146,17 +149,25 @@ public sealed class ReadingModel
         for (int i = 0; i < lines.Count;)
         {
             string line = lines[i].Text;
-            if (string.IsNullOrWhiteSpace(line)) { i++; continue; }
+            if (string.IsNullOrWhiteSpace(line)) { afterBlank = true; i++; continue; }
+            bool separated = afterBlank;
+            afterBlank = false;
             int first = i;
-            var fence = Fence.Match(line);
+            int indent = Indentation(line);
+            int owner = listParents.FindLastIndex(parent => indent >= parent.ContentIndent);
+            int contentIndent = owner < 0 ? 0 : listParents[owner].ContentIndent;
+            var fence = Fence.Match(StripIndent(line, contentIndent));
             if (fence.Success)
             {
+                listParents.RemoveRange(owner + 1, listParents.Count - owner - 1);
                 string marker = fence.Groups[1].Value;
                 var content = new List<string>();
                 i++;
-                while (i < lines.Count && !ClosesFence(lines[i].Text, marker)) content.Add(lines[i++].Text);
+                while (i < lines.Count && !ClosesFence(StripIndent(lines[i].Text, contentIndent), marker))
+                    content.Add(StripIndent(lines[i++].Text, indent));
                 if (i < lines.Count) i++;
-                Add(ReadingBlockKind.Code, string.Join("\n", content), first, i - 1);
+                Add(ReadingBlockKind.Code, string.Join("\n", content), first, i - 1,
+                    Math.Max(0, owner), listContinuation: owner >= 0);
                 var info = fence.Groups[2].Value.AsSpan().Trim();
                 int languageEnd = info.IndexOfAny(' ', '\t');
                 blocks[^1] = blocks[^1] with
@@ -165,6 +176,49 @@ public sealed class ReadingModel
                 };
                 continue;
             }
+            var list = List.Match(line);
+            if (list.Success && !IsSeparator(line) && (indent <= 3 || listParents.Count > 0))
+            {
+                while (listParents.Count > 0 && indent < listParents[^1].Indent)
+                    listParents.RemoveAt(listParents.Count - 1);
+                if (listParents.Count > 0 && indent == listParents[^1].Indent)
+                    listParents.RemoveAt(listParents.Count - 1);
+                // Depth follows actual ancestors, so both two- and four-space
+                // indentation (and tab stops) add one level, never phantom items.
+                listParents.Add((indent, ColumnAt(line, list.Groups["body"].Index)));
+                string value = list.Groups["body"].Value;
+                var task = Task.Match(value);
+                value = task.Success
+                    ? (task.Groups[1].Value == " " ? "☐ " : "☑ ") + Inline(task.Groups[2].Value, references)
+                    : Inline(value, references);
+                Add(ReadingBlockKind.ListItem, value, i, i, listParents.Count - 1);
+                i++;
+                continue;
+            }
+            // Indentation selects the nearest owning ancestor, not necessarily
+            // the most recent child. A nonblank lazy paragraph may continue it.
+            if (owner < 0 && !separated && listParents.Count > 0 && !IsSpecial(line) &&
+                !(i + 1 < lines.Count && LooksLikeTable(line, lines[i + 1].Text)))
+                owner = listParents.Count - 1;
+            if (owner >= 0 && !IsSpecial(line.TrimStart(' ', '\t')))
+            {
+                listParents.RemoveRange(owner + 1, listParents.Count - owner - 1);
+                var continuation = new List<string> { Inline(line.TrimStart(' ', '\t'), references) };
+                i++;
+                while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i].Text) &&
+                    !IsSpecial(lines[i].Text.TrimStart(' ', '\t')))
+                {
+                    int nextIndent = Indentation(lines[i].Text);
+                    int nextOwner = listParents.FindLastIndex(parent => nextIndent >= parent.ContentIndent);
+                    if (nextOwner >= 0 && nextOwner != owner) break;
+                    if (i + 1 < lines.Count && LooksLikeTable(lines[i].Text, lines[i + 1].Text)) break;
+                    continuation.Add(Inline(lines[i++].Text.TrimStart(' ', '\t'), references));
+                }
+                Add(ReadingBlockKind.Paragraph, string.Join("\n", continuation), first, i - 1,
+                    owner, listContinuation: true);
+                continue;
+            }
+            listParents.Clear();
             if (TryReferenceDefinition(line, out _, out _))
             {
                 i++;
@@ -201,18 +255,6 @@ public sealed class ReadingModel
                 i = last + 1;
                 continue;
             }
-            var list = List.Match(line);
-            if (list.Success)
-            {
-                string value = list.Groups[1].Value;
-                var task = Task.Match(value);
-                value = task.Success
-                    ? (task.Groups[1].Value == " " ? "☐ " : "☑ ") + Inline(task.Groups[2].Value, references)
-                    : Inline(value, references);
-                Add(ReadingBlockKind.ListItem, value, i, i);
-                i++;
-                continue;
-            }
             var quote = Quote.Match(line);
             if (quote.Success)
             {
@@ -239,18 +281,46 @@ public sealed class ReadingModel
         return new(text, false, blocks, headings, references);
     }
 
+    private static int Indentation(string line)
+    {
+        int end = 0;
+        while (end < line.Length && line[end] is ' ' or '\t') end++;
+        return ColumnAt(line, end);
+    }
+
+    private static int ColumnAt(string line, int end)
+    {
+        int column = 0;
+        for (int i = 0; i < end; i++)
+            column = line[i] == '\t' ? column + 4 - column % 4 : column + 1;
+        return column;
+    }
+
+    private static string StripIndent(string line, int columns)
+    {
+        int i = 0, column = 0;
+        while (i < line.Length && column < columns && line[i] is ' ' or '\t')
+        {
+            column = line[i++] == '\t' ? column + 4 - column % 4 : column + 1;
+        }
+        return column > columns ? new string(' ', column - columns) + line[i..] : line[i..];
+    }
+
     private static IReadOnlyDictionary<string, string> CollectReferenceDefinitions(List<Line> lines)
     {
         var references = new Dictionary<string, string>(StringComparer.Ordinal);
         string? marker = null;
         foreach (var line in lines)
         {
+            // This pass has no list tree yet. Conservatively isolate indented
+            // fences too, so definitions in a parent item's code cannot escape.
+            string content = line.Text.TrimStart(' ', '\t');
             if (marker is not null)
             {
-                if (ClosesFence(line.Text, marker)) marker = null;
+                if (ClosesFence(content, marker)) marker = null;
                 continue;
             }
-            var fence = Fence.Match(line.Text);
+            var fence = Fence.Match(content);
             if (fence.Success)
             {
                 marker = fence.Groups[1].Value;

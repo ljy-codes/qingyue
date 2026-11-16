@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Input;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Qingyue.Core;
@@ -163,6 +165,7 @@ internal static partial class Program
                     Equal(recovered.SelectTextAt(point, 2), false);
                 });
                 host.Close();
+                await RunMarkdownWpfTests(window);
             }
             catch (Exception ex) { failed++; Console.Error.WriteLine("FAIL WPF测试流程\n" + ex); }
             finally
@@ -183,6 +186,142 @@ internal static partial class Program
         // Include the debounce timer and the worker's return to the dispatcher.
         await Task.Delay(350);
         await tab.Editor.Dispatcher.InvokeAsync(() => tab.Editor.UpdateLayout(), DispatcherPriority.ApplicationIdle);
+    }
+
+    private static async Task RunMarkdownWpfTests(MainWindow window)
+    {
+        var tab = window.NewDocument("- 中文");
+        tab.AutomaticKind = false;
+        tab.Kind = TextKind.Markdown;
+        await Idle(window);
+        Test("WPF Markdown单次命令撤销重做且保存为原始标记", () =>
+        {
+            tab.Editor.CaretIndex = 4;
+            var writer = typeof(EditorTab).GetProperty("MarkdownWriter",
+                BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(tab)
+                ?? throw new Exception("编辑器尚未绑定Markdown命令");
+            var execute = writer.GetType().GetMethod("Execute")!;
+            Equal(execute.Invoke(writer, [MarkdownEditAction.Enter]), true);
+            Equal(tab.Editor.Text.ReplaceLineEndings("\n"), "- 中文\n- ");
+            tab.Editor.Undo();
+            Equal(tab.Editor.Text, "- 中文");
+            tab.Editor.Redo();
+            Equal(tab.Editor.Text.ReplaceLineEndings("\n"), "- 中文\n- ");
+            tab.Editor.Undo();
+            tab.Editor.Select(2, 2);
+            execute.Invoke(writer, [MarkdownEditAction.Bold]);
+            Equal(tab.Editor.SelectedText, "中文");
+            Equal(tab.Editor.Text, "- **中文**");
+            tab.Editor.Undo();
+            Equal(tab.Editor.Text, "- 中文");
+        });
+        Test("WPF Markdown之外保留原生输入行为", () =>
+        {
+            tab.Kind = TextKind.Plain;
+            var writer = typeof(EditorTab).GetProperty("MarkdownWriter",
+                BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(tab)
+                ?? throw new Exception("缺少编辑命令");
+            Equal(writer.GetType().GetMethod("Execute")!.Invoke(writer, [MarkdownEditAction.Enter]), false);
+            Equal(tab.Editor.Text, "- 中文");
+        });
+        tab.Kind = TextKind.Markdown;
+        window.SelectTab(tab);
+        Test("WPF中文组合输入期间不执行Markdown结构命令", () =>
+        {
+            string before = tab.Editor.Text;
+            var composition = new TextComposition(InputManager.Current, tab.Editor, "中");
+            tab.Editor.RaiseEvent(new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+            { RoutedEvent = TextCompositionManager.PreviewTextInputStartEvent });
+            Equal(tab.MarkdownWriter.Execute(MarkdownEditAction.Enter), false);
+            Equal(tab.Editor.Text, before);
+            tab.Editor.RaiseEvent(new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+            { RoutedEvent = TextCompositionManager.PreviewTextInputEvent });
+            tab.Editor.CaretIndex = tab.Editor.Text.Length;
+            Equal(tab.MarkdownWriter.Execute(MarkdownEditAction.Enter), true);
+            tab.Editor.Undo();
+            Equal(tab.Editor.Text, before);
+        });
+        Test("WPF Markdown编写工具栏操作保留选区", () =>
+        {
+            var toolbar = window.FindName("MarkdownWritingToolbar") as FrameworkElement
+                ?? throw new Exception("缺少Markdown编写工具栏");
+            Equal(toolbar.Visibility, Visibility.Visible);
+            tab.Editor.Select(2, 2);
+            var bold = (Button)window.FindName("MarkdownBoldButton");
+            bold.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(tab.Editor.Text, "- **中文**");
+            Equal(tab.Editor.SelectedText, "中文");
+            tab.Editor.Undo();
+        });
+        typeof(MainWindow).GetMethod("ToggleMarkdownPreview", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(window, null);
+        await Idle(window);
+        Test("WPF Markdown分屏双向定位与过时预览保护", () =>
+        {
+            var preview = (MarkdownPreview)typeof(MainWindow).GetField("markdownPreview",
+                BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)!;
+            bool Locate(string name) => (bool)(typeof(MainWindow).GetMethod(name,
+                BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(window, null)
+                ?? throw new Exception("缺少分屏定位：" + name));
+            Equal(Locate("LocateMarkdownPreview"), true);
+            preview.CaretPosition = preview.Document.ContentStart;
+            Equal(Locate("LocateMarkdownEditor"), true);
+            tab.Editor.AppendText("\n新行");
+            Equal(Locate("LocateMarkdownEditor"), false);
+        });
+        tab.Editor.Text = "-";
+        await Idle(window);
+        tab.Editor.Select(1, 0);
+        tab.Editor.SelectedText = " ";
+        await Task.Delay(100);
+        await Idle(window);
+        Test("WPF Markdown横线后输入空格立即激活列表显示", () =>
+        {
+            Equal(tab.Editor.Text, "- ");
+            Equal(tab.Editor.Foreground, Brushes.Transparent);
+            Equal(tab.MarkdownWriter.Markers.Count, 1);
+        });
+        window.Width = 1280; window.Height = 850;
+        window.ApplyTheme(false);
+        const string sample = "# Markdown 编写\n\n- 第一阶段\n  - 梳理业务流程\n    - 明确输入和输出\n    - 整理异常情况\n  - 每周总结一次\n- 第二阶段\n\n- [ ] 检查待办事项\n- [x] 已完成验收\n\n1. 收集资料\n2. 整理笔记\n\n> 编写和阅读都能看清层次。\n";
+        tab.Editor.Text = sample;
+        typeof(MainWindow).GetMethod("UpdateMarkdownPreview", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(window, [tab]);
+        tab.Editor.CaretIndex = sample.IndexOf("- 第一", StringComparison.Ordinal) + 2;
+        await Task.Delay(100);
+        await Idle(window);
+        Test("WPF Markdown自然绘制显示即时圆点且不改变源码", () =>
+        {
+            var syntax = tab.EditorSurface.Children.OfType<JsonSyntaxLayer>().Single();
+            Equal(tab.Editor.Foreground, Brushes.Transparent);
+            if (VisualTreeHelper.GetDrawing(syntax) is not { } drawing)
+                throw new Exception("实际覆盖层没有绘制内容");
+            static IEnumerable<Drawing> Drawings(DrawingGroup group) => group.Children
+                .SelectMany(d => d is DrawingGroup child ? Drawings(child) : [d]);
+            Equal(Drawings(drawing).OfType<GeometryDrawing>().Any(d => d.Geometry is EllipseGeometry), true);
+            Equal(tab.Editor.Text.ReplaceLineEndings("\n"), sample);
+        });
+        if (Environment.GetEnvironmentVariable("QINGYUE_MARKDOWN_SCREENSHOTS") is { Length: > 0 } screenshotRoot)
+        {
+            Directory.CreateDirectory(screenshotRoot);
+            Screenshot(window, Path.Combine(screenshotRoot, "markdown-writing-light.png"));
+            window.ApplyTheme(true);
+            await Task.Delay(100);
+            await Idle(window);
+            Screenshot(window, Path.Combine(screenshotRoot, "markdown-writing-dark.png"));
+        }
+        await RunMarkdownNavigationChecks(window);
+    }
+
+    private static void Screenshot(Window window, string path)
+    {
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(window.ActualWidth), (int)Math.Ceiling(window.ActualHeight),
+            96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(path);
+        encoder.Save(output);
     }
 
     private static void ChangesInTab(EditorTab tab, params (int, LineChangeKind, bool)[] expected)

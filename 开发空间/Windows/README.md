@@ -17,8 +17,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 这些构建命令生成产物，不自动安装或签名。
 
 输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
-`交付产品/轻阅-0.12.0-Windows构建1-x64.zip` 和
-`交付产品/轻阅-0.12.0-Windows构建1-x64-setup.exe`。
+`交付产品/轻阅-0.13.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.13.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -28,8 +28,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.FileTests`：真实临时文件与 Windows 文件系统行为。
 - `tests/Qingyue.TextTests`：Unicode、搜索与文本转换。
 - `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。
-- `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序与恢复。
-- `tests/Qingyue.MarkdownTests`：Markdown 分色、预览与阅读映射兼容。
+- `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序、恢复、Markdown 结构命令、输入法与分屏定位。
+- `tests/Qingyue.MarkdownTests`：Markdown 分色、嵌套列表、预览与阅读映射兼容。
 - `tests/Qingyue.SequenceTests`：有限 Mermaid 时序语法、错误与资源限制。
 - `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
 - `tests/Qingyue.ReadingTests`：默认全宽预览、富文本导航、自动查找与实际刷新钩子。
@@ -46,7 +46,9 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 当前版本支持 `mermaid` 围栏中的离线 `sequenceDiagram` 和有限 `flowchart` / `graph` 流程图，不引入 WebView 或脚本运行时。
 语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。
 
-0.12.0 增加当前文档批注与阅读简报。批注、书签、设置、阅读清单和恢复数据默认写入
+0.13.0 增加 Markdown 即时列表标记、嵌套列表、结构快捷键、编写工具栏与分屏双向定位。
+输入和保存仍使用原生 TextBox 与标准 Markdown，预览和复制使用真实嵌套列表。
+批注、书签、设置、阅读清单和恢复数据默认写入
 `%LOCALAPPDATA%\\Qingyue`；批注文件为 `Annotations.json`，原文仍需用户明确保存。
 本版本只支持本机数据，不提供账号、云同步或历史数据迁移。
 

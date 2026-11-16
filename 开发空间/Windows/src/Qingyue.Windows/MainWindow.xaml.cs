@@ -54,6 +54,7 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => ApplyNativeTitleBarTheme(settings.Dark);
         InitializeEditingInteractions();
         InitializeMarkdownPreview();
+        InitializeMarkdownWriting();
         InitializeExternalChanges();
         TabStrip.ItemsSource = tabs;
         KindCombo.ItemsSource = Enum.GetValues<TextKind>();
@@ -163,8 +164,16 @@ public partial class MainWindow : Window
         };
         tab.Editor.SelectionChanged += (_, _) =>
         {
-            if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
+            if (CurrentTab == tab)
+            {
+                RefreshLocation(); RefreshAnnotationHighlights(); RefreshMarkdownWriting();
+                if (tab.Editor.IsKeyboardFocusWithin) QueueMarkdownLocate(tab, true);
+            }
         };
+        tab.Editor.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
+        {
+            if (e.VerticalChange != 0 && tab.Editor.IsMouseOver) QueueMarkdownLocate(tab, true, viewport: true);
+        }));
         tab.Preview.SelectionChanged += (_, _) =>
         {
             if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }

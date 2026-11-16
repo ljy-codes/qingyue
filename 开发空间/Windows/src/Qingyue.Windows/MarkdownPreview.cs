@@ -222,7 +222,7 @@ public sealed class MarkdownPreview : RichTextBox
         var (images, model, sourceBlocks) = prepared;
         string projected = images.Text;
         var diagramBudget = new MermaidBlock.Budget();
-        DocumentList? list = null;
+        var lists = new List<DocumentList>();
         int displayStart = 0;
         for (int i = 0; i < model.Blocks.Count; i++)
         {
@@ -236,39 +236,13 @@ public sealed class MarkdownPreview : RichTextBox
                 original.Kind == block.Kind && original.SourceLength == block.SourceLength)
                 block = original;
             displayStart = block.DisplayStart + block.Text.Length + 1;
-            var paragraph = new Paragraph(new Run(block.Text))
-            { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
-            document.Blocks.Add(paragraph);
-            RenderedReading.StyleBlock(paragraph, block, presentation);
             string source = projected.Substring(parsedBlock.SourceStart, parsedBlock.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
-            if (MermaidBlock.IsMermaid(block))
-            {
-                if (diagramBudget.TakeBlock(block))
-                {
-                    document.Blocks.InsertBefore(paragraph, new BlockUIContainer(
-                        MermaidBlock.Create(block, FontSize, sourceBelow: includeDiagramSource, budget: diagramBudget))
-                    {
-                        Tag = block,
-                        Margin = new Thickness(0, 8, 0, 18)
-                    });
-                    if (!includeDiagramSource) document.Blocks.Remove(paragraph);
-                }
-                else if (diagramBudget.LimitNotice() is { } notice)
-                    document.Blocks.InsertBefore(paragraph, notice);
-            }
-            else if (block.Kind == ReadingBlockKind.Table)
-            {
-                var table = TablePreview(parsedBlock.Text, source, images, model.ReferenceDefinitions);
-                table.Tag = block;
-                document.Blocks.InsertBefore(paragraph, table);
-                document.Blocks.Remove(paragraph);
-            }
-            else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
-                DecorateInline(paragraph, InlineSource(source, block.Kind), parsedBlock.Text, images,
-                    model.ReferenceDefinitions);
-
+            BlockCollection container = document.Blocks;
+            string? literalPrefix = null;
             if (block.Kind == ReadingBlockKind.ListItem)
             {
+                int depth = Math.Clamp(block.Level, 0, lists.Count);
+                if (lists.Count > depth + 1) lists.RemoveRange(depth + 1, lists.Count - depth - 1);
                 var marker = MarkdownSyntax.ListPattern.Match(source);
                 var body = source[marker.Length..];
                 bool task = TaskPattern.IsMatch(body);
@@ -279,30 +253,75 @@ public sealed class MarkdownPreview : RichTextBox
                 bool literalNumber = ordered && (digitEnd <= 0 ||
                     !int.TryParse(markerText[..digitEnd], NumberStyles.None, CultureInfo.InvariantCulture, out number) ||
                     number < 1);
-                // WPF StartIndex requires a positive int. Keep zero/unsupported markers
-                // literal even if the parser later accepts more than its current 9 digits.
-                if (literalNumber)
-                {
-                    var prefix = new Run(marker.Value.TrimStart());
-                    if (paragraph.Inlines.FirstInline is Inline first) paragraph.Inlines.InsertBefore(first, prefix);
-                    else paragraph.Inlines.Add(prefix);
-                }
-                var style = task || literalNumber ? TextMarkerStyle.None : ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc;
+                // WPF StartIndex requires a positive int. Preserve zero literally.
+                if (literalNumber) literalPrefix = marker.Value.TrimStart();
+                var style = task || literalNumber ? TextMarkerStyle.None : ordered ? TextMarkerStyle.Decimal :
+                    (depth % 3) switch { 0 => TextMarkerStyle.Disc, 1 => TextMarkerStyle.Circle, _ => TextMarkerStyle.Box };
+                DocumentList? list = depth < lists.Count ? lists[depth] : null;
                 if (list is null || list.MarkerStyle != style || literalNumber ||
                     ordered && number != (long)list.StartIndex + list.ListItems.Count)
                 {
                     list = new DocumentList
                     {
                         MarkerStyle = style, StartIndex = literalNumber ? 1 : number, MarkerOffset = 6,
-                        Margin = new Thickness(24 + block.Level * 12, 0, 0, 8), Padding = new Thickness(0)
+                        Margin = new Thickness(24, 0, 0, 8), Padding = new Thickness(0)
                     };
-                    document.Blocks.InsertBefore(paragraph, list);
+                    var parent = depth == 0 ? document.Blocks : lists[depth - 1].ListItems.LastListItem!.Blocks;
+                    parent.Add(list);
+                    if (depth < lists.Count) lists[depth] = list;
+                    else lists.Add(list);
                 }
-                document.Blocks.Remove(paragraph);
-                paragraph.Margin = new Thickness(0, 0, 0, 5);
-                list.ListItems.Add(new ListItem(paragraph));
+                var item = new ListItem();
+                list.ListItems.Add(item);
+                container = item.Blocks;
             }
-            else list = null;
+            else if (block.ListContinuation && block.Level < lists.Count)
+            {
+                if (lists.Count > block.Level + 1)
+                    lists.RemoveRange(block.Level + 1, lists.Count - block.Level - 1);
+                container = lists[block.Level].ListItems.LastListItem!.Blocks;
+            }
+            else lists.Clear();
+            var paragraph = new Paragraph(new Run(block.Text))
+            { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
+            container.Add(paragraph);
+            RenderedReading.StyleBlock(paragraph, block, presentation);
+            if (MermaidBlock.IsMermaid(block))
+            {
+                if (diagramBudget.TakeBlock(block))
+                {
+                    container.InsertBefore(paragraph, new BlockUIContainer(
+                        MermaidBlock.Create(block, FontSize, sourceBelow: includeDiagramSource, budget: diagramBudget))
+                    {
+                        Tag = block,
+                        Margin = new Thickness(0, 8, 0, 18)
+                    });
+                    if (!includeDiagramSource) container.Remove(paragraph);
+                }
+                else if (diagramBudget.LimitNotice() is { } notice)
+                    container.InsertBefore(paragraph, notice);
+            }
+            else if (block.Kind == ReadingBlockKind.Table)
+            {
+                var table = TablePreview(parsedBlock.Text, source, images, model.ReferenceDefinitions);
+                table.Tag = block;
+                container.InsertBefore(paragraph, table);
+                container.Remove(paragraph);
+            }
+            else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
+                DecorateInline(paragraph, InlineSource(source, block), parsedBlock.Text, images,
+                    model.ReferenceDefinitions);
+
+            if (block.Kind == ReadingBlockKind.ListItem)
+            {
+                if (literalPrefix is not null)
+                {
+                    var prefix = new Run(literalPrefix);
+                    if (paragraph.Inlines.FirstInline is Inline first) paragraph.Inlines.InsertBefore(first, prefix);
+                    else paragraph.Inlines.Add(prefix);
+                }
+                paragraph.Margin = new Thickness(0, 0, 0, 5);
+            }
             yield return i;
         }
         if (document.Blocks.Count == 0) document.Blocks.Add(new Paragraph(new Run("")));
@@ -313,8 +332,9 @@ public sealed class MarkdownPreview : RichTextBox
     private static readonly Regex TaskPattern = new(@"^\[([ xX])\][ \t]+",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-    private static string InlineSource(string source, ReadingBlockKind kind)
+    private static string InlineSource(string source, ReadingBlock block)
     {
+        var kind = block.Kind;
         if (kind == ReadingBlockKind.Heading)
         {
             var heading = MarkdownSyntax.HeadingPattern.Match(source.Split('\n')[0]);
@@ -332,6 +352,8 @@ public sealed class MarkdownPreview : RichTextBox
             var task = TaskPattern.Match(body);
             return task.Success ? (task.Groups[1].Value == " " ? "☐ " : "☑ ") + body[task.Length..] : body;
         }
+        if (block.ListContinuation)
+            return string.Join("\n", source.Split('\n').Select(line => line.TrimStart(' ', '\t')));
         return source;
     }
 

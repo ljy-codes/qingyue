@@ -16,6 +16,7 @@ public sealed class EditorTab : INotifyPropertyChanged
 {
     public DocumentFile File { get; }
     public TextBox Editor { get; }
+    internal MarkdownEditor MarkdownWriter { get; }
     public RichTextBox Preview { get; }
     public Grid EditorSurface { get; }
     public TextBlock LineNumbers { get; }
@@ -69,6 +70,7 @@ public sealed class EditorTab : INotifyPropertyChanged
         };
         Editor.IsUndoEnabled = false;
         Editor.IsUndoEnabled = true;
+        MarkdownWriter = new MarkdownEditor(this);
         System.Windows.Automation.AutomationProperties.SetName(Editor, "文档编辑器");
         Preview = new RichTextBox
         {

@@ -21,6 +21,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--list-marker-audit")
+        {
+            NestedListChecks.CompareMarkerRendering(args[1]);
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--table-audit")
         {
             // Read-only aggregate diagnostics; never print document text or image data.
@@ -39,6 +44,15 @@ internal static class Program
             ("preview inline styles and inert content", InlinePreview),
             ("preview GFM autolinks and reference links", GfmPreview),
             ("preview lists and table grid", ListsAndTables),
+            ("nested list levels and original CRLF ranges", NestedListChecks.Model),
+            ("nested bullet containers and three marker styles", NestedListChecks.Preview),
+            ("mixed lists keep parent continuation and inline styles", NestedListChecks.Continuations),
+            ("nested fenced code stays literal", NestedListChecks.Fences),
+            ("nested reading source and decorated pointer mapping", NestedListChecks.Mapping),
+            ("nested list syntax keeps original token offsets", NestedListChecks.Tokens),
+            ("consecutive continuations return to their own ancestors", NestedListChecks.AncestorContinuations),
+            ("nested fences isolate references and literal images", NestedListChecks.FenceIsolation),
+            ("reading list grammar agrees with writing marker widths", NestedListChecks.MarkerGrammar),
             ("preview one-dash table syntax", () => TableSyntaxCompatibility(1)),
             ("preview two-dash table syntax", () => TableSyntaxCompatibility(2)),
             ("preview three-dash table syntax", () => TableSyntaxCompatibility(3)),

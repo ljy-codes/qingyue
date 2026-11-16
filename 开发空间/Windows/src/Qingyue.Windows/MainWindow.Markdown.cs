@@ -94,6 +94,7 @@ public partial class MainWindow
             // immediate, stable host while a large Markdown file is being prepared.
             markdownPreview = new MarkdownPreview("", CurrentReadingPresentation(), settings.ReadingWidth, tab.File.Path,
                 includeDiagramSource: true);
+            AttachMarkdownPreviewNavigation(markdownPreview);
             ReadingClipboard.Attach(markdownPreview, () => true,
                 reason => StatusText.Text = "复制已降级：" + reason);
             markdownPreviewHost!.Content = markdownPreview;
@@ -136,6 +137,7 @@ public partial class MainWindow
         markdownPreview.Update(tab.File.Text);
         markdownText = tab.File.Text;
         markdownPreview.ScrollToVerticalOffset(offset);
+        if (tab.Editor.IsKeyboardFocusWithin) QueueMarkdownLocate(tab, true);
     }
 
     private void StartMarkdownPreviewUpdate(EditorTab tab)
@@ -187,6 +189,7 @@ public partial class MainWindow
             markdownPreview.Document = document;
             markdownText = text;
             markdownPreview.ScrollToVerticalOffset(Math.Max(0, offset));
+            if (tab.Editor.IsKeyboardFocusWithin) QueueMarkdownLocate(tab, true);
             return true;
         }
         catch (OperationCanceledException) { return false; }

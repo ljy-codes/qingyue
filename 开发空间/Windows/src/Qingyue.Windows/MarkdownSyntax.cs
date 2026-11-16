@@ -12,7 +12,7 @@ public static class MarkdownSyntax
     internal static readonly Regex InlinePattern = Pattern(
         @"\\[\\`*{}\[\]()#+\-.!_>|~]|!\[([^\]\r\n]*)\]\([^)\r\n]*\)|\[([^\]\r\n]*)\]\([^)\r\n]*\)|`([^`\r\n]+)`|\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|\*([^*\r\n]+)\*|_([^_\r\n]+)_|~~([^~\r\n]+)~~|<((?:https?://|mailto:)[^<>\s]+)>|\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]");
     internal static readonly Regex HeadingPattern = Pattern(@"^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$");
-    internal static readonly Regex ListPattern = Pattern(@"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+");
+    internal static readonly Regex ListPattern = Pattern(@"^[ \t]*(?:[-+*]|[0-9]{1,9}[.)])[ \t]+");
     internal static readonly Regex QuotePattern = Pattern(@"^ {0,3}>[ \t]?");
     private static readonly Regex FencePattern = Pattern(@"^ {0,3}(`{3,}|~{3,}).*$");
 

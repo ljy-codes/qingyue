@@ -84,6 +84,7 @@ public partial class MainWindow
         MarkdownButton.Visibility = !reading && tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
         bool markdown = RefreshMarkdownPresentation(tab);
         MarkdownButton.Content = markdown ? "关闭分屏" : "分屏编辑";
+        RefreshMarkdownWriting();
         CopyReadingButton.Visibility = tab.Kind == TextKind.Markdown &&
             (tab.IsReading && tab.Rendered is not null || markdown) ? Visibility.Visible : Visibility.Collapsed;
         CopyOptionsMenu.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;

@@ -16,6 +16,8 @@ public partial class MainWindow
     private Task<AnnotationSaveResult>? annotationSaveTask;
     private AnnotationHighlightAdorner? annotationHighlightAdorner;
     private FrameworkElement? annotationHighlightTarget;
+    private FrameworkElement? annotationHighlightLoadTarget;
+    private RoutedEventHandler? annotationHighlightLoaded;
 
     public IReadOnlyList<DocumentAnnotation> CurrentAnnotations(EditorTab tab) =>
         annotations.For(tab.File);
@@ -254,18 +256,33 @@ public partial class MainWindow
 
     private void RefreshAnnotationHighlights()
     {
-        if (CurrentTab is not { } tab)
+        if (approvedShutdown || exitInProgress || CurrentTab is not { } tab)
         {
             ClearAnnotationHighlights();
             return;
         }
         FrameworkElement target = tab.IsReading && tab.Rendered is not null ? tab.Preview : tab.Editor;
+        if (!ReferenceEquals(annotationHighlightLoadTarget, target))
+            CancelAnnotationHighlightLoad();
         if (!target.IsLoaded)
         {
-            Dispatcher.BeginInvoke(RefreshAnnotationHighlights,
-                System.Windows.Threading.DispatcherPriority.Loaded);
+            if (annotationHighlightLoadTarget is not null) return;
+            annotationHighlightLoadTarget = target;
+            annotationHighlightLoaded = (_, _) =>
+            {
+                if (!ReferenceEquals(annotationHighlightLoadTarget, target)) return;
+                CancelAnnotationHighlightLoad();
+                if (approvedShutdown || exitInProgress || CurrentTab != tab || !tabs.Contains(tab)
+                    || !target.IsLoaded
+                    || !ReferenceEquals(target, tab.IsReading && tab.Rendered is not null ? tab.Preview : tab.Editor))
+                    return;
+                RefreshAnnotationHighlights();
+            };
+            target.Loaded += annotationHighlightLoaded;
+            Closed += AnnotationHighlightWindowClosed;
             return;
         }
+        CancelAnnotationHighlightLoad();
         var layer = AdornerLayer.GetAdornerLayer(target);
         if (layer is null) return;
         if (!ReferenceEquals(annotationHighlightTarget, target))
@@ -282,8 +299,21 @@ public partial class MainWindow
         annotationHighlightAdorner?.Update(annotations.For(tab.File));
     }
 
+    private void AnnotationHighlightWindowClosed(object? sender, EventArgs e) =>
+        CancelAnnotationHighlightLoad();
+
+    private void CancelAnnotationHighlightLoad()
+    {
+        if (annotationHighlightLoadTarget is not null)
+            annotationHighlightLoadTarget.Loaded -= annotationHighlightLoaded;
+        Closed -= AnnotationHighlightWindowClosed;
+        annotationHighlightLoadTarget = null;
+        annotationHighlightLoaded = null;
+    }
+
     private void ClearAnnotationHighlights()
     {
+        CancelAnnotationHighlightLoad();
         if (annotationHighlightAdorner is not null && annotationHighlightTarget is not null)
         {
             AdornerLayer.GetAdornerLayer(annotationHighlightTarget)?.Remove(annotationHighlightAdorner);
