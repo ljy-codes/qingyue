@@ -57,6 +57,71 @@ try
     Check(damaged.Items.Count == 0 && damaged.LastWarning is not null
         && Directory.GetFiles(root, "Annotations.json.corrupt-*").Length == 1,
         "损坏文件被隔离而不是静默覆盖");
+
+    static DocumentAnnotation Annotation(
+        string text, string quote, string before = "", string after = "",
+        AnnotationAnchorState state = AnnotationAnchorState.Exact)
+    {
+        int start = text.IndexOf(quote, StringComparison.Ordinal);
+        return new DocumentAnnotation(
+            Guid.NewGuid(), Guid.NewGuid(), null, start, start + quote.Length,
+            quote, before, after, "我的备注", ["重点"], AnnotationColor.Blue,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, state);
+    }
+
+    string oldMarkdown = "# 第一章\n\n第一段 **核对重点** 后文。";
+    var markdownAnnotation = Annotation(oldMarkdown, "核对重点", "第一段 ", " 后文。");
+    string newMarkdown = "# 新增标题\n\n# 第一章\n\n第一段 **核对重点** 后文。";
+    var repaired = AnnotationAnchorResolver.Repair(
+        oldMarkdown, newMarkdown, TextKind.Markdown, [markdownAnnotation], DateTimeOffset.UnixEpoch);
+    Check(repaired.Single().AnchorState == AnnotationAnchorState.Shifted
+        && repaired.Single().SourceStart != markdownAnnotation.SourceStart
+        && newMarkdown.Substring(repaired.Single().SourceStart,
+            repaired.Single().SourceEnd - repaired.Single().SourceStart).Contains("核对重点", StringComparison.Ordinal),
+        "Markdown 可见引文在新增标题后自动跟随");
+
+    string duplicate = "重复\n\n重复";
+    var uncertain = AnnotationAnchorResolver.Repair(
+        duplicate, "前言\n\n" + duplicate, TextKind.Plain,
+        [Annotation(duplicate, "重复")], DateTimeOffset.UnixEpoch);
+    Check(uncertain.Single().AnchorState == AnnotationAnchorState.Uncertain,
+        "重复引文不被武断重定位");
+
+    var missing = AnnotationAnchorResolver.Repair(
+        "保留这句", "整段删除", TextKind.Plain,
+        [Annotation("保留这句", "保留这句")], DateTimeOffset.UnixEpoch);
+    Check(missing.Single().AnchorState == AnnotationAnchorState.Missing
+        && missing.Single().Quote == "保留这句",
+        "引文消失时保留批注并标记 Missing");
+
+    var headings = ReadingModel.Build(
+        "# 第一章\n\n第一段。\n\n## 第二节\n\n第二段。", TextKind.Markdown).Headings;
+    var briefInput = new ReadingBriefInput(
+        "示例 <script>alert(1)</script>", @"D:\阅读\示例.md", TextKind.Markdown,
+        "# 第一章\n\n第一段。\n\n## 第二节\n\n第二段。", 42,
+        new DateTimeOffset(2026, 11, 16, 10, 30, 0, TimeSpan.FromHours(8)),
+        headings,
+        [
+            Annotation("# 第一章\n\n第一段。\n\n## 第二节\n\n第二段。", "第一段。") with
+            {
+                DocumentId = Guid.Empty,
+                Note = "<img src=x onerror=alert(1)>",
+                Tags = ["重点", "待回顾"],
+                AnchorState = AnnotationAnchorState.Exact
+            }
+        ]);
+    string briefMarkdown = ReadingBriefExporter.BuildMarkdown(briefInput);
+    string briefHtml = ReadingBriefExporter.BuildHtml(briefInput);
+    Check(briefMarkdown.Contains("## 第一章", StringComparison.Ordinal)
+        && briefMarkdown.Contains("> 第一段。", StringComparison.Ordinal)
+        && briefMarkdown.Contains("重点", StringComparison.Ordinal)
+        && briefMarkdown.Contains("42%", StringComparison.Ordinal),
+        "Markdown 简报包含章节、引文、标签和进度");
+    Check(briefHtml.Contains("&lt;script&gt;alert(1)&lt;/script&gt;", StringComparison.Ordinal)
+        && briefHtml.Contains("&lt;img src=x onerror=alert(1)&gt;", StringComparison.Ordinal)
+        && !briefHtml.Contains("<script>", StringComparison.Ordinal)
+        && briefHtml.Contains("default-src 'none'", StringComparison.Ordinal),
+        "HTML 简报编码用户文本并带 CSP");
 }
 finally
 {
