@@ -40,6 +40,26 @@ public partial class MainWindow
         finally { bookmarkSaveTask = null; }
     }
 
+    private async Task<ReadingListSaveResult> SaveReadingListAsync()
+    {
+        if (!readingListDirty)
+            return new ReadingListSaveResult(DateTimeOffset.UtcNow, []);
+        if (readingListSaveTask is not null)
+        {
+            await readingListSaveTask;
+            return new ReadingListSaveResult(DateTimeOffset.UtcNow, []);
+        }
+        var save = readingList.SaveAsync();
+        readingListSaveTask = save;
+        try
+        {
+            var result = await save;
+            if (result.Errors.Count == 0) readingListDirty = false;
+            return result;
+        }
+        finally { readingListSaveTask = null; }
+    }
+
     public async Task<WorkspaceSaveResult> PersistWorkspaceAsync()
     {
         try { await PrepareRecoveryAsync(); }
@@ -69,6 +89,8 @@ public partial class MainWindow
         catch (Exception ex) { result.Errors.Add("偏好保存失败：" + ex.Message); }
         var bookmarkResult = await SaveBookmarksAsync();
         result.Errors.AddRange(bookmarkResult.Errors);
+        var readingListResult = await SaveReadingListAsync();
+        result.Errors.AddRange(readingListResult.Errors);
         return result;
     }
 

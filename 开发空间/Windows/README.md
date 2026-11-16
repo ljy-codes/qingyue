@@ -16,14 +16,15 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe` 和
-`交付产品/轻阅-0.10.0-Windows构建1-x64.zip`；安装器需要额外安装 NSIS 后再生成。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
+`交付产品/轻阅-0.11.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.11.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
 
-- `src/Qingyue.Core`：文件与会话安全、搜索、格式、原生阅读模型。
-- `src/Qingyue.Windows`：每标签独立 WPF 编辑器、FlowDocument 阅读、菜单、搜索、恢复。
+- `src/Qingyue.Core`：文件与会话安全、工作区扫描、全局搜索、阅读清单、格式和原生阅读模型。
+- `src/Qingyue.Windows`：每标签独立 WPF 编辑器、工作区、阅读清单、全局搜索、FlowDocument 阅读、菜单和恢复。
 - `tests/Qingyue.FileTests`：真实临时文件与 Windows 文件系统行为。
 - `tests/Qingyue.TextTests`：Unicode、搜索与文本转换。
 - `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。

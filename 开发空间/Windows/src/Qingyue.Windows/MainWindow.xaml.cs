@@ -16,6 +16,8 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<EditorTab> tabs = [];
     private readonly WorkspaceStore workspace;
     private readonly BookmarkStore bookmarks;
+    private readonly ReadingListStore readingList;
+    private readonly LocalWorkspaceScanner workspaceScanner = new();
     private readonly ReaderSettings settings;
     private readonly UpdateService updateService;
     private readonly bool startupUpdateCheckEnabled;
@@ -26,7 +28,9 @@ public partial class MainWindow : Window
     private readonly Queue<Action> pendingOpen = new();
     private bool initialized, updatingControls, approvedShutdown, exitInProgress, focusMode;
     private bool bookmarksDirty;
+    private bool readingListDirty;
     private Task? bookmarkSaveTask;
+    private Task? readingListSaveTask;
     private int modalDepth;
     private long outlineGeneration;
     private readonly HashSet<Guid> discardedAtExit = [];
@@ -43,6 +47,7 @@ public partial class MainWindow : Window
         startupUpdateCheckEnabled = enableStartupUpdateCheck;
         workspace = new WorkspaceStore(dataDirectory);
         bookmarks = new BookmarkStore(dataDirectory);
+        readingList = new ReadingListStore(dataDirectory);
         InitializeComponent();
         SourceInitialized += (_, _) => ApplyNativeTitleBarTheme(settings.Dark);
         InitializeEditingInteractions();
@@ -52,6 +57,8 @@ public partial class MainWindow : Window
         KindCombo.ItemsSource = Enum.GetValues<TextKind>();
         CodecCombo.ItemsSource = Enum.GetValues<TextCodec>();
         EndingCombo.ItemsSource = Enum.GetValues<LineEnding>();
+        WorkspaceTypeFilter.ItemsSource = WorkspaceTypeOption.All;
+        WorkspaceTypeFilter.SelectedIndex = 0;
         Width = Math.Min(settings.Width, SystemParameters.WorkArea.Width);
         Height = Math.Min(settings.Height, SystemParameters.WorkArea.Height);
         ApplyTheme(settings.Dark);
@@ -80,6 +87,8 @@ public partial class MainWindow : Window
         if (initialized) return;
         await PrepareRecoveryAsync();
         await bookmarks.LoadAsync();
+        await readingList.LoadAsync();
+        RefreshReadingList();
         if (restoreSession && settings.RestoreSession)
         {
             try
@@ -112,6 +121,9 @@ public partial class MainWindow : Window
         if (tabs.Count == 0) NewDocument();
         initialized = true;
         RefreshCurrent();
+        if (readingList.LastWarning is not null) StatusText.Text = readingList.LastWarning;
+        if (settings.WorkspaceRoot is { } root && Directory.Exists(root))
+            await ScanWorkspaceAsync(root);
         QueueExternalRefresh(CurrentTab);
         ScheduleStartupUpdateCheck();
     }
@@ -302,7 +314,13 @@ public partial class MainWindow : Window
                 try { fullPath = Path.GetFullPath(requested[index]); }
                 catch (Exception ex) { Notify("无法打开路径：" + ex.Message); continue; }
                 var existing = tabs.FirstOrDefault(t => string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase));
-                if (existing is not null) { operation.Tab = null; SelectTab(existing); continue; }
+                if (existing is not null)
+                {
+                    operation.Tab = null;
+                    SelectTab(existing);
+                    await RestoreReadingListPositionAsync(existing);
+                    continue;
+                }
                 try
                 {
                     operation.Tab = null;
@@ -324,10 +342,20 @@ public partial class MainWindow : Window
                     var opened = AddDocument(file);
                     if (empty is not null) tabs.Remove(empty);
                     AddRecent(fullPath);
+                    var savedReading = readingList.Find(fullPath);
+                    int savedAnchor = savedReading is null ? 0 : Math.Clamp(savedReading.SourceAnchor, 0, opened.File.Text.Length);
+                    readingList.Upsert(fullPath, savedReading?.ProgressPercent ?? 0, savedAnchor);
+                    readingListDirty = true;
+                    RefreshReadingList();
                     if (opened.Kind == TextKind.Markdown)
                     {
-                        await EnterReadingAsync(opened, 0, existingOperation: operation);
+                        await EnterReadingAsync(opened, savedAnchor, existingOperation: operation);
                         if (CurrentTab == opened) RefreshCurrent();
+                    }
+                    else if (savedAnchor > 0)
+                    {
+                        opened.Editor.CaretIndex = EditorOffset(opened, savedAnchor);
+                        ScrollToCaret(opened);
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -377,6 +405,12 @@ public partial class MainWindow : Window
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
         AddRecent(fullPath);
+        if (tab.IsReading)
+        {
+            readingList.Upsert(fullPath, ProgressPercent(tab), CurrentSourceAnchor(tab));
+            readingListDirty = true;
+            RefreshReadingList();
+        }
         if (kindChanged && CurrentTab == tab) RefreshCurrent(); else RefreshStatus();
         RefreshBookmarks();
         SchedulePersist();

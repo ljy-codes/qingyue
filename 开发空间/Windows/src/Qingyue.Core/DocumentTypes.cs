@@ -39,6 +39,38 @@ public sealed record BookmarkSaveResult(DateTimeOffset SavedAt, List<string> Err
 
 public sealed record SearchOptions(bool CaseSensitive = false, bool Regex = false, bool WholeWord = false);
 public sealed record SearchMatch(int Start, int Length, string Replacement);
+public enum WorkspaceFileFilter { All, Text, Markdown, Code, Data, Configuration }
+public sealed record WorkspaceScanOptions(
+    string FileNamePattern = "*",
+    WorkspaceFileFilter FileFilter = WorkspaceFileFilter.All,
+    IReadOnlySet<string>? IgnoredDirectories = null,
+    int MaximumEntries = 50_000);
+public sealed record WorkspaceFileEntry(
+    string Path, string RelativePath, bool IsDirectory, long Length, DateTimeOffset LastWriteTimeUtc,
+    TextKind? Kind);
+public sealed record WorkspaceScanResult(
+    string Root, IReadOnlyList<WorkspaceFileEntry> Entries, IReadOnlyList<string> Warnings);
+public sealed record GlobalSearchOptions(
+    string FileNamePattern = "*",
+    SearchOptions? Search = null,
+    string Replacement = "",
+    int ContextLines = 1,
+    int MaximumFiles = 2_000,
+    int MaximumMatches = 10_000,
+    bool BuildReplacementPreview = true);
+public sealed record GlobalSearchMatch(
+    string Path, int LineNumber, int ColumnNumber, string LineText,
+    string BeforeContext, string AfterContext, string Value, string Replacement);
+public sealed record GlobalSearchFileResult(string Path, int MatchCount, string? ReplacementText);
+public sealed record GlobalSearchResult(
+    IReadOnlyList<GlobalSearchMatch> Matches,
+    IReadOnlyList<GlobalSearchFileResult> Files,
+    IReadOnlyList<string> Warnings,
+    int FilesScanned);
+public sealed record ReadingListEntry(
+    Guid Id, string Path, bool IsPinned, bool IsRead, int ProgressPercent, int SourceAnchor,
+    DateTimeOffset LastOpenedAt, DateTimeOffset UpdatedAt);
+public sealed record ReadingListSaveResult(DateTimeOffset SavedAt, List<string> Errors);
 public enum ReadingBlockKind { Paragraph, Heading, Code, Quote, ListItem, Separator, Table }
 public sealed record ReadingBlock(
     ReadingBlockKind Kind, string Text, int SourceStart, int SourceLength,

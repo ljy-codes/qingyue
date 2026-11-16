@@ -58,6 +58,8 @@ public partial class MainWindow
             {
                 case "new": NewDocument().Editor.Focus(); break;
                 case "open": await ChooseOpenAsync(); break;
+                case "openWorkspace": await OpenWorkspaceAsync(); break;
+                case "globalSearch": await ShowGlobalSearchAsync(); break;
                 case "save": if (tab is not null) SaveDocument(tab); break;
                 case "saveAs": if (tab is not null) SaveDocument(tab, true); break;
                 case "saveAll":
@@ -96,7 +98,7 @@ public partial class MainWindow
                 case "outline":
                     settings.Sidebar = true;
                     if (focusMode) ToggleFocus();
-                    ApplySidebar(); SidebarTabs.SelectedIndex = 1; OutlineList.Focus();
+                    ApplySidebar(); SidebarTabs.SelectedItem = OutlineTab; OutlineList.Focus();
                     break;
                 case "nextTab": CycleTab(1); break;
                 case "previousTab": CycleTab(-1); break;

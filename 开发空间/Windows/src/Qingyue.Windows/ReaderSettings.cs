@@ -18,6 +18,8 @@ public sealed class ReaderSettings
     public DateTimeOffset? LastUpdateCheckUtc { get; set; }
     public List<string> Recent { get; set; } = [];
     public List<string> ExcludedDraftPaths { get; set; } = [];
+    public string? WorkspaceRoot { get; set; }
+    public List<string> FavoriteDirectories { get; set; } = [];
 
     public static ReaderSettings Load(string root)
     {
@@ -33,6 +35,9 @@ public sealed class ReaderSettings
             value.Height = double.IsFinite(value.Height) ? Math.Clamp(value.Height, 520, 2160) : 790;
             value.Recent = (value.Recent ?? []).Where(Path.IsPathFullyQualified).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToList();
             value.ExcludedDraftPaths ??= [];
+            value.WorkspaceRoot = string.IsNullOrWhiteSpace(value.WorkspaceRoot) ? null : Path.GetFullPath(value.WorkspaceRoot);
+            value.FavoriteDirectories = (value.FavoriteDirectories ?? [])
+                .Where(Path.IsPathFullyQualified).Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
             return value;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return new(); }

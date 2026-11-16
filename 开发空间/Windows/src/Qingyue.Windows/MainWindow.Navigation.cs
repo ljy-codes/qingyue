@@ -112,6 +112,7 @@ public partial class MainWindow
             var rect = pointer.GetCharacterRect(LogicalDirection.Forward);
             tab.ViewportAnchor = tab.Reading.DisplayToSource(tab.Rendered.OffsetAt(pointer));
             tab.ViewportDelta = !rect.IsEmpty && double.IsFinite(rect.Top) ? Math.Clamp(rect.Top, -2000, 2000) : 0;
+            UpdateReadingListProgress(tab);
             RefreshReadingProgress(tab);
         }
         catch (InvalidOperationException) { /* A layout replacement will provide the next valid viewport. */ }

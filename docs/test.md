@@ -1,5 +1,45 @@
 # Windows 验收记录
 
+## 2026-11-16｜Windows 0.11.0 构建 1
+
+本轮完成本地工作区、全局搜索和本地阅读清单。完整 Release 回归脚本退出码为 `0`，
+构建版本检查为 `0.11.0.1`。本机使用用户目录中的 NSIS 3.13 生成便携包和安装包，
+安装器为未签名构建。
+
+### 完整回归
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 构建与版本检查 | 通过，0 警告、0 错误 |
+| FileTests | 28/28 |
+| TextTests | 47/47 |
+| WPF/UI 流程 | 177 项 |
+| Editing | 30/30 |
+| Markdown | 25/25 |
+| Sequence | 29/29 |
+| MermaidView | 15/15 |
+| Reading | 65/65 |
+| Image | 33/33 |
+| Clipboard | 56/56 |
+| Instance | 15/15 |
+| ExternalChanges | 96/96 |
+| Navigation | 21/21 |
+| Recovery | 20/20 |
+| ReaderExperience | 19/19 |
+| TextPosition | 5/5 |
+| WPF 审计 | 0 failures |
+| 安装器契约 | 14 项 |
+| 安装器集成 | 25 项 |
+| 安装器首屏 UI | 通过，首屏直接提供路径输入和“开始安装” |
+
+### 交付产物
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.11.0-Windows构建1-x64.zip` | 62,305,382 字节 | `27CA98693C050BD01A0D6CA66026FE6B675616A2105B91AC530CB9181FEE86EB` |
+| `交付产品/轻阅-0.11.0-Windows构建1-x64-setup.exe` | 43,782,204 字节 | `F3CB6DEB0C90A31006F38AF74DFF0D927E4222C057E482D196F65ED50FFD6FD1` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 291,840 字节 | `7279603EB3A001F72870CC391AA5EA9B22694AF8805A9F54D6B226515F1EFAE3` |
+
 ## 2026-11-16｜Windows 0.10.0 构建 1
 
 本轮汇总安装器修复、GitHub Release 更新入口、GFM 引用链接和离线 Mermaid 流程图。
