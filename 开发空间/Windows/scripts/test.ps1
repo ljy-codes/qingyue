@@ -17,8 +17,9 @@ if (-not $expectedProductVersion -or -not $expectedWindowsBuild) {
     throw '版本配置不完整。'
 }
 Write-Output "版本检查通过：产品 $expectedProductVersion · Windows 构建 $expectedWindowsBuild · 文件 $builtVersion"
-foreach ($testName in @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.UITests', 'Qingyue.EditingTests', 'Qingyue.MarkdownTests', 'Qingyue.SequenceTests', 'Qingyue.MermaidViewTests', 'Qingyue.ReadingTests', 'Qingyue.ImageTests', 'Qingyue.ClipboardTests', 'Qingyue.InstanceTests', 'Qingyue.ExternalChangesTests', 'Qingyue.NavigationTests', 'Qingyue.RecoveryTests', 'Qingyue.ReaderExperienceTests')) {
-    $framework = if ($testName -in @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.SequenceTests')) { 'net10.0' } else { 'net10.0-windows' }
+$coreTests = @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.SequenceTests', 'Qingyue.AnnotationTests')
+foreach ($testName in @('Qingyue.FileTests', 'Qingyue.TextTests', 'Qingyue.UITests', 'Qingyue.EditingTests', 'Qingyue.MarkdownTests', 'Qingyue.SequenceTests', 'Qingyue.MermaidViewTests', 'Qingyue.ReadingTests', 'Qingyue.ImageTests', 'Qingyue.ClipboardTests', 'Qingyue.InstanceTests', 'Qingyue.ExternalChangesTests', 'Qingyue.NavigationTests', 'Qingyue.RecoveryTests', 'Qingyue.ReaderExperienceTests', 'Qingyue.AnnotationTests')) {
+    $framework = if ($testName -in $coreTests) { 'net10.0' } else { 'net10.0-windows' }
     $testPath = if ($testName -eq 'Qingyue.RecoveryTests') {
         Join-Path $windowsRoot "artifacts/recovery-v030/build/wpf/bin/$Configuration/$framework/$testName.dll"
     } else { Join-Path $windowsRoot "tests/$testName/bin/$Configuration/$framework/$testName.dll" }
