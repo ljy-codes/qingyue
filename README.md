@@ -8,7 +8,8 @@ macOS 当前为 **0.1.0 · Mac 构建 4**。下载：[Mac 构建 4 体验包](ht
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
-Windows 当前开发版为 **0.13.0 · 构建 1**，使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
+Windows 当前开发版为 **0.13.0 · 构建 1**，下载：[Windows 0.13.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.13.0)。
+使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
 新增 Markdown 即时圆点、嵌套列表、回车续项与层级快捷键、格式编写工具栏，以及编辑/预览双向块定位；
 文件继续保存标准 Markdown，预览、阅读和富文本复制保留列表层次。
 已支持本机批注与阅读简报、阅读外观、本地工作区、全局搜索、阅读清单、TXT/Markdown 格式化、

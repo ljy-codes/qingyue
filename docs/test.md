@@ -23,7 +23,26 @@
 | ReaderExperience / Annotation / ReadingOutcome | 19/19、17/17、17/17 |
 | TextPosition / WPF 映射审计 | 5/5、0 failures |
 | 安装器契约 | 14 项通过 |
-| 安装器隔离集成、清理及交付哈希 | 待构建后补录 |
+| 安装器隔离集成 / 清理 | 25/25、10/10 |
+| ZIP 完整性 / 便携版启动 | 264 个文件逐个 SHA256 一致；隔离配置打开随包示例、窗口响应、正常退出码 0 |
+
+### 交付产物
+
+应用二进制对应源码提交 `a3e83259b124bb491fd2048b15f87e42f3058aab`，
+文件版本 `0.13.0.1`。后续提交仅补录交付记录、下载入口和测试脚本引用。
+Release 使用 `v0.13.0`，英文资产名为 `qingyue-0.13.0-windows-build1-x64.zip`
+和 `qingyue-0.13.0-windows-build1-x64-setup.exe`。
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.13.0-Windows构建1-x64.zip` | 62,354,557 字节 | `7CD3E9D405117211E55EFCD03BB4E17405D5BA977F1A9FD1AA5EEF82011C49F4` |
+| `交付产品/轻阅-0.13.0-Windows构建1-x64-setup.exe` | 43,805,165 字节 | `BD9C6D402E824F36777D8F9177525ABED4A5301F7F3A4B626F490504ED803865` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 291,840 字节 | `1ABAD433D6E31EDB8EC29704E761891D4A179AD0FDD677DB6C12D52F48D21EDE` |
+
+安装器收据位于 `开发空间/Windows/artifacts/installer/build-results.json`；
+隔离安装和清理分别为同目录 `test/integration-results.json`、`test/purge-results.json`。
+清理测试最初因测试宿主缺少 `QingyueUnregisterAssociation` 宏而无法编译，
+已让宿主提取生产文件中的同一宏再执行共享清理动作，未修改安装器生产逻辑。
 
 ### 行为与证据
 

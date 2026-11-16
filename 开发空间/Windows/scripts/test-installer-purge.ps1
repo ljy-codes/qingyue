@@ -23,12 +23,19 @@ $link = Join-Path $data '外部目录联接'
 New-Item -ItemType Junction -Path $link -Target $external | Out-Null
 $unknown = Join-Path $target '保留的额外文件.txt'
 Set-Content -LiteralPath $unknown -Value 'unknown installed folder file'
+# Use the production association macro as well as the shared removal actions.
+# Loading qingyue.nsi itself would also compile its real installation sections.
+$installerSource = Get-Content -LiteralPath (Join-Path $windowsRoot 'installer/qingyue.nsi') -Raw
+$associationMacro = [regex]::Match($installerSource,
+    '(?ms)^!macro QingyueUnregisterAssociation EXT\r?\n.*?^!macroend').Value
+if (-not $associationMacro) { throw '未找到生产文件关联清理宏。' }
 $harness = @'
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
 !include LogicLib.nsh
 !include nsDialogs.nsh
+@ASSOCIATION_MACRO@
 !include "@SOURCE@\uninstall-actions.nsh"
 !addplugindir "@BUILD@"
 !define DATA_LEAF "QingyueInstallerTest"
@@ -50,7 +57,7 @@ StrCpy $PurgeChoice ${BST_CHECKED}
 !insertmacro QingyueRemoveActions
 SectionEnd
 '@
-$text=$harness.Replace('@SOURCE@',(Join-Path $windowsRoot 'installer')).Replace('@BUILD@',$build).Replace('@TARGET@',$target)
+$text=$harness.Replace('@ASSOCIATION_MACRO@',$associationMacro).Replace('@SOURCE@',(Join-Path $windowsRoot 'installer')).Replace('@BUILD@',$build).Replace('@TARGET@',$target)
 $script=Join-Path $build 'purge-fixture.nsi'
 Set-Content -LiteralPath $script -Value $text -Encoding utf8
 & "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe" /INPUTCHARSET UTF8 /V2 $script
