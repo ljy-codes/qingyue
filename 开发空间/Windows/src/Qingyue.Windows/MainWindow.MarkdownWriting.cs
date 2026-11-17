@@ -48,6 +48,22 @@ public partial class MainWindow
         e.Handled = true;
     }
 
+    private void MarkdownTableClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (exitInProgress || modalDepth > 0 || CurrentTab is not { } tab) return;
+        try
+        {
+            bool changed = sender is FrameworkElement { Tag: string action } &&
+                (action == "PasteTable" ? tab.MarkdownWriter.PasteTable(Clipboard.GetText())
+                    : Enum.TryParse<MarkdownTableAction>(action, out var command) && tab.MarkdownWriter.ExecuteTable(command));
+            if (!changed) StatusText.Text = "表格操作未执行：请将光标置于表格内；粘贴表格需包含制表符，最多 32 列、1024 单元格。";
+            RefreshMarkdownWriting();
+        }
+        catch (Exception ex) when (SharingFailure(ex))
+        { StatusText.Text = "表格操作未完成：" + ex.Message; }
+    }
+
     private void MarkdownLocateClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { Tag: "preview" }) LocateMarkdownPreview();

@@ -7,12 +7,12 @@
     <RootNamespace>Qingyue.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\Qingyue.ico</ApplicationIcon>
-    <Version>0.13.0</Version>
-    <FileVersion>0.13.0.1</FileVersion>
-    <AssemblyVersion>0.13.0.0</AssemblyVersion>
-    <InformationalVersion>0.13.0+windows-build.1</InformationalVersion>
+    <Version>0.14.0</Version>
+    <FileVersion>0.14.0.1</FileVersion>
+    <AssemblyVersion>0.14.0.0</AssemblyVersion>
+    <InformationalVersion>0.14.0+windows-build.1</InformationalVersion>
     <Product>轻阅 Qingyue</Product>
-    <Description>轻量的本地文本阅读与编辑工具 · Windows 0.13.0 构建 1</Description>
+    <Description>轻量的本地文本阅读与编辑工具 · Windows 0.14.0 构建 1</Description>
     <Copyright>轻阅 · 本机文本阅读与编辑</Copyright>
   </PropertyGroup>
   <ItemGroup>

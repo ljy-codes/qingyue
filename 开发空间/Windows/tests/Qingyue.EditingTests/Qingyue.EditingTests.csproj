@@ -11,6 +11,7 @@
     <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
     <Compile Remove="WpfTests.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
     <Compile Remove="MarkdownNavigationChecks.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
+    <Compile Remove="MarkdownProductivityChecks.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
     <Compile Include="../../src/Qingyue.Windows/*.cs" Exclude="../../src/Qingyue.Windows/App.xaml.cs" Link="Windows/%(Filename)%(Extension)" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Page Include="../../src/Qingyue.Windows/MainWindow.xaml" Link="MainWindow.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Page Include="../../src/Qingyue.Windows/Theme.xaml" Link="Theme.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />

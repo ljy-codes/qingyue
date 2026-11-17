@@ -12,6 +12,11 @@ internal sealed class MarkdownEditor
     private bool composing;
     private string? markerText;
     private IReadOnlyList<MarkdownListMarker> markers = [];
+    private readonly Dictionary<int, int[]> guideColumns = [];
+    internal IReadOnlyList<int> GuideColumns(MarkdownListMarker marker) =>
+        guideColumns.TryGetValue(marker.Start, out var columns) ? columns : [];
+    internal bool CanEdit => !composing && tab.Kind == TextKind.Markdown && !tab.IsReading &&
+        !tab.Editor.IsReadOnly && tab.Editor.Text.Length <= DocumentSyntaxCache.MaxDocumentCharacters;
     public IReadOnlyList<MarkdownListMarker> Markers
     {
         get
@@ -22,6 +27,15 @@ internal sealed class MarkdownEditor
                 markerText = text;
                 markers = text.Length <= DocumentSyntaxCache.MaxDocumentCharacters
                     ? MarkdownEditing.ListMarkers(text) : [];
+                guideColumns.Clear();
+                var parents = new List<MarkdownListMarker>();
+                foreach (var marker in markers)
+                {
+                    while (parents.Count > 0 && parents[^1].Level >= marker.Level) parents.RemoveAt(parents.Count - 1);
+                    if (marker.Level > 0)
+                        guideColumns[marker.Start] = parents.Take(16).Select(p => p.ContentIndent).Distinct().ToArray();
+                    parents.Add(marker);
+                }
             }
             return markers;
         }
@@ -53,24 +67,52 @@ internal sealed class MarkdownEditor
 
     public bool Execute(MarkdownEditAction action)
     {
-        if (composing || tab.Kind != TextKind.Markdown || tab.IsReading || tab.Editor.IsReadOnly) return false;
-        if (tab.Editor.Text.Length > DocumentSyntaxCache.MaxDocumentCharacters) return false;
+        if (!CanEdit) return false;
         var edit = MarkdownEditing.Apply(tab.Editor.Text, tab.Editor.SelectionStart, tab.Editor.SelectionLength, action);
         if (edit is null) return false;
         Apply(edit);
         return true;
     }
 
+    public bool ExecuteTable(MarkdownTableAction action)
+    {
+        if (!CanEdit) return false;
+        var edit = MarkdownTableEditing.Apply(tab.Editor.Text, tab.Editor.SelectionStart, tab.Editor.SelectionLength, action);
+        if (edit is null) return false;
+        Apply(edit);
+        return true;
+    }
+
+    public bool PasteTable(string tsv)
+    {
+        if (!CanEdit) return false;
+        var edit = MarkdownTableEditing.FromTsv(tab.Editor.Text, tab.Editor.SelectionStart, tab.Editor.SelectionLength, tsv);
+        if (edit is null) return false;
+        Apply(edit);
+        return true;
+    }
+
+    internal bool InsertImage(string markdown)
+    {
+        if (!CanEdit) return false;
+        int start = tab.Editor.SelectionStart;
+        Apply(new MarkdownEdit(start, tab.Editor.SelectionLength, markdown, start + markdown.Length, 0));
+        return true;
+    }
+
     private void Apply(MarkdownEdit edit)
     {
         var editor = tab.Editor;
-        editor.BeginChange();
-        try
+        if (edit.Length != 0 || edit.Text.Length != 0)
         {
-            editor.Select(edit.Start, edit.Length);
-            editor.SelectedText = edit.Text;
+            editor.BeginChange();
+            try
+            {
+                editor.Select(edit.Start, edit.Length);
+                editor.SelectedText = edit.Text;
+            }
+            finally { editor.EndChange(); }
         }
-        finally { editor.EndChange(); }
         int selection = Math.Clamp(edit.SelectionStart, 0, editor.Text.Length);
         editor.Select(selection, Math.Clamp(edit.SelectionLength, 0, editor.Text.Length - selection));
         editor.Focus();
@@ -80,6 +122,18 @@ internal sealed class MarkdownEditor
     {
         if (e.Handled || composing || tab.Kind != TextKind.Markdown) return;
         ModifierKeys modifiers = Keyboard.Modifiers;
+        MarkdownTableAction? tableAction = (e.Key, modifiers) switch
+        {
+            (Key.Tab, ModifierKeys.None) => MarkdownTableAction.NextCell,
+            (Key.Tab, ModifierKeys.Shift) => MarkdownTableAction.PreviousCell,
+            (Key.Enter, ModifierKeys.None) => MarkdownTableAction.InsertRow,
+            _ => null
+        };
+        if (tableAction is { } tableCommand && ExecuteTable(tableCommand))
+        {
+            e.Handled = true;
+            return;
+        }
         MarkdownEditAction? action = (e.Key, modifiers) switch
         {
             (Key.Enter, ModifierKeys.None) => MarkdownEditAction.Enter,

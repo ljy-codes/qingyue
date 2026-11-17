@@ -177,10 +177,13 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
             }
             drawings.Add((formatted, new Point(editorOrigin.X + row.Bounds.X, editorOrigin.Y + row.Bounds.Y)));
         }
-        SetHighlighted(true);
         dc.PushClip(new RectangleGeometry(new Rect(
             editorOrigin.X + editor.Padding.Left, editorOrigin.Y + editor.Padding.Top,
             Math.Max(0, right - editor.Padding.Left), Math.Max(0, bottom - editor.Padding.Top))));
+        if (kind == TextKind.Markdown && markers.Count > 0)
+            DrawIndentGuides(dc, text, rows, markers, editorOrigin);
+        // Foreground invalidates native text layout. Finish every geometry query first.
+        SetHighlighted(true);
         foreach (var drawing in drawings) dc.DrawText(drawing.Text, drawing.Origin);
         foreach (var (marker, origin, height) in listDrawings)
         {
@@ -205,6 +208,45 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
                 marker.Level % 3 == 1 ? new Pen(ink, 1.1) : null, center, size / 2, size / 2);
         }
         dc.Pop();
+    }
+
+    private void DrawIndentGuides(DrawingContext dc, string text,
+        List<(int Start, int Length, Rect Bounds)> rows, IReadOnlyList<MarkdownListMarker> markers, Point origin)
+    {
+        var ink = Brush("MutedBrush").CloneCurrentValue();
+        ink.Opacity *= .35;
+        ink.Freeze();
+        var pen = new Pen(ink, .8);
+        int index = 0, high = markers.Count;
+        int firstOffset = rows.Count == 0 ? text.Length : rows[0].Start;
+        while (index < high)
+        {
+            int middle = index + (high - index) / 2;
+            if (markers[middle].Start <= firstOffset) index = middle + 1;
+            else high = middle;
+        }
+        index = Math.Max(0, index - 1);
+        foreach (var row in rows)
+        {
+            while (index + 1 < markers.Count && markers[index + 1].Start <= row.Start) index++;
+            var marker = markers[index];
+            if (marker.Start > row.Start || marker.Level == 0) continue;
+            // Only the actual marker's logical line and its visual wraps receive guides.
+            // Following code or unrelated paragraphs never inherit an old list's decoration.
+            int end = text.IndexOfAny(['\r', '\n'], marker.Start);
+            if (row.Start > (end < 0 ? text.Length : end)) continue;
+            foreach (int column in tab.MarkdownWriter.GuideColumns(marker))
+            {
+                int position = marker.Start + Math.Min(Math.Max(0, column - 1), marker.Length - 1);
+                if (position >= text.Length || text[position] != ' ') continue;
+                var bounds = tab.Editor.GetRectFromCharacterIndex(position);
+                var next = tab.Editor.GetRectFromCharacterIndex(position + 1);
+                if (bounds.IsEmpty || next.IsEmpty) continue;
+                double x = origin.X + (bounds.X + next.X) / 2;
+                dc.DrawLine(pen, new Point(x, origin.Y + row.Bounds.Top),
+                    new Point(x, origin.Y + row.Bounds.Bottom));
+            }
+        }
     }
 
     private void SetHighlighted(bool highlighted)

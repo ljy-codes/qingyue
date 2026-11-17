@@ -53,6 +53,15 @@ internal static class Program
             ("consecutive continuations return to their own ancestors", NestedListChecks.AncestorContinuations),
             ("nested fences isolate references and literal images", NestedListChecks.FenceIsolation),
             ("reading list grammar agrees with writing marker widths", NestedListChecks.MarkerGrammar),
+            ("productivity nested blocks preserve CRLF source ranges", ProductivityHierarchyChecks.ModelRanges),
+            ("productivity quote and real table belong to ListItem", ProductivityHierarchyChecks.PreviewContainers),
+            ("productivity blocks return to ancestors with inline styles", ProductivityHierarchyChecks.AncestorsAndStyles),
+            ("productivity relative indentation and outside table boundaries", ProductivityHierarchyChecks.ClosingAndRelativeIndent),
+            ("productivity nested fences retain literal code semantics", ProductivityHierarchyChecks.CodeSemantics),
+            ("productivity nested block navigation and UTF16 mapping", ProductivityHierarchyChecks.Navigation),
+#if QINGYUE_HIERARCHY_EXPORT_CHECKS
+            ("productivity clipboard and HTML export preserve actual hierarchy", ProductivityHierarchyChecks.ExportedHierarchy),
+#endif
             ("preview one-dash table syntax", () => TableSyntaxCompatibility(1)),
             ("preview two-dash table syntax", () => TableSyntaxCompatibility(2)),
             ("preview three-dash table syntax", () => TableSyntaxCompatibility(3)),

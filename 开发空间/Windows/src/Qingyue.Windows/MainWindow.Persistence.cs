@@ -121,6 +121,7 @@ public partial class MainWindow
                 Notify("会话或草稿未能保存。窗口将保留，请保存重要文档后重试。\n\n" + string.Join("\n", result.Errors.Take(5)));
                 return;
             }
+            await AwaitMarkdownImageCompletionAsync();
             approvedShutdown = true; Close();
             // Another Closing handler may cancel the final close.
             if (IsVisible) approvedShutdown = false;
@@ -144,6 +145,13 @@ public partial class MainWindow
     {
         approvedShutdown = true; persistTimer.Stop(); bookmarkSaveTimer.Stop(); searchGeneration++;
         Close();
+    }
+
+    private async Task AwaitMarkdownImageCompletionAsync()
+    {
+        if (markdownImageTask is not { IsCompleted: false } task) return;
+        try { await task; }
+        catch (Exception) { /* The image task already owns attachment cleanup. */ }
     }
 
     private async Task ShowDraftSettingsAsync()

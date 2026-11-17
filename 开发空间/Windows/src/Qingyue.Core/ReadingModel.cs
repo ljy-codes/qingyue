@@ -14,9 +14,13 @@ public sealed class ReadingModel
     public IReadOnlyList<ReadingBlock> Blocks { get; }
     public IReadOnlyList<ReadingHeading> Headings { get; }
     public IReadOnlyDictionary<string, string> ReferenceDefinitions { get; }
+    // Original block source start -> owning zero-based list depth. Heading Level
+    // remains its outline level; paragraph/code Level retains its existing meaning.
+    public IReadOnlyDictionary<int, int> ListContainerLevels { get; }
 
     private ReadingModel(string text, bool identity, List<ReadingBlock> blocks, List<ReadingHeading> headings,
-        IReadOnlyDictionary<string, string>? referenceDefinitions = null)
+        IReadOnlyDictionary<string, string>? referenceDefinitions = null,
+        Dictionary<int, int>? listContainerLevels = null)
     {
         source = text;
         this.identity = identity;
@@ -24,6 +28,7 @@ public sealed class ReadingModel
         Headings = headings.AsReadOnly();
         ReferenceDefinitions = referenceDefinitions ??
             new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal));
+        ListContainerLevels = new ReadOnlyDictionary<int, int>(listContainerLevels ?? []);
         VisibleText = identity ? text : string.Join("\n", blocks.Select(block => block.Text));
     }
 
@@ -131,16 +136,19 @@ public sealed class ReadingModel
         var references = CollectReferenceDefinitions(lines);
         var blocks = new List<ReadingBlock>();
         var headings = new List<ReadingHeading>();
+        var listContainerLevels = new Dictionary<int, int>();
         var listParents = new List<(int Indent, int ContentIndent)>();
         bool afterBlank = false;
         int display = 0;
         void Add(ReadingBlockKind kind, string value, int first, int last, int level = 0,
-            bool listContinuation = false)
+            bool listContinuation = false, int listContainerLevel = -1)
         {
             if (blocks.Count > 0) display++;
             var block = new ReadingBlock(kind, value, lines[first].Start,
                 lines[last].End - lines[first].Start, display, level) { ListContinuation = listContinuation };
             blocks.Add(block);
+            if (listContinuation)
+                listContainerLevels.Add(block.SourceStart, listContainerLevel < 0 ? level : listContainerLevel);
             if (kind == ReadingBlockKind.Heading && headings.Count < MaximumHeadings)
                 headings.Add(new(value, block.SourceStart, display, level));
             display += value.Length;
@@ -200,31 +208,15 @@ public sealed class ReadingModel
             if (owner < 0 && !separated && listParents.Count > 0 && !IsSpecial(line) &&
                 !(i + 1 < lines.Count && LooksLikeTable(line, lines[i + 1].Text)))
                 owner = listParents.Count - 1;
-            if (owner >= 0 && !IsSpecial(line.TrimStart(' ', '\t')))
-            {
-                listParents.RemoveRange(owner + 1, listParents.Count - owner - 1);
-                var continuation = new List<string> { Inline(line.TrimStart(' ', '\t'), references) };
-                i++;
-                while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i].Text) &&
-                    !IsSpecial(lines[i].Text.TrimStart(' ', '\t')))
-                {
-                    int nextIndent = Indentation(lines[i].Text);
-                    int nextOwner = listParents.FindLastIndex(parent => nextIndent >= parent.ContentIndent);
-                    if (nextOwner >= 0 && nextOwner != owner) break;
-                    if (i + 1 < lines.Count && LooksLikeTable(lines[i].Text, lines[i + 1].Text)) break;
-                    continuation.Add(Inline(lines[i++].Text.TrimStart(' ', '\t'), references));
-                }
-                Add(ReadingBlockKind.Paragraph, string.Join("\n", continuation), first, i - 1,
-                    owner, listContinuation: true);
-                continue;
-            }
-            listParents.Clear();
+            listParents.RemoveRange(owner + 1, listParents.Count - owner - 1);
+            contentIndent = owner < 0 ? 0 : listParents[owner].ContentIndent;
+            string contentLine = StripIndent(line, contentIndent);
             if (TryReferenceDefinition(line, out _, out _))
             {
                 i++;
                 continue;
             }
-            var atx = Atx.Match(line);
+            var atx = Atx.Match(contentLine);
             if (atx.Success)
             {
                 var title = atx.Groups[2].Value.TrimEnd();
@@ -232,30 +224,35 @@ public sealed class ReadingModel
                 while (trailing > 0 && title[trailing - 1] == '#') trailing--;
                 if (trailing == 0 || trailing < title.Length && char.IsWhiteSpace(title[trailing - 1]))
                     title = title[..trailing].TrimEnd();
-                Add(ReadingBlockKind.Heading, Inline(title, references), i, i, atx.Groups[1].Length);
+                Add(ReadingBlockKind.Heading, Inline(title, references), i, i, atx.Groups[1].Length,
+                    listContinuation: owner >= 0, listContainerLevel: owner);
                 i++;
                 continue;
             }
-            if (i + 1 < lines.Count && SetextLevel(lines[i + 1].Text) is int level && level > 0 &&
-                !IsSpecial(line))
+            if (i + 1 < lines.Count && Indentation(lines[i + 1].Text) >= contentIndent &&
+                SetextLevel(StripIndent(lines[i + 1].Text, contentIndent)) is int level && level > 0 &&
+                !IsSpecial(contentLine))
             {
-                Add(ReadingBlockKind.Heading, Inline(line.Trim(), references), i, i + 1, level);
+                Add(ReadingBlockKind.Heading, Inline(contentLine.Trim(), references), i, i + 1, level,
+                    listContinuation: owner >= 0, listContainerLevel: owner);
                 i += 2;
                 continue;
             }
-            if (IsSeparator(line))
+            if (IsSeparator(contentLine))
             {
-                Add(ReadingBlockKind.Separator, "────────", i, i);
+                Add(ReadingBlockKind.Separator, "────────", i, i,
+                    listContinuation: owner >= 0, listContainerLevel: owner);
                 i++;
                 continue;
             }
-            if (TryTable(lines, i, references, out int last, out string table))
+            if (TryTable(lines, i, references, out int last, out string table, contentIndent))
             {
-                Add(ReadingBlockKind.Table, table, i, last);
+                Add(ReadingBlockKind.Table, table, i, last,
+                    listContinuation: owner >= 0, listContainerLevel: owner);
                 i = last + 1;
                 continue;
             }
-            var quote = Quote.Match(line);
+            var quote = Quote.Match(contentLine);
             if (quote.Success)
             {
                 var content = new List<string>();
@@ -263,22 +260,34 @@ public sealed class ReadingModel
                 {
                     content.Add(Inline(quote.Groups[1].Value, references));
                     i++;
-                    quote = i < lines.Count ? Quote.Match(lines[i].Text) : Match.Empty;
+                    quote = i < lines.Count && Indentation(lines[i].Text) >= contentIndent
+                        ? Quote.Match(StripIndent(lines[i].Text, contentIndent)) : Match.Empty;
                 } while (quote.Success);
-                Add(ReadingBlockKind.Quote, string.Join("\n", content), first, i - 1);
+                Add(ReadingBlockKind.Quote, string.Join("\n", content), first, i - 1,
+                    listContinuation: owner >= 0, listContainerLevel: owner);
                 continue;
             }
-            var paragraph = new List<string> { Inline(line, references) };
+            var paragraph = new List<string> { Inline(owner >= 0 ? line.TrimStart(' ', '\t') : line, references) };
             i++;
-            while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i].Text) && !IsSpecial(lines[i].Text))
+            while (i < lines.Count && !string.IsNullOrWhiteSpace(lines[i].Text))
             {
+                string nextLine = owner >= 0 ? lines[i].Text.TrimStart(' ', '\t') : lines[i].Text;
+                if (IsSpecial(nextLine)) break;
+                if (owner >= 0)
+                {
+                    int nextIndent = Indentation(lines[i].Text);
+                    int nextOwner = listParents.FindLastIndex(parent => nextIndent >= parent.ContentIndent);
+                    if (nextOwner >= 0 && nextOwner != owner) break;
+                }
                 if (i + 1 < lines.Count && SetextLevel(lines[i + 1].Text) > 0) break;
                 if (i + 1 < lines.Count && LooksLikeTable(lines[i].Text, lines[i + 1].Text)) break;
-                paragraph.Add(Inline(lines[i++].Text, references));
+                paragraph.Add(Inline(nextLine, references));
+                i++;
             }
-            Add(ReadingBlockKind.Paragraph, string.Join("\n", paragraph), first, i - 1);
+            Add(ReadingBlockKind.Paragraph, string.Join("\n", paragraph), first, i - 1,
+                Math.Max(0, owner), listContinuation: owner >= 0);
         }
-        return new(text, false, blocks, headings, references);
+        return new(text, false, blocks, headings, references, listContainerLevels);
     }
 
     private static int Indentation(string line)
@@ -477,17 +486,19 @@ public sealed class ReadingModel
     }
 
     private static bool TryTable(List<Line> lines, int first,
-        IReadOnlyDictionary<string, string> references, out int last, out string text)
+        IReadOnlyDictionary<string, string> references, out int last, out string text, int contentIndent = 0)
     {
         last = first;
         text = "";
-        if (first + 1 >= lines.Count || !LooksLikeTable(lines[first].Text, lines[first + 1].Text)) return false;
+        if (first + 1 >= lines.Count || Indentation(lines[first + 1].Text) < contentIndent ||
+            !LooksLikeTable(lines[first].Text, lines[first + 1].Text)) return false;
         var header = Cells(lines[first].Text)!;
         var rows = new List<List<string>> { header };
         int next = first + 2;
         while (next < lines.Count && !string.IsNullOrWhiteSpace(lines[next].Text))
         {
-            if (IsSpecial(lines[next].Text)) break;
+            if (Indentation(lines[next].Text) < contentIndent ||
+                IsSpecial(StripIndent(lines[next].Text, contentIndent))) break;
             var row = Cells(lines[next].Text);
             if (row is null || row.Count != header.Count) break;
             if ((rows.Count + 1) * header.Count > 1024) return false;

@@ -166,6 +166,7 @@ internal static partial class Program
                 });
                 host.Close();
                 await RunMarkdownWpfTests(window);
+                await RunMarkdownProductivityChecks(window, root);
             }
             catch (Exception ex) { failed++; Console.Error.WriteLine("FAIL WPF测试流程\n" + ex); }
             finally
@@ -299,6 +300,30 @@ internal static partial class Program
             static IEnumerable<Drawing> Drawings(DrawingGroup group) => group.Children
                 .SelectMany(d => d is DrawingGroup child ? Drawings(child) : [d]);
             Equal(Drawings(drawing).OfType<GeometryDrawing>().Any(d => d.Geometry is EllipseGeometry), true);
+            Equal(tab.Editor.Text.ReplaceLineEndings("\n"), sample);
+        });
+        Test("WPF嵌套列表绘制真实缩进参考线且源码坐标保持不变", () =>
+        {
+            var syntax = tab.EditorSurface.Children.OfType<JsonSyntaxLayer>().Single();
+            static IEnumerable<Drawing> Flatten(DrawingGroup group) => group.Children
+                .SelectMany(d => d is DrawingGroup child ? Flatten(child) : [d]);
+            var lines = Flatten(VisualTreeHelper.GetDrawing(syntax)!).OfType<GeometryDrawing>()
+                .Where(d => d.Geometry is LineGeometry line &&
+                    Math.Abs(line.StartPoint.X - line.EndPoint.X) < .01 &&
+                    line.EndPoint.Y > line.StartPoint.Y).ToArray();
+            if (lines.Length < 3)
+                throw new Exception("实际参考线不足：" + lines.Length + "；几何：" +
+                    string.Join(",", Flatten(VisualTreeHelper.GetDrawing(syntax)!).OfType<GeometryDrawing>()
+                        .Select(d => d.Geometry.GetType().Name)) + "；层级：" +
+                    string.Join(";", tab.MarkdownWriter.Markers.Select(m =>
+                        $"{m.Start}:{m.Level}[{string.Join(",", tab.MarkdownWriter.GuideColumns(m))}]")) +
+                    "；可见行：" + string.Join(";", Enumerable.Range(0, Math.Min(15, tab.Editor.LineCount))
+                        .Select(i => $"{i}={tab.Editor.GetCharacterIndexFromLineIndex(i)}:{tab.Editor.GetLineLength(i)}")) +
+                    "；缩进坐标：" + string.Join(";", tab.MarkdownWriter.Markers.Where(m => m.Level > 0)
+                        .Select(m => $"{m.Start}+1={tab.Editor.GetRectFromCharacterIndex(m.Start + 1)}")));
+            int nested = tab.Editor.Text.IndexOf("    - 明确", StringComparison.Ordinal);
+            Equal(tab.Editor.GetCharacterIndexFromPoint(
+                tab.Editor.GetRectFromCharacterIndex(nested + 6).TopLeft, true), nested + 6);
             Equal(tab.Editor.Text.ReplaceLineEndings("\n"), sample);
         });
         if (Environment.GetEnvironmentVariable("QINGYUE_MARKDOWN_SCREENSHOTS") is { Length: > 0 } screenshotRoot)

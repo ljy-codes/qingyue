@@ -4,6 +4,7 @@ internal static partial class Program
 {
     static partial void RunMarkdownEditingTests()
     {
+        RunMarkdownTableEditingTests();
         Test("Markdown回车续项并保留标准源码", () =>
             Edit("- 中文", 4, 0, "Enter", "- 中文\n- ", 7));
         Test("Markdown有序和任务回车不继承完成状态", () =>

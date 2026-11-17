@@ -431,12 +431,29 @@
                   <MenuItem Header="☐ 任务列表" Tag="Task" Click="MarkdownWritingClick"/>
                   <MenuItem Header="切换任务状态" Tag="ToggleTask" Click="MarkdownWritingClick" InputGestureText="Ctrl+Shift+Space"/>
                 </MenuItem>
+                <MenuItem Header="表格 ▾" AutomationProperties.Name="Markdown表格编辑">
+                  <MenuItem Header="插入表格" Tag="InsertTable" Click="MarkdownTableClick"/>
+                  <MenuItem Header="粘贴为表格" Tag="PasteTable" Click="MarkdownTableClick" ToolTip="将 Excel 等复制的制表符文本转换为 Markdown 表格"/>
+                  <Separator/>
+                  <MenuItem Header="下一单元格" Tag="NextCell" Click="MarkdownTableClick" InputGestureText="Tab"/>
+                  <MenuItem Header="上一单元格" Tag="PreviousCell" Click="MarkdownTableClick" InputGestureText="Shift+Tab"/>
+                  <MenuItem Header="在下方插入行" Tag="InsertRow" Click="MarkdownTableClick" InputGestureText="Enter"/>
+                  <MenuItem Header="删除当前行" Tag="DeleteRow" Click="MarkdownTableClick"/>
+                  <MenuItem Header="在右侧插入列" Tag="InsertColumn" Click="MarkdownTableClick"/>
+                  <MenuItem Header="删除当前列" Tag="DeleteColumn" Click="MarkdownTableClick"/>
+                  <Separator/>
+                  <MenuItem Header="当前列左对齐" Tag="AlignLeft" Click="MarkdownTableClick"/>
+                  <MenuItem Header="当前列居中" Tag="AlignCenter" Click="MarkdownTableClick"/>
+                  <MenuItem Header="当前列右对齐" Tag="AlignRight" Click="MarkdownTableClick"/>
+                </MenuItem>
               </Menu>
               <Button x:Name="MarkdownBoldButton" Style="{StaticResource CompactButton}" Content="B" FontWeight="Bold"
                       Tag="Bold" Click="MarkdownWritingClick" ToolTip="加粗 · Ctrl+B" AutomationProperties.Name="加粗"/>
               <Button Style="{StaticResource CompactButton}" Content="I" FontStyle="Italic"
                       Tag="Italic" Click="MarkdownWritingClick" ToolTip="斜体 · Ctrl+I" AutomationProperties.Name="斜体"/>
               <Button Style="{StaticResource CompactButton}" Content="链接" Tag="Link" Click="MarkdownWritingClick" ToolTip="插入链接 · Ctrl+K"/>
+              <Button Style="{StaticResource CompactButton}" Content="图片" Click="MarkdownImageClick"
+                      ToolTip="选择图片，或直接粘贴截图、拖入单张图片" AutomationProperties.Name="插入本地图片"/>
               <Button Style="{StaticResource CompactButton}" Content="引用" Tag="Quote" Click="MarkdownWritingClick" ToolTip="引用 · Ctrl+Shift+Q"/>
               <Menu VerticalAlignment="Center" Margin="2,0">
                 <MenuItem Header="代码 ▾">

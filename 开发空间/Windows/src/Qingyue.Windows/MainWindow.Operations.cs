@@ -18,6 +18,7 @@ public partial class MainWindow
         loading?.Cancellation.Cancel();
         markdownRenderCancellation?.Cancel();
         CancelReadingSharing();
+        markdownImageCancellation?.Cancel();
     }
 
     private LoadingOperation BeginLoading(string stage, EditorTab? tab = null)

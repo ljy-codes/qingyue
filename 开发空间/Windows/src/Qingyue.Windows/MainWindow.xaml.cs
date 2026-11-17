@@ -144,6 +144,7 @@ public partial class MainWindow : Window
         var tab = new EditorTab(file);
         ConfigureEditor(tab);
         AttachSyntax(tab);
+        AttachMarkdownAssets(tab);
         tab.Editor.TextChanged += (_, _) =>
         {
             string oldText = tab.File.Text;

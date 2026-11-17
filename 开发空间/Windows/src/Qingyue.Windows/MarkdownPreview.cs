@@ -275,11 +275,12 @@ public sealed class MarkdownPreview : RichTextBox
                 list.ListItems.Add(item);
                 container = item.Blocks;
             }
-            else if (block.ListContinuation && block.Level < lists.Count)
+            else if (model.ListContainerLevels.TryGetValue(parsedBlock.SourceStart, out int containerLevel) &&
+                containerLevel < lists.Count)
             {
-                if (lists.Count > block.Level + 1)
-                    lists.RemoveRange(block.Level + 1, lists.Count - block.Level - 1);
-                container = lists[block.Level].ListItems.LastListItem!.Blocks;
+                if (lists.Count > containerLevel + 1)
+                    lists.RemoveRange(containerLevel + 1, lists.Count - containerLevel - 1);
+                container = lists[containerLevel].ListItems.LastListItem!.Blocks;
             }
             else lists.Clear();
             var paragraph = new Paragraph(new Run(block.Text))
@@ -303,7 +304,7 @@ public sealed class MarkdownPreview : RichTextBox
             }
             else if (block.Kind == ReadingBlockKind.Table)
             {
-                var table = TablePreview(parsedBlock.Text, source, images, model.ReferenceDefinitions);
+                var table = TablePreview(parsedBlock.Text, InlineSource(source, block), images, model.ReferenceDefinitions);
                 table.Tag = block;
                 container.InsertBefore(paragraph, table);
                 container.Remove(paragraph);
@@ -335,6 +336,10 @@ public sealed class MarkdownPreview : RichTextBox
     private static string InlineSource(string source, ReadingBlock block)
     {
         var kind = block.Kind;
+        // Container indentation is syntax for non-code blocks. Remove it before
+        // detecting ATX/quote prefixes; fenced code never takes this path.
+        if (block.ListContinuation && kind != ReadingBlockKind.Code)
+            source = string.Join("\n", source.Split('\n').Select(line => line.TrimStart(' ', '\t')));
         if (kind == ReadingBlockKind.Heading)
         {
             var heading = MarkdownSyntax.HeadingPattern.Match(source.Split('\n')[0]);
@@ -352,8 +357,6 @@ public sealed class MarkdownPreview : RichTextBox
             var task = TaskPattern.Match(body);
             return task.Success ? (task.Groups[1].Value == " " ? "☐ " : "☑ ") + body[task.Length..] : body;
         }
-        if (block.ListContinuation)
-            return string.Join("\n", source.Split('\n').Select(line => line.TrimStart(' ', '\t')));
         return source;
     }
 
