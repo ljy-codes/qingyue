@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class ReaderTab {
     let file: TextFile
@@ -102,6 +103,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var sidebarOutlineButton: ActionButton!
     private var toolbarCopyButton: ActionButton!
     private var toolbarOptions: WindowsPopupButton!
+    private var markdownEditOptions: WindowsPopupButton!
     private var returnPositionButton: ActionButton!
     private let presentationHint = NSTextField(labelWithString: "")
     private let searchBar = NSStackView()
@@ -290,9 +292,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         options.addItem(NSMenuItem(title: "复制 / 导出 ▾", action: nil, keyEquivalent: ""))
         for (title, action) in [("复制全文纯文本", #selector(copyReadingPlain(_:))), ("复制 Markdown 源文", #selector(copyMarkdownSource(_:))), ("复制当前代码块", #selector(copyCodeBlock(_:))), ("复制当前表格", #selector(copyTableBlock(_:))), ("导出 HTML（含图片）…", #selector(exportReadingHTML(_:)))] { let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; options.addItem(i) }
         toolbarOptions.menu = options
+        markdownEditOptions = WindowsPopupButton(frame: .zero, pullsDown: true)
+        markdownEditOptions.font = .systemFont(ofSize: 12); markdownEditOptions.setAccessibilityLabel("Markdown 编辑")
+        let markdownMenu = NSMenu()
+        markdownMenu.addItem(NSMenuItem(title: "Markdown 编辑 ▾", action: nil, keyEquivalent: ""))
+        for (title, action) in [("插入表格行", #selector(insertMarkdownTableRow(_:))), ("删除表格行", #selector(deleteMarkdownTableRow(_:))), ("插入表格列", #selector(insertMarkdownTableColumn(_:))), ("删除表格列", #selector(deleteMarkdownTableColumn(_:))), ("左对齐当前列", #selector(alignMarkdownTableLeft(_:))), ("居中当前列", #selector(alignMarkdownTableCenter(_:))), ("右对齐当前列", #selector(alignMarkdownTableRight(_:))), ("粘贴 TSV 为表格", #selector(pasteMarkdownTable(_:))), ("插入图片…", #selector(insertMarkdownImage(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; markdownMenu.addItem(item)
+        }
+        markdownEditOptions.menu = markdownMenu
         returnPositionButton = button("返回位置") { [weak self] in self?.returnReadingPosition(nil) }; returnPositionButton.toolTip = "返回目录跳转前的阅读位置 · ⌥←"
         presentationHint.font = .systemFont(ofSize: 11); presentationHint.lineBreakMode = .byTruncatingTail
-        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, returnPositionButton!, presentationHint].forEach { tools.addArrangedSubview($0) }
+        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, markdownEditOptions!, returnPositionButton!, presentationHint].forEach { tools.addArrangedSubview($0) }
         // Retain legacy actions only through menus, rather than scattering controls.
         wrapButton = button("自动折行") { [weak self] in self?.toggleWrap(nil) }
         kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged); kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文档语言")
@@ -305,7 +315,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         editor.isRichText = false; editor.importsGraphics = false; editor.allowsUndo = true
         editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false; editor.isAutomaticSpellingCorrectionEnabled = false; editor.isAutomaticLinkDetectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false; editor.isAutomaticDataDetectionEnabled = false; editor.isGrammarCheckingEnabled = false; editor.usesFindBar = false
         editor.textContainerInset = NSSize(width: 18, height: 20); editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.minSize = .zero; editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区"); editor.cancelHandler = { [weak self] in self?.cancelFind() }; editor.filesDropped = { [weak self] in self?.openURLs($0) }; editor.registerForDraggedTypes([.fileURL])
+        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区"); editor.cancelHandler = { [weak self] in self?.cancelFind() }; editor.filesDropped = { [weak self] in self?.openURLs($0) }
+        editor.tableEditHandler = { [weak self] selection, backward in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownTableEditing.edit(text: self.editor.string, selection: selection, action: .tab(backward: backward))
+        }
+        editor.imagesDropped = { [weak self] urls in self?.insertMarkdownImages(urls) ?? false }
+        editor.imagePasteHandler = { [weak self] in self?.pasteMarkdownImage() ?? false }
+        editor.registerForDraggedTypes([.fileURL, .png, .tiff])
         editorScroll.hasVerticalScroller = true; editorScroll.hasHorizontalScroller = false; editorScroll.autohidesScrollers = true; editorScroll.borderType = .noBorder; editorScroll.documentView = editor; editorScroll.contentView.postsBoundsChangedNotifications = true
         ruler = LineNumberRuler(editor: editor, scroll: editorScroll); add(ruler, to: canvas)
         documentSplit.isVertical = true; documentSplit.dividerStyle = .thin; documentSplit.delegate = self; documentSplit.addSubview(editorScroll); documentSplit.addSubview(previewScroll); editorScroll.translatesAutoresizingMaskIntoConstraints = true; previewScroll.translatesAutoresizingMaskIntoConstraints = true; add(documentSplit, to: canvas)
@@ -365,7 +382,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         menuRow.color = theme.panel; tabRow.color = theme.window; footer.color = theme.panel; toolsContainer.color = theme.panel
         for view in [menuRow, header, tabRow, sidebar, toolsContainer, footer] { view.wantsLayer = true; view.layer?.borderColor = theme.border.cgColor; view.layer?.borderWidth = 0.5 }
         windowMenuBar.applyAppearance(foreground: theme.text, background: theme.panel, highlight: theme.hover)
-        for popup in [kindPopup, codecPopup, endingPopup, toolbarOptions!] { popup.applyTheme(theme) }
+        for popup in [kindPopup, codecPopup, endingPopup, toolbarOptions!, markdownEditOptions!] { popup.applyTheme(theme) }
         for field in [searchField, replaceField] { field.backgroundColor = theme.editor; field.textColor = theme.text }
         presentationHint.textColor = theme.muted
         titleLabel.textColor = theme.text; subtitle.textColor = theme.muted; sideTitle.textColor = theme.muted; sideNote.textColor = theme.muted
@@ -981,6 +998,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         structureButton.isHidden = !json
         toolbarCopyButton.isHidden = !md || (!reading && active?.splitPreview != true)
         toolbarOptions.isHidden = !md
+        markdownEditOptions.isHidden = !md || reading
         returnPositionButton.isEnabled = active?.navigation.isEmpty == false
         formatButton.title = kind == .plain ? "整理 TXT" : "格式化"
         presentationHint.stringValue = md ? (reading ? "Markdown 预览 · 需要修改时点击编辑原文" : active?.splitPreview == true ? "左侧编辑 · 右侧预览" : "Markdown 原文 · 可开启分屏编辑") : ""
@@ -1038,7 +1056,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let id = active?.file.id else { return }; let item = NSMenuItem(); item.representedObject = id; closeOtherTabs(item)
     }
     @objc func showDiagnostics(_ sender: Any?) {
-        let details = ["Mac 0.1.0 · 构建 6", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
+        let details = ["Mac 0.1.0 · 构建 7", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
         _ = alert("打开与阅读诊断", details.joined(separator: "\n"), buttons: ["关闭"])
     }
     @objc func showPreferences(_ sender: Any?) {
@@ -1228,6 +1246,60 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let range = NSRange(location: 0, length: (editor.string as NSString).length)
             if editor.shouldChangeText(in: range, replacementString: result) { editor.replaceCharacters(in: range, with: result); editor.didChangeText() }
         } catch { showError(error) }
+    }
+
+    private func applyMarkdownTableAction(_ action: MarkdownTableAction) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard let edit = MarkdownTableEditing.edit(text: editor.string, selection: editor.selectedRange(), action: action) else {
+            updateStatus("当前光标不在 Markdown 表格内"); return
+        }
+        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已更新 Markdown 表格 · ⌘Z 撤销")
+    }
+    @objc func insertMarkdownTableRow(_ sender: Any?) { applyMarkdownTableAction(.insertRow) }
+    @objc func deleteMarkdownTableRow(_ sender: Any?) { applyMarkdownTableAction(.deleteRow) }
+    @objc func insertMarkdownTableColumn(_ sender: Any?) { applyMarkdownTableAction(.insertColumn) }
+    @objc func deleteMarkdownTableColumn(_ sender: Any?) { applyMarkdownTableAction(.deleteColumn) }
+    @objc func alignMarkdownTableLeft(_ sender: Any?) { applyMarkdownTableAction(.align(.left)) }
+    @objc func alignMarkdownTableCenter(_ sender: Any?) { applyMarkdownTableAction(.align(.center)) }
+    @objc func alignMarkdownTableRight(_ sender: Any?) { applyMarkdownTableAction(.align(.right)) }
+    @objc func pasteMarkdownTable(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown, let value = NSPasteboard.general.string(forType: .string), let rendered = MarkdownTableEditing.markdownTable(fromTSV: value) else { updateStatus("剪贴板没有可转换的 TSV 表格"); return }
+        let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: rendered, selection: NSRange(location: range.location + rendered.utf16.count, length: 0)); editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴 Markdown 表格 · ⌘Z 撤销")
+    }
+    @objc func insertMarkdownImage(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard active?.file.url != nil else { updateStatus("请先保存 Markdown 文档，再插入图片"); return }
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .tiff, .gif, .bmp, .heic]; panel.allowsMultipleSelection = true; panel.canChooseDirectories = false; panel.prompt = "插入图片"
+        guard panel.runModal() == .OK else { return }
+        _ = insertMarkdownImages(panel.urls)
+    }
+    private func insertMarkdownImages(_ urls: [URL]) -> Bool {
+        guard !reading, active?.kind == .markdown, let documentURL = active?.file.url else { return false }
+        guard !urls.isEmpty else { return false }
+        var links: [String] = []; var created: [URL] = []
+        do {
+            for url in urls.prefix(8) {
+                let result = try MarkdownAssetWriter.write(sourceURL: url, documentURL: documentURL); links.append(result.markdownLink); created.append(result.fileURL)
+            }
+        } catch {
+            for file in created { try? FileManager.default.removeItem(at: file) }
+            updateStatus("图片插入失败 · \(error.localizedDescription)"); return false
+        }
+        let insertion = links.joined(separator: "\n")
+        let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: insertion, selection: NSRange(location: range.location + insertion.utf16.count, length: 0))
+        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已插入 \(links.count) 张图片 · 图片写入文档旁 .assets")
+        return true
+    }
+    private func pasteMarkdownImage() -> Bool {
+        guard !reading, active?.kind == .markdown, let documentURL = active?.file.url else { return false }
+        guard let image = NSImage(pasteboard: NSPasteboard.general) else { return false }
+        do {
+            let result = try MarkdownAssetWriter.write(image: image, suggestedName: "pasted-image", documentURL: documentURL)
+            let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: result.markdownLink, selection: NSRange(location: range.location + result.markdownLink.utf16.count, length: 0))
+            editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴图片 · 图片写入文档旁 .assets"); return true
+        } catch {
+            updateStatus("图片粘贴失败 · \(error.localizedDescription)"); return true
+        }
     }
 
     @objc func showFind(_ sender: Any?) {

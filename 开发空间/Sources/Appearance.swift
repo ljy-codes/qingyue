@@ -200,6 +200,8 @@ final class TabStripView: NSStackView {
 final class EditorTextView: NSTextView {
     var tabUndo = UndoManager()
     var filesDropped: (([URL]) -> Void)?
+    var imagesDropped: (([URL]) -> Bool)?
+    var imagePasteHandler: (() -> Bool)?
     var cancelHandler: (() -> Void)?
     override func cancelOperation(_ sender: Any?) {
         if hasMarkedText() { super.cancelOperation(sender); return }
@@ -208,9 +210,13 @@ final class EditorTextView: NSTextView {
     override var undoManager: UndoManager? { tabUndo }
     override func insertTab(_ sender: Any?) {
         if hasMarkedText() { super.insertTab(sender); return }
+        if let edit = tableEditHandler?(selectedRange(), false) { applyEdit(edit); return }
         applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: false))
     }
-    override func insertBacktab(_ sender: Any?) { applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: true)) }
+    override func insertBacktab(_ sender: Any?) {
+        if let edit = tableEditHandler?(selectedRange(), true) { applyEdit(edit); return }
+        applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: true))
+    }
     override func insertNewline(_ sender: Any?) {
         if hasMarkedText() { super.insertNewline(sender); return }
         applyEdit(TextEditing.newline(text: string, selection: selectedRange()))
@@ -223,15 +229,26 @@ final class EditorTextView: NSTextView {
         }
         breakUndoCoalescing()
     }
+    var tableEditHandler: ((NSRange, Bool) -> TextEditResult?)?
+    func applyExternalEdit(_ edit: TextEditResult) { applyEdit(edit) }
+    override func paste(_ sender: Any?) {
+        if imagePasteHandler?() == true { return }
+        super.paste(sender)
+    }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return .copy }
         return super.draggingEntered(sender)
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         if let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            let images = urls.filter { Self.isImageURL($0) }
+            if !images.isEmpty, imagesDropped?(images) == true { return true }
             filesDropped?(urls); return true
         }
         return super.performDragOperation(sender)
+    }
+    private static func isImageURL(_ url: URL) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "tif", "tiff", "webp", "bmp", "heic"].contains(url.pathExtension.lowercased())
     }
 }
 
