@@ -18,6 +18,7 @@ public sealed class ReaderSettings
     public string FontFamily { get; set; } = ReadingFontCatalog.Fallback;
     public double LineHeight { get; set; } = 1.75;
     public double ParagraphSpacing { get; set; } = 13;
+    public string IconTheme { get; set; } = AppIconTheme.Default.ToString();
     public double Width { get; set; } = 1120;
     public double Height { get; set; } = 790;
     public DateTimeOffset? LastUpdateCheckUtc { get; set; }
@@ -45,6 +46,7 @@ public sealed class ReaderSettings
             value.LineHeight = double.IsFinite(value.LineHeight) ? Math.Clamp(value.LineHeight, 1.1, 3.2) : 1.75;
             value.ParagraphSpacing = double.IsFinite(value.ParagraphSpacing)
                 ? Math.Clamp(value.ParagraphSpacing, 0, 48) : 13;
+            value.IconTheme = AppIconTheme.NormalizeName(value.IconTheme);
             value.Width = double.IsFinite(value.Width) ? Math.Clamp(value.Width, 820, 3200) : 1120;
             value.Height = double.IsFinite(value.Height) ? Math.Clamp(value.Height, 520, 2160) : 790;
             value.Recent = (value.Recent ?? []).Where(Path.IsPathFullyQualified).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToList();
@@ -67,6 +69,7 @@ public sealed class ReaderSettings
         string temporary = Path.Combine(root, "Settings." + Guid.NewGuid() + ".tmp");
         try
         {
+            IconTheme = AppIconTheme.NormalizeName(IconTheme);
             System.IO.File.WriteAllText(temporary, JsonSerializer.Serialize(this));
             if (System.IO.File.Exists(destination))
             {

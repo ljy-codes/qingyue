@@ -239,11 +239,23 @@ public partial class MainWindow
         SchedulePersist();
     }
 
+    public void ApplyAppIconTheme(AppIconThemeKind theme)
+    {
+        settings.IconTheme = AppIconTheme.NormalizeName(theme.ToString());
+        Icon = AppIconTheme.Load(theme);
+    }
+
+    private void ApplyAppIconTheme()
+    {
+        ApplyAppIconTheme(AppIconTheme.Parse(settings.IconTheme));
+    }
+
     private void ShowReadingAppearance()
     {
         var selection = Modal(() => ReadingAppearanceDialog.Show(this, settings));
         if (selection is null) return;
         selection.ApplyTo(settings);
+        ApplyAppIconTheme();
         ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
         ApplyEditorSettings();
     }

@@ -33,12 +33,13 @@ try
 
     var configured = new ReaderSettings();
     new ReadingAppearanceSelection(
-        "不存在的字体", 9, -3, ReaderThemeKind.WarmPaper).ApplyTo(configured);
+        "不存在的字体", 9, -3, ReaderThemeKind.WarmPaper, AppIconThemeKind.Peach).ApplyTo(configured);
     Check(configured.FontFamily == ReadingFontCatalog.Fallback
         && configured.LineHeight == 3.2
         && configured.ParagraphSpacing == 0
         && configured.Theme == "WarmPaper"
-        && !configured.Dark,
+        && !configured.Dark
+        && configured.IconTheme == "Peach",
         "阅读外观选择会规范化字体、行高、段距和暖纸主题");
 
     var resources = new ResourceDictionary();

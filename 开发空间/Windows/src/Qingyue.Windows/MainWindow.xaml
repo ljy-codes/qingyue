@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Qingyue.Windows"
-        Title="轻阅" Icon="Assets/Qingyue.ico" Width="1120" Height="790" MinWidth="820" MinHeight="520"
+        Title="轻阅" Width="1120" Height="790" MinWidth="820" MinHeight="520"
         WindowStartupLocation="CenterScreen" AllowDrop="True" Drop="WindowDrop" DragOver="WindowDragOver"
         GotKeyboardFocus="TrackTextCommandTarget">
   <Window.Resources>

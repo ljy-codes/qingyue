@@ -8,13 +8,25 @@
         </GeometryDrawing.Geometry>
       </GeometryDrawing>
 
-      <!-- Quiet graphite field. The icon intentionally avoids the former blue-square/book silhouette. -->
+      <!-- Sky blue reading surface. The icon intentionally avoids the former book silhouette. -->
       <GeometryDrawing>
         <GeometryDrawing.Brush>
           <LinearGradientBrush StartPoint="0,0" EndPoint="0.85,1">
-            <GradientStop Color="#2A3037" Offset="0"/>
-            <GradientStop Color="#14181D" Offset="1"/>
+            <GradientStop Color="#C7F0FF" Offset="0"/>
+            <GradientStop Color="#7198DE" Offset="1"/>
           </LinearGradientBrush>
+        </GeometryDrawing.Brush>
+        <GeometryDrawing.Geometry>
+          <RectangleGeometry Rect="24,24,464,464" RadiusX="124" RadiusY="124"/>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+
+      <GeometryDrawing>
+        <GeometryDrawing.Brush>
+          <RadialGradientBrush Center="0.72,0.46" RadiusX="0.62" RadiusY="0.62">
+            <GradientStop Color="#6193D7F1" Offset="0"/>
+            <GradientStop Color="#0093D7F1" Offset="1"/>
+          </RadialGradientBrush>
         </GeometryDrawing.Brush>
         <GeometryDrawing.Geometry>
           <RectangleGeometry Rect="24,24,464,464" RadiusX="124" RadiusY="124"/>
@@ -24,7 +36,7 @@
       <!-- Four calm text lines turn the mark into a reading tool rather than a book symbol. -->
       <GeometryDrawing>
         <GeometryDrawing.Brush>
-          <SolidColorBrush Color="#A6AFBB" Opacity=".58"/>
+          <SolidColorBrush Color="#31577E" Opacity=".70"/>
         </GeometryDrawing.Brush>
         <GeometryDrawing.Geometry>
           <RectangleGeometry Rect="105,165,235,17" RadiusX="8.5" RadiusY="8.5"/>
@@ -32,7 +44,7 @@
       </GeometryDrawing>
       <GeometryDrawing>
         <GeometryDrawing.Brush>
-          <SolidColorBrush Color="#F08A63"/>
+          <SolidColorBrush Color="#FF8D6F"/>
         </GeometryDrawing.Brush>
         <GeometryDrawing.Geometry>
           <RectangleGeometry Rect="105,215,285,23" RadiusX="11.5" RadiusY="11.5"/>
@@ -40,7 +52,7 @@
       </GeometryDrawing>
       <GeometryDrawing>
         <GeometryDrawing.Brush>
-          <SolidColorBrush Color="#A6AFBB" Opacity=".48"/>
+          <SolidColorBrush Color="#31577E" Opacity=".60"/>
         </GeometryDrawing.Brush>
         <GeometryDrawing.Geometry>
           <RectangleGeometry Rect="105,277,215,17" RadiusX="8.5" RadiusY="8.5"/>
@@ -48,27 +60,32 @@
       </GeometryDrawing>
       <GeometryDrawing>
         <GeometryDrawing.Brush>
-          <SolidColorBrush Color="#A6AFBB" Opacity=".30"/>
+          <SolidColorBrush Color="#31577E" Opacity=".46"/>
         </GeometryDrawing.Brush>
         <GeometryDrawing.Geometry>
           <RectangleGeometry Rect="105,325,150,17" RadiusX="8.5" RadiusY="8.5"/>
         </GeometryDrawing.Geometry>
       </GeometryDrawing>
 
-      <!-- The dot marks the current reading position. -->
-      <GeometryDrawing Brush="#24F4BD70">
+      <!-- The marker and sparkle mark the current reading position. -->
+      <GeometryDrawing Brush="#55FFD873">
         <GeometryDrawing.Geometry>
           <EllipseGeometry Center="395,226.5" RadiusX="31" RadiusY="31"/>
         </GeometryDrawing.Geometry>
       </GeometryDrawing>
-      <GeometryDrawing Brush="#F7D88D">
+      <GeometryDrawing Brush="#FFD873">
         <GeometryDrawing.Geometry>
           <EllipseGeometry Center="395,226.5" RadiusX="15.5" RadiusY="15.5"/>
         </GeometryDrawing.Geometry>
       </GeometryDrawing>
-      <GeometryDrawing Brush="#FFF8D7">
+      <GeometryDrawing Brush="#F2FFFDF0">
         <GeometryDrawing.Geometry>
           <EllipseGeometry Center="389.5,221" RadiusX="4" RadiusY="4"/>
+        </GeometryDrawing.Geometry>
+      </GeometryDrawing>
+      <GeometryDrawing Brush="#C7FFF3B0">
+        <GeometryDrawing.Geometry>
+          <StreamGeometry>M 428,171 L 431.5,180 L 440.5,183.5 L 431.5,187 L 428,196 L 424.5,187 L 415.5,183.5 L 424.5,180 Z</StreamGeometry>
         </GeometryDrawing.Geometry>
       </GeometryDrawing>
     </DrawingGroup>

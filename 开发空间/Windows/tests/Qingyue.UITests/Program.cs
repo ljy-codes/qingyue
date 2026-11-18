@@ -40,6 +40,7 @@ internal static class Program
                 window.Show();
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                IconThemeChecks.Run(Check, window, root);
                 var brandHeader = (FrameworkElement)window.FindName("BrandHeader");
                 var tabRow = (FrameworkElement)window.FindName("TabRow");
                 var editOnlyTools = (FrameworkElement)window.FindName("EditOnlyTools");

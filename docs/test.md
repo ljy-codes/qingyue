@@ -1,5 +1,45 @@
 # Windows 验收记录
 
+## 2026-11-18｜Windows 0.15.0 构建 1（开发阶段）
+
+本轮完成应用图标主题收口：默认使用天空蓝，应用内可保存并切换天空蓝、樱花紫、
+薄荷珊瑚和蜜桃紫四套图标。旧设置缺少图标字段时自动回退天空蓝；主窗口、便携版、
+安装包和资源管理器固定入口统一使用天空蓝。同步清理 `docs/design` 下旧 v4 资源，
+保留 v3 与 v5 最新设计资源。不加入云同步、账号或历史数据迁移。
+
+### 测试结果
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 全量构建 | 0 警告、0 错误 |
+| WPF 流程检查 | 187 项通过，0 失败 |
+| 图标主题回归 | 四套主题即时切换、设置保存/恢复、旧设置默认回退天空蓝均通过 |
+| 便携目录 | 265 个文件，隔离发布目录生成成功 |
+| 安装器 | `0.15.0`、文件版本 `0.15.0.1`、Windows 构建 `1`；未签名 |
+| 本机安装 | 安装器退出码 `0`；已安装到 `%LOCALAPPDATA%\Programs\Qingyue`，HKLM 卸载登记为 `0.15.0 (Windows 构建 1)` |
+| 测试残留 | `QingyueInstallerTest` 注册项、测试配置和测试数据已清理 |
+
+执行命令：
+
+```powershell
+pwsh -NoProfile -File 开发空间/Windows/scripts/build.ps1 -Configuration Release
+dotnet 开发空间/Windows/tests/Qingyue.UITests/bin/Release/net10.0-windows/Qingyue.UITests.dll
+pwsh -NoProfile -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
+```
+
+### 交付产物
+
+本轮发布目录包含 265 个文件，共 139,734,654 字节；正式安装包未签名。
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.15.0-Windows构建1-x64.zip` | 62,777,427 字节 | `4974FFC444271A9DB8FD3B25459D26A988730B7DA856A59F66642B0528CF93B6` |
+| `交付产品/轻阅-0.15.0-Windows构建1-x64-setup.exe` | 44,133,895 字节 | `C7C0CE2178A33462599EDBDC3550841856A354813DF2EE2B413F455A4D00F0C8` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 308,736 字节 | `796EAC8BCFE06CA5492F05D101FB130FD1C83136A0BE4F3289873A524B31B828` |
+
+本轮仅使用本机缓存完成 `win-x64` 运行时还原；发布时 NuGet 在线源不可达，
+不影响已通过的 Release 构建和自包含产物生成。
+
 ## 2026-11-17｜Windows 0.14.0 构建 1（开发阶段）
 
 本轮完成 Markdown 层次参考线、列表内部嵌套容器、表格编辑和本地截图插图。

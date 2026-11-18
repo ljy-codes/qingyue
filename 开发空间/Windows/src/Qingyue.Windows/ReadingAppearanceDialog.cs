@@ -9,7 +9,8 @@ public sealed record ReadingAppearanceSelection(
     string FontFamily,
     double LineHeight,
     double ParagraphSpacing,
-    ReaderThemeKind Theme)
+    ReaderThemeKind Theme,
+    AppIconThemeKind IconTheme)
 {
     public void ApplyTo(ReaderSettings settings)
     {
@@ -24,6 +25,7 @@ public sealed record ReadingAppearanceSelection(
             : 13;
         settings.Theme = ReaderTheme.NormalizeName(Theme.ToString(), Theme == ReaderThemeKind.Dark);
         settings.Dark = Theme == ReaderThemeKind.Dark;
+        settings.IconTheme = AppIconTheme.NormalizeName(IconTheme.ToString());
     }
 }
 
@@ -31,6 +33,7 @@ public static class ReadingAppearanceDialog
 {
     private sealed record NumberChoice(double Value, string Label);
     private sealed record ThemeChoice(ReaderThemeKind Theme, string Label);
+    private sealed record IconThemeChoice(AppIconThemeKind Theme, string Label);
 
     private static readonly NumberChoice[] LineHeightChoices =
     [
@@ -59,6 +62,11 @@ public static class ReadingAppearanceDialog
         new(ReaderThemeKind.WarmPaper, "暖纸")
     ];
 
+    private static readonly IconThemeChoice[] IconThemeChoices =
+        AppIconTheme.Options
+            .Select(item => new IconThemeChoice(item.Kind, item.Label))
+            .ToArray();
+
     public static ReadingAppearanceSelection? Show(Window owner, ReaderSettings settings)
     {
         ArgumentNullException.ThrowIfNull(owner);
@@ -77,7 +85,7 @@ public static class ReadingAppearanceDialog
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(112) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 5; i++)
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var fonts = new ComboBox
@@ -126,6 +134,19 @@ public static class ReadingAppearanceDialog
         theme.SelectedItem = ThemeChoices.FirstOrDefault(item =>
             item.Theme == ReaderTheme.Parse(settings.Theme, settings.Dark)) ?? ThemeChoices[0];
         AddRow(grid, 3, "主题", theme);
+
+        var iconTheme = new ComboBox
+        {
+            ItemsSource = IconThemeChoices,
+            DisplayMemberPath = nameof(IconThemeChoice.Label),
+            SelectedValuePath = nameof(IconThemeChoice.Theme),
+            MinWidth = 260,
+            Height = 30
+        };
+        AutomationProperties.SetName(iconTheme, "应用图标");
+        iconTheme.SelectedItem = IconThemeChoices.FirstOrDefault(item =>
+            item.Theme == AppIconTheme.Parse(settings.IconTheme)) ?? IconThemeChoices[0];
+        AddRow(grid, 4, "应用图标", iconTheme);
         panel.Children.Add(grid);
 
         var preview = new TextBlock
@@ -182,7 +203,9 @@ public static class ReadingAppearanceDialog
                 fonts.SelectedItem as string ?? ReadingFontCatalog.Fallback,
                 lineHeight.SelectedItem is NumberChoice line ? line.Value : settings.LineHeight,
                 paragraphSpacing.SelectedItem is NumberChoice spacing ? spacing.Value : settings.ParagraphSpacing,
-                theme.SelectedItem is ThemeChoice selectedTheme ? selectedTheme.Theme : ReaderTheme.Parse(settings.Theme, settings.Dark));
+                theme.SelectedItem is ThemeChoice selectedTheme ? selectedTheme.Theme : ReaderTheme.Parse(settings.Theme, settings.Dark),
+                iconTheme.SelectedItem is IconThemeChoice selectedIcon
+                    ? selectedIcon.Theme : AppIconTheme.Parse(settings.IconTheme));
             dialog.DialogResult = true;
         };
         buttons.Children.Add(apply);
