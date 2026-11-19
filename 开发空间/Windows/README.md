@@ -17,8 +17,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 这些构建命令生成产物，不自动安装或签名。
 
 输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
-`交付产品/轻阅-0.15.0-Windows构建1-x64.zip` 和
-`交付产品/轻阅-0.15.0-Windows构建1-x64-setup.exe`。
+`交付产品/轻阅-0.16.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.16.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
@@ -49,6 +49,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 0.15.0 增加四套动漫风格应用图标：天空蓝、樱花紫、薄荷珊瑚和蜜桃紫。
 默认使用天空蓝，用户可在“视图 → 阅读外观”中切换，选择保存到本机 `Settings.json`，
 重启后继续使用；安装包、EXE 和资源管理器固定使用天空蓝。
+构建 2 在 WPF 启动阶段启用软件渲染，规避部分显卡驱动路径造成的异常 native render memory
+占用；本机完整窗口验证约 62–75 MB 私有内存，具体结果见 `docs/test.md`。
 0.14.0 增加 Markdown 层次参考线、嵌套容器排版、表格编辑和截图插图。
 输入和保存仍使用原生 TextBox 与标准 Markdown，预览和复制使用真实嵌套列表。
 批注、书签、设置、阅读清单和恢复数据默认写入

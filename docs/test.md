@@ -1,5 +1,72 @@
 # Windows 验收记录
 
+## 2026-11-19｜Windows 0.16.0 构建 1（低内存优化发布）
+
+本轮将低内存修复整理为下一版正式开发包。WPF 在启动最早阶段使用软件渲染，
+避开部分显卡驱动路径造成的 native render memory 异常增长；实测干净 Release
+进程约 62–75 MB 私有内存、约 136–153 MB 工作集，具体数值随窗口状态和系统环境变化。
+
+### 测试结果
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 全量构建 | 0 警告、0 错误 |
+| 全量验收 | 管理员权限下通过，0 失败 |
+| 文件、文本、WPF 流程、编辑、Markdown | 28 + 47 + 187 + 132 + 40 项通过 |
+| Mermaid、阅读、图片、剪贴板、实例 | 29 + 65 + 33 + 59 + 15 项通过 |
+| 外部刷新、导航、恢复、阅读体验 | 96 + 21 + 20 + 19 项通过 |
+| 批注、阅读外观、文本位置 | 17 + 17 + 5 项通过 |
+| 自包含发布 | 265 个载荷文件，139,734,874 字节 |
+| 安装包 | 产品 `0.16.0`、文件版本 `0.16.0.1`、Windows 构建 `1`；未签名 |
+
+执行命令：
+
+```powershell
+$env:NUGET_PACKAGES = Join-Path $env:USERPROFILE '.nuget\packages'
+pwsh -NoProfile -File 开发空间/Windows/scripts/test.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/publish.ps1
+pwsh -NoProfile -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
+```
+
+本轮发布使用本机已缓存的 .NET 10.0.11 `win-x64` 运行时包；在线 NuGet 源因本机代理不可达，
+没有参与产物生成。
+
+### 交付产物
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.16.0-Windows构建1-x64.zip` | 62,777,720 字节 | `78D2A90540B145E8C7D5717D5C25DF21AB23D777651B24F649FB4D522A072699` |
+| `交付产品/轻阅-0.16.0-Windows构建1-x64-setup.exe` | 44,120,867 字节 | `8DE2F192155FFB36627C120EC63B2E59D0BA940117F5F07CA87425ED420BE651` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 308,736 字节 | `00B3F333FE0045B95E9C705B2B6C2D3BCEF2D86AAE15774AA5959637D2865BDA` |
+
+## 2026-11-19｜Windows 0.15.0 构建 2（低内存修复）
+
+本轮定位并修复启动后内存异常升高。旧版在 `Window.Show()` 前约 47 MB 私有内存，
+显示窗口后升至约 380 MB；把窗口内容替换为空 `Grid` 以及使用独立最小 WPF 窗口
+仍约 365 MB，说明问题发生在 WPF 硬件渲染/显卡驱动的 native render memory 路径，
+与 Markdown、图片缓存、标签数量和 JSON 内容无关。
+
+在 `App.OnStartup` 最早阶段设置
+`RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly` 后，独立最小窗口约 43 MB，
+轻阅完整窗口约 62–65 MB 私有内存、约 136–137 MB 工作集。当前机器正在运行的旧安装实例
+仍约 450 MB 私有内存，重新启动构建 2 后才会使用新的渲染路径。
+
+### 测试结果
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 全量构建 | 0 警告、0 错误 |
+| WPF 流程检查 | 187 项通过 |
+| 阅读、图片、Markdown、文本检查 | 19 + 33 + 40 + 65 + 47 项通过 |
+| 修复后干净 Release 进程 | 约 62–63 MB 私有内存、约 136 MB 工作集 |
+| 实例测试 | 命名管道测试环境仍超时，未归因于本次渲染修改 |
+
+执行命令：
+
+```powershell
+dotnet build 开发空间/Windows/Qingyue.Windows.slnx -c Release --no-restore -m:1
+```
+
 ## 2026-11-18｜Windows 0.15.0 构建 1（开发阶段）
 
 本轮完成应用图标主题收口：默认使用天空蓝，应用内可保存并切换天空蓝、樱花紫、

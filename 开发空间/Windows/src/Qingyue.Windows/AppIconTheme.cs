@@ -45,10 +45,11 @@ public static class AppIconTheme
     public static BitmapImage Load(AppIconThemeKind kind)
     {
         var option = Options.FirstOrDefault(item => item.Kind == kind) ?? Options[0];
+        var assemblyName = typeof(AppIconTheme).Assembly.GetName().Name ?? "Qingyue";
         var image = new BitmapImage();
         image.BeginInit();
         image.UriSource = new Uri(
-            $"pack://application:,,,/Qingyue;component/Assets/{option.FileName}",
+            $"pack://application:,,,/{assemblyName};component/Assets/{option.FileName}",
             UriKind.Absolute);
         image.CacheOption = BitmapCacheOption.OnLoad;
         image.EndInit();

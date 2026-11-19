@@ -8,9 +8,10 @@ macOS 当前为 **0.1.0 · Mac 构建 4**。下载：[Mac 构建 4 体验包](ht
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
-Windows 当前开发版为 **0.15.0 · 构建 1**，下载：[Windows 0.15.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.15.0)。
+Windows 当前开发版为 **0.16.0 · 构建 1**，下载：[Windows 0.16.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.16.0)。
 使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
 应用内置天空蓝、樱花紫、薄荷珊瑚和蜜桃紫四套动漫风格图标，可在“视图 → 阅读外观”中切换并保存在本机；
+0.16.0 默认使用 WPF 软件渲染，降低部分 Windows 显卡驱动路径造成的异常内存占用；
 新增 Markdown 层次参考线、列表内部标题/引用/表格排版、表格单元格导航与增删行列，以及截图粘贴、选图和拖图插入；
 文件继续保存标准 Markdown，图片保存在文档旁的 `.assets` 文件夹，预览、阅读和富文本复制保留层次。
 已支持本机批注与阅读简报、阅读外观、本地工作区、全局搜索、阅读清单、TXT/Markdown 格式化、
