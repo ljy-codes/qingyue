@@ -41,16 +41,26 @@ internal static class Program
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 IconThemeChecks.Run(Check, window, root);
-                var brandHeader = (FrameworkElement)window.FindName("BrandHeader");
+                var topChrome = (FrameworkElement)window.FindName("TopChrome");
+                var mainMenu = (FrameworkElement)window.FindName("MainMenu");
+                var brandHeader = (Border)window.FindName("BrandHeader");
                 var tabRow = (FrameworkElement)window.FindName("TabRow");
                 var editOnlyTools = (FrameworkElement)window.FindName("EditOnlyTools");
+                Check(ReferenceEquals(VisualTreeHelper.GetParent(mainMenu), topChrome) &&
+                    ReferenceEquals(VisualTreeHelper.GetParent(brandHeader), topChrome) &&
+                    Grid.GetRow(mainMenu) == Grid.GetRow(brandHeader),
+                    "顶部菜单与品牌区合并为同一行");
                 double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + editOnlyTools.ActualHeight;
                 Check(topChromeHeight <= 120,
                     $"顶部工具区压缩到正文优先高度（实际 {topChromeHeight:0} 像素）");
-                Check(brandHeader.Background is SolidColorBrush mainBrush &&
-                    mainBrush.Color != ((SolidColorBrush)window.FindResource("WindowBrush")).Color &&
-                    mainBrush.Color != ((SolidColorBrush)window.FindResource("EditorBrush")).Color,
-                    "窗口头部使用独立主体色，形成三级层次");
+                Check(brandHeader.Background is SolidColorBrush headerBrush &&
+                    headerBrush.Color == ((SolidColorBrush)window.FindResource("PanelBrush")).Color,
+                    "品牌区与顶部菜单统一使用深色主体");
+                Check(window.FindName("Sidebar") is Border sidebar &&
+                    sidebar.Background is SolidColorBrush sidebarBrush &&
+                    window.CurrentTab!.Editor.Background is SolidColorBrush editorBrush &&
+                    sidebarBrush.Color != editorBrush.Color,
+                    "侧栏与编辑区保持深浅层次");
                 Build2Checks.CheckEntryPoints(window, Check);
                 var first = window.CurrentTab!;
                 Check(!first.IsPreviewCreated, "普通打开标签不预先创建阅读控件");
@@ -116,13 +126,16 @@ internal static class Program
                 Check(!File.ReadAllText(first.File.Path!).Contains("未保存内容"), "重命名不写回脏正文");
                 Check(first.File.IsDirty && first.Editor.Text.Contains("未保存内容"), "重命名保留未保存编辑");
 
-                var markdown = window.NewDocument("# 阅读标题\n\n这是 **中文** 与 😀。\n\n## 第二章\n- 一项\n");
+                var markdown = window.NewDocument("# 阅读标题\n\n这是 **中文** 与 😀。\n\n## 第二章\n- 一项\n  - 子项\n");
                 window.ToggleReading();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 Check(markdown.IsReading, "进入原生阅读视图");
                 Check(markdown.Reading?.Headings.Count == 2, "阅读目录生成");
                 Check(markdown.Reading?.VisibleText.Contains("中文") == true, "阅读显示中文");
                 Check(markdown.Preview.IsReadOnly, "阅读页面不允许修改原文");
+                Check(markdown.Preview.Document.Blocks.OfType<System.Windows.Documents.List>()
+                    .Any(list => list.MarkerStyle == TextMarkerStyle.Disc),
+                    "Markdown预览显示圆点列表");
                 Check(window.FindName("ReadingToolbar") is FrameworkElement { Visibility: Visibility.Visible },
                     "阅读态显示轻量工具条");
                 Check(((FrameworkElement)window.FindName("FormatButton")).Visibility == Visibility.Collapsed &&
@@ -133,6 +146,15 @@ internal static class Program
                     "首次阅读排版保留正文边距");
                 window.ToggleReading();
                 Check(!markdown.IsReading && markdown.Editor.Text.Contains("**中文**"), "返回编辑保留原始 Markdown");
+                Check(window.FindName("MarkdownWritingToolbar") is FrameworkElement { Visibility: Visibility.Visible } &&
+                    window.FindName("MarkdownWritingHint") is TextBlock { Visibility: Visibility.Visible, Text: var hint } &&
+                    hint.Contains("空格", StringComparison.Ordinal),
+                    "Markdown编辑工具条显示列表快捷提示");
+                markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("- 一项", StringComparison.Ordinal) + 2;
+                Check(window.FindName("MarkdownWritingState") is TextBlock { Text: var state } &&
+                    state.Contains("无序列表", StringComparison.Ordinal) &&
+                    state.Contains("第 1 层", StringComparison.Ordinal),
+                    "Markdown编辑区显示当前列表层级");
                 markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("中文", StringComparison.Ordinal) + 2;
                 int expectedSourceAnchor = markdown.Positions.ToSource(markdown.Editor.CaretIndex);
                 window.ToggleReading();

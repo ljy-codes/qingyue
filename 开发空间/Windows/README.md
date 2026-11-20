@@ -17,8 +17,8 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 这些构建命令生成产物，不自动安装或签名。
 
 输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
-`交付产品/轻阅-0.17.0-Windows构建1-x64.zip` 和
-`交付产品/轻阅-0.17.0-Windows构建1-x64-setup.exe`。
+`交付产品/轻阅-0.18.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.18.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：

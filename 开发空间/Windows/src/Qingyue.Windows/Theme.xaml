@@ -3,8 +3,8 @@
   <SolidColorBrush x:Key="WindowBrush" Color="#191B1F"/>
   <SolidColorBrush x:Key="PanelBrush" Color="#23262B"/>
   <SolidColorBrush x:Key="MainBrush" Color="#24354A"/>
-  <SolidColorBrush x:Key="EditorBrush" Color="#2A2825"/>
-  <SolidColorBrush x:Key="ReadingBrush" Color="#2A2825"/>
+  <SolidColorBrush x:Key="EditorBrush" Color="#30343A"/>
+  <SolidColorBrush x:Key="ReadingBrush" Color="#30343A"/>
   <SolidColorBrush x:Key="ReadingPanelBrush" Color="#23262B"/>
   <SolidColorBrush x:Key="TextBrush" Color="#E8E2D8"/>
   <SolidColorBrush x:Key="MutedBrush" Color="#BEB8AE"/>

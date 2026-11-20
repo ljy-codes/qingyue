@@ -19,9 +19,14 @@
   <Grid Background="{DynamicResource WindowBrush}">
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
-    <Menu x:Name="MainMenu" Grid.Row="0">
+    <Grid x:Name="TopChrome" Grid.Row="0" Background="{DynamicResource PanelBrush}">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+    <Menu x:Name="MainMenu" Grid.Column="0" Background="{DynamicResource PanelBrush}">
       <MenuItem Header="文件(_F)">
         <MenuItem Header="新建" InputGestureText="Ctrl+N" Tag="new" Click="MenuAction"/>
         <MenuItem Header="打开…" InputGestureText="Ctrl+O" Tag="open" Click="MenuAction"/>
@@ -112,16 +117,16 @@
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>
-    <Border x:Name="BrandHeader" Grid.Row="1" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,5">
+    <Border x:Name="BrandHeader" Grid.Column="1" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,5">
       <Grid>
-        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
           <Button x:Name="SidebarToggle" Style="{StaticResource CompactButton}" Tag="sidebar" Click="MenuAction" Width="30" Padding="0" ToolTip="显示 / 隐藏侧栏 · Ctrl+B" AutomationProperties.Name="显示或隐藏侧栏">
             <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource TextBrush}" StrokeThickness="1.4" Data="M 1,1 L 15,1 15,15 1,15 Z M 6,1 L 6,15"/>
           </Button>
           <StackPanel Margin="8,0,0,0"><TextBlock Text="轻阅" FontSize="18" FontWeight="SemiBold"/></StackPanel>
         </StackPanel>
-        <StackPanel Grid.Column="1" Margin="20,0,0,0" Orientation="Horizontal" VerticalAlignment="Center">
+        <StackPanel Grid.Column="1" Margin="20,0,0,0" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
           <Button x:Name="OpenButton" Style="{StaticResource CompactButton}" Content="打开文件" Tag="open" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+O"/>
           <Button x:Name="SaveButton" Style="{StaticResource CompactButton}" Content="保存" Tag="save" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+S"/>
           <Button x:Name="ReadingButton" Style="{StaticResource CompactButton}" Content="阅读模式" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0" ToolTip="Ctrl+R"/>
@@ -129,7 +134,7 @@
         </StackPanel>
       </Grid>
     </Border>
-    <Border x:Name="ReadingToolbar" Grid.Row="1" Visibility="Collapsed"
+    <Border x:Name="ReadingToolbar" Grid.ColumnSpan="2" Panel.ZIndex="2" Visibility="Collapsed"
             Background="{DynamicResource ReadingPanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
             BorderThickness="0,0,0,1" Padding="12,5">
       <Grid>
@@ -166,7 +171,8 @@
         </StackPanel>
       </Grid>
     </Border>
-    <Border x:Name="TabRow" Grid.Row="2" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+    </Grid>
+    <Border x:Name="TabRow" Grid.Row="1" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
       <DockPanel>
         <Button DockPanel.Dock="Right" Style="{StaticResource CompactButton}" Content="+" Tag="new" Click="MenuAction" Margin="3" Padding="9,0" FontSize="18" ToolTip="新建 · Ctrl+N" AutomationProperties.Name="新建文档"/>
         <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
@@ -200,7 +206,7 @@
       </DockPanel>
     </Border>
     <!-- Preserve document logical focus and its selection drawing while typing a query. -->
-    <Border x:Name="SearchPanel" Grid.Row="3" FocusManager.IsFocusScope="True" Visibility="Collapsed" Padding="18,10" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+    <Border x:Name="SearchPanel" Grid.Row="2" FocusManager.IsFocusScope="True" Visibility="Collapsed" Padding="18,10" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
       <Border.CommandBindings>
         <CommandBinding Command="ApplicationCommands.Undo" CanExecute="SearchCommandCanExecute"/>
         <CommandBinding Command="ApplicationCommands.Redo" CanExecute="SearchCommandCanExecute"/>
@@ -232,7 +238,7 @@
         </Grid>
       </StackPanel>
     </Border>
-    <Grid Grid.Row="4">
+    <Grid Grid.Row="3">
       <Grid.ColumnDefinitions><ColumnDefinition x:Name="SidebarColumn" Width="218"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <Border x:Name="Sidebar" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0" Padding="14,18">
         <Grid>
@@ -394,26 +400,30 @@
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <Border x:Name="EditOnlyTools" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,4">
-          <WrapPanel VerticalAlignment="Center">
-            <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
-            <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,8,0"
-                    ToolTip="摘录选中文本 · Ctrl+Shift+A"/>
-            <Button x:Name="StructureButton" Style="{StaticResource CompactButton}" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
-            <Button x:Name="MarkdownButton" Style="{StaticResource CompactButton}" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
-            <Button x:Name="CopyReadingButton" Style="{StaticResource CompactButton}" Content="复制全文（含图片）" Tag="copyReading" Click="MenuAction" Margin="0,0,14,0" Visibility="Collapsed" ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
-            <Menu x:Name="CopyOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0" VerticalAlignment="Center">
-              <MenuItem Header="复制 / 导出 ▾">
-                <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
-                <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
-                <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
-                <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
-                <Separator/>
-                <MenuItem Header="导出 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
-              </MenuItem>
-            </Menu>
-            <Button x:Name="ReturnPositionButton" Style="{StaticResource CompactButton}" Content="返回位置" Tag="returnPosition" Click="MenuAction" Margin="0,0,8,0" IsEnabled="False" ToolTip="返回目录跳转前的阅读位置 · Alt+←"/>
-            <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center"/>
-          </WrapPanel>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
+              <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,8,0"
+                      ToolTip="摘录选中文本 · Ctrl+Shift+A"/>
+              <Button x:Name="StructureButton" Style="{StaticResource CompactButton}" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
+              <Button x:Name="MarkdownButton" Style="{StaticResource CompactButton}" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
+              <Button x:Name="CopyReadingButton" Style="{StaticResource CompactButton}" Content="复制全文（含图片）" Tag="copyReading" Click="MenuAction" Margin="0,0,14,0" Visibility="Collapsed" ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
+              <Menu x:Name="CopyOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0" VerticalAlignment="Center">
+                <MenuItem Header="复制 / 导出 ▾">
+                  <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
+                  <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
+                  <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
+                  <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
+                  <Separator/>
+                  <MenuItem Header="导出 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
+                </MenuItem>
+              </Menu>
+              <Button x:Name="ReturnPositionButton" Style="{StaticResource CompactButton}" Content="返回位置" Tag="returnPosition" Click="MenuAction" Margin="0,0,8,0" IsEnabled="False" ToolTip="返回目录跳转前的阅读位置 · Alt+←"/>
+            </WrapPanel>
+          </Grid>
         </Border>
         <StackPanel Grid.Row="1">
           <Border x:Name="MarkdownWritingToolbar" Visibility="Collapsed" Padding="10,5"
@@ -471,8 +481,15 @@
                   <MenuItem Header="在原文定位当前预览位置" Tag="editor" Click="MarkdownLocateClick"/>
                 </MenuItem>
               </Menu>
-              <TextBlock x:Name="MarkdownWritingState" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="11"
-                         Foreground="{DynamicResource MutedBrush}" AutomationProperties.Name="当前Markdown块状态"/>
+              <Border x:Name="MarkdownWritingStateBadge" Margin="10,0,0,0" Padding="8,3"
+                      Background="{DynamicResource SelectionBrush}" CornerRadius="9"
+                      VerticalAlignment="Center">
+                <TextBlock x:Name="MarkdownWritingState" FontSize="11"
+                           Foreground="{DynamicResource TextBrush}" AutomationProperties.Name="当前Markdown块状态"/>
+              </Border>
+              <TextBlock x:Name="MarkdownWritingHint" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="11"
+                         Foreground="{DynamicResource AccentTextBrush}" Text="- + 空格 → 圆点 · Tab / Shift+Tab 调整层级"
+                         AutomationProperties.Name="Markdown编辑提示"/>
             </WrapPanel>
           </Border>
           <Border x:Name="OperationPanel" Visibility="Collapsed" Padding="14,8" Background="{DynamicResource PanelBrush}">
@@ -511,7 +528,7 @@
         <ContentControl x:Name="DocumentHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
       </Grid>
     </Grid>
-    <Border Grid.Row="5" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,7">
+    <Border Grid.Row="4" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,7">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center">
