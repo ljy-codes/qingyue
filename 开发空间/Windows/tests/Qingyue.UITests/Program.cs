@@ -47,8 +47,13 @@ internal static class Program
                 double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + editOnlyTools.ActualHeight;
                 Check(topChromeHeight <= 120,
                     $"顶部工具区压缩到正文优先高度（实际 {topChromeHeight:0} 像素）");
+                Check(brandHeader.Background is SolidColorBrush mainBrush &&
+                    mainBrush.Color != ((SolidColorBrush)window.FindResource("WindowBrush")).Color &&
+                    mainBrush.Color != ((SolidColorBrush)window.FindResource("EditorBrush")).Color,
+                    "窗口头部使用独立主体色，形成三级层次");
                 Build2Checks.CheckEntryPoints(window, Check);
                 var first = window.CurrentTab!;
+                Check(!first.IsPreviewCreated, "普通打开标签不预先创建阅读控件");
                 first.Editor.Text = "文档一 😀\n独立撤销";
                 first.Editor.CaretIndex = first.Editor.Text.Length;
                 first.Editor.AppendText("追加");
@@ -67,14 +72,17 @@ internal static class Program
                 Check(ReferenceEquals(window.CurrentTab?.Editor, first.Editor), "切回标签保留原编辑器");
 
                 var progressTab = window.NewDocument(string.Join("\n", Enumerable.Range(1, 100).Select(i => "第 " + i + " 行")));
+                Check(!progressTab.IsPreviewCreated, "未进入阅读模式的标签保持轻量");
                 window.ToggleReading();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Check(progressTab.IsPreviewCreated, "进入阅读模式时才创建阅读控件");
                 Check(((TextBlock)window.FindName("ReadingStatus")).Text.Contains("%"), "阅读态显示百分比进度");
                 window.ToggleBookmark();
                 Check(window.CurrentBookmarks(progressTab).Count == 1, "当前阅读位置可以添加书签");
                 window.ToggleBookmark();
                 Check(window.CurrentBookmarks(progressTab).Count == 0, "同一位置再次操作可以删除书签");
                 window.ToggleReading();
+                Check(progressTab.Rendered is null, "退出阅读模式立即释放渲染文档");
                 var sidebarTabs = (TabControl)window.FindName("SidebarTabs");
                 Check(sidebarTabs.Items.Cast<TabItem>().Any(item => Equals(item.Header, "书签")),
                     "侧栏包含书签页");

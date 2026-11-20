@@ -21,6 +21,7 @@ public partial class MainWindow
             tab.SourceAnchor = offset;
             tab.IsReading = false;
             tab.Editor.IsReadOnly = false;
+            tab.ReleaseReadingResources();
             DocumentHost.Content = tab.EditorSurface;
             tab.Editor.CaretIndex = EditorOffset(tab, offset);
             tab.Editor.Focus();
@@ -90,14 +91,15 @@ public partial class MainWindow
         tab.IsReading = true;
         if (rendered is not null)
         {
+            var preview = tab.EnsurePreview(settings.FontSize + 1);
             tab.Editor.IsReadOnly = false;
-            tab.Preview.Document = rendered.Document;
+            preview.Document = rendered.Document;
             UpdateReadingWidth(tab);
             var pointer = rendered.PointerAt(model.SourceToDisplay(tab.SourceAnchor));
-            tab.Preview.Selection.Select(pointer, pointer);
+            preview.Selection.Select(pointer, pointer);
             if (CurrentTab == tab)
             {
-                DocumentHost.Content = tab.Preview;
+                DocumentHost.Content = preview;
                 if (focus) FocusLoadedReading(tab);
                 tab.DispatcherBringIntoView(pointer);
             }
@@ -105,6 +107,7 @@ public partial class MainWindow
         else
         {
             tab.Rendered = null;
+            tab.ReleasePreviewDocument();
             tab.Editor.IsReadOnly = true;
             tab.Editor.CaretIndex = EditorOffset(tab, tab.SourceAnchor);
             ScrollToCaret(tab);

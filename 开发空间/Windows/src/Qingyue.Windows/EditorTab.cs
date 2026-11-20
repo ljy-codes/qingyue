@@ -17,7 +17,9 @@ public sealed class EditorTab : INotifyPropertyChanged
     public DocumentFile File { get; }
     public TextBox Editor { get; }
     internal MarkdownEditor MarkdownWriter { get; }
-    public RichTextBox Preview { get; }
+    private RichTextBox? preview;
+    public RichTextBox Preview => EnsurePreview();
+    public bool IsPreviewCreated => preview is not null;
     public Grid EditorSurface { get; }
     public TextBlock LineNumbers { get; }
     public TextPositionIndex Positions { get; private set; }
@@ -41,6 +43,7 @@ public sealed class EditorTab : INotifyPropertyChanged
     public bool IsEmpty => File.Path is null && File.Text.Length == 0
         && (File.SuggestedName is null || automaticallyNamed && File.SuggestedName == automaticName);
     public event PropertyChangedEventHandler? PropertyChanged;
+    internal event Action<RichTextBox>? PreviewCreated;
     private bool updatingLines;
     private readonly Canvas changeMargin = new() { Width = 5, HorizontalAlignment = HorizontalAlignment.Right };
     private LineChangeTracker changeTracker;
@@ -72,18 +75,6 @@ public sealed class EditorTab : INotifyPropertyChanged
         Editor.IsUndoEnabled = true;
         MarkdownWriter = new MarkdownEditor(this);
         System.Windows.Automation.AutomationProperties.SetName(Editor, "文档编辑器");
-        Preview = new RichTextBox
-        {
-            IsReadOnly = true, IsDocumentEnabled = true, BorderThickness = new Thickness(0),
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            IsUndoEnabled = false, Padding = new Thickness(0),
-            IsInactiveSelectionHighlightEnabled = true
-        };
-        System.Windows.Automation.AutomationProperties.SetName(Preview, "只读阅读视图");
-        Preview.SetResourceReference(Control.BackgroundProperty, "EditorBrush");
-        Preview.SetResourceReference(Control.ForegroundProperty, "TextBrush");
-        Preview.SetResourceReference(RichTextBox.SelectionBrushProperty, "AccentBrush");
         Editor.SetResourceReference(TextBox.SelectionBrushProperty, "AccentBrush");
         EditorSurface = new Grid();
         EditorSurface.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -146,6 +137,51 @@ public sealed class EditorTab : INotifyPropertyChanged
                 if (ReferenceEquals(changeCancellation, cancellation)) changeCancellation = null;
             }
         };
+    }
+
+    internal RichTextBox EnsurePreview(double fontSize = 16)
+    {
+        if (preview is not null)
+        {
+            preview.FontSize = fontSize;
+            return preview;
+        }
+
+        preview = new RichTextBox
+        {
+            IsReadOnly = true, IsDocumentEnabled = true, BorderThickness = new Thickness(0),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            IsUndoEnabled = false, Padding = new Thickness(0),
+            IsInactiveSelectionHighlightEnabled = true,
+            FontSize = fontSize
+        };
+        System.Windows.Automation.AutomationProperties.SetName(preview, "只读阅读视图");
+        preview.SetResourceReference(Control.BackgroundProperty, "EditorBrush");
+        preview.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+        preview.SetResourceReference(RichTextBox.SelectionBrushProperty, "AccentBrush");
+        PreviewCreated?.Invoke(preview);
+        return preview;
+    }
+
+    internal void SetPreviewFontSize(double fontSize)
+    {
+        if (preview is not null) preview.FontSize = fontSize;
+    }
+
+    internal void ReleaseReadingResources()
+    {
+        Reading = null;
+        Rendered = null;
+        RenderedText = null;
+        RenderedPath = null;
+        RenderedKind = Kind;
+        ReleasePreviewDocument();
+    }
+
+    internal void ReleasePreviewDocument()
+    {
+        if (preview is not null) preview.Document = new FlowDocument();
     }
 
     public void NotifyChanged()

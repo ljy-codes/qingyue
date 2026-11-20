@@ -112,7 +112,7 @@
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>
-    <Border x:Name="BrandHeader" Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,5">
+    <Border x:Name="BrandHeader" Grid.Row="1" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="12,5">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
@@ -166,7 +166,7 @@
         </StackPanel>
       </Grid>
     </Border>
-    <Border x:Name="TabRow" Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+    <Border x:Name="TabRow" Grid.Row="2" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
       <DockPanel>
         <Button DockPanel.Dock="Right" Style="{StaticResource CompactButton}" Content="+" Tag="new" Click="MenuAction" Margin="3" Padding="9,0" FontSize="18" ToolTip="新建 · Ctrl+N" AutomationProperties.Name="新建文档"/>
         <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" Focusable="False">
@@ -393,7 +393,7 @@
       </Border>
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <Border x:Name="EditOnlyTools" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,4">
+        <Border x:Name="EditOnlyTools" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,4">
           <WrapPanel VerticalAlignment="Center">
             <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
             <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,8,0"
@@ -417,7 +417,7 @@
         </Border>
         <StackPanel Grid.Row="1">
           <Border x:Name="MarkdownWritingToolbar" Visibility="Collapsed" Padding="10,5"
-                  Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                  Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
             <WrapPanel VerticalAlignment="Center">
               <Menu VerticalAlignment="Center" Margin="0,0,4,0">
                 <MenuItem Header="标题 ▾">

@@ -38,6 +38,14 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
     public void Refresh()
     {
         layoutRetries = 0;
+        if (!tab.Editor.IsLoaded || !tab.Editor.IsVisible)
+        {
+            active = false;
+            cache.Clear();
+            SetHighlighted(false);
+            InvalidateVisual();
+            return;
+        }
         active = !composing && cache.Update(tab.Editor.Text, tab.Kind);
         // Never hide native text until a complete, affordable viewport has been prepared.
         SetHighlighted(false);
@@ -362,6 +370,14 @@ public sealed class DocumentSyntaxCache
     private TextKind kind;
     private bool supported;
     public IReadOnlyList<SyntaxColorToken> Tokens { get; private set; } = Array.Empty<SyntaxColorToken>();
+
+    public void Clear()
+    {
+        source = null;
+        kind = default;
+        supported = false;
+        Tokens = Array.Empty<SyntaxColorToken>();
+    }
 
     public bool Update(string text, TextKind language)
     {

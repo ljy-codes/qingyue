@@ -110,7 +110,10 @@ public partial class MainWindow : Window
                     int selectionEnd = EditorOffset(tab, (int)Math.Min(tab.File.Text.Length,
                         (long)restored.Entry.SelectionStart + restored.Entry.SelectionLength));
                     tab.Editor.Select(selectionStart, Math.Max(0, selectionEnd - selectionStart));
-                    if (restored.Entry.IsReading)
+                    // Restore the expensive reading tree only for the tab that
+                    // will actually be shown. Other restored tabs stay as source
+                    // editors until the user explicitly enters reading mode.
+                    if (restored.Entry.IsReading && restored.File.Id == result.ActiveId)
                     {
                         await EnterReadingAsync(tab, restored.Entry.SourceAnchor, focus: false);
                         RestoreReadingViewport(tab, restored.Entry);
@@ -150,8 +153,7 @@ public partial class MainWindow : Window
         {
             string oldText = tab.File.Text;
             tab.File.Text = Normalize(tab.Editor.Text);
-            tab.Reading = null;
-            tab.Rendered = null;
+            tab.ReleaseReadingResources();
             if (!string.Equals(oldText, tab.File.Text, StringComparison.Ordinal))
                 RepairAnnotationsAfterTextChange(tab, oldText, tab.File.Text);
             RefreshAutomaticKind(tab);
@@ -176,15 +178,18 @@ public partial class MainWindow : Window
         {
             if (e.VerticalChange != 0 && tab.Editor.IsMouseOver) QueueMarkdownLocate(tab, true, viewport: true);
         }));
-        tab.Preview.SelectionChanged += (_, _) =>
+        tab.PreviewCreated += preview =>
         {
-            if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
+            preview.SelectionChanged += (_, _) =>
+            {
+                if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
+            };
+            preview.Loaded += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
+            preview.SizeChanged += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
+            AttachReadingNavigation(tab, preview);
+            ReadingClipboard.Attach(preview, () => tab.Kind == TextKind.Markdown && tab.IsReading,
+                reason => StatusText.Text = "复制已降级：" + reason);
         };
-        tab.Preview.Loaded += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
-        tab.Preview.SizeChanged += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
-        AttachReadingNavigation(tab);
-        ReadingClipboard.Attach(tab.Preview, () => tab.Kind == TextKind.Markdown && tab.IsReading,
-            reason => StatusText.Text = "复制已降级：" + reason);
         tabs.Add(tab);
         SelectTab(tab);
         return tab;
@@ -216,7 +221,7 @@ public partial class MainWindow : Window
         tab.Editor.HorizontalScrollBarVisibility = settings.Wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
         tab.LineNumbers.FontSize = settings.FontSize;
         ((Border)tab.EditorSurface.Children[0]).Visibility = settings.LineNumbers ? Visibility.Visible : Visibility.Collapsed;
-        tab.Preview.FontSize = settings.FontSize + 1;
+        tab.SetPreviewFontSize(settings.FontSize + 1);
         RefreshSyntax(tab);
     }
 
@@ -375,7 +380,10 @@ public partial class MainWindow : Window
                     readingList.Upsert(fullPath, savedReading?.ProgressPercent ?? 0, savedAnchor);
                     readingListDirty = true;
                     RefreshReadingList();
-                    if (opened.Kind == TextKind.Markdown)
+                    // Only the final opened document can be visible when a batch
+                    // open completes. Building every Markdown reading document
+                    // here keeps hidden tabs alive with duplicate FlowDocuments.
+                    if (opened.Kind == TextKind.Markdown && index == requested.Length - 1)
                     {
                         await EnterReadingAsync(opened, savedAnchor, existingOperation: operation);
                         if (CurrentTab == opened) RefreshCurrent();
@@ -518,10 +526,11 @@ public partial class MainWindow : Window
         var kind = TextServices.DetectKind(tab.File.Path ?? tab.File.SuggestedName, tab.File.Text);
         if (kind == tab.Kind) return false;
         int anchor = CurrentSourceAnchor(tab);
+        bool wasReading = tab.IsReading;
         tab.Kind = kind;
-        tab.Reading = null;
-        tab.Rendered = null;
-        if (tab.IsReading) EnterReading(tab, anchor);
+        tab.IsReading = false;
+        tab.ReleaseReadingResources();
+        if (wasReading) EnterReading(tab, anchor);
         return true;
     }
 
@@ -532,6 +541,7 @@ public partial class MainWindow : Window
             var choice = Modal(() => Dialogs.CloseChoice(this, tab.File.Title, false));
             if (choice == "cancel" || choice == "save" && !SaveDocument(tab)) return false;
         }
+        tab.ReleaseReadingResources();
         tabs.Remove(tab);
         if (tabs.Count == 0 && ensureDocument) NewDocument();
         RefreshCurrent();

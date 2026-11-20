@@ -37,7 +37,6 @@ public partial class MainWindow
         Panel.SetZIndex(layer, 1);
         tab.EditorSurface.Children.Add(layer);
         syntaxLayers.Add(tab, layer);
-        layer.Refresh();
     }
 
     private void RefreshSyntax(EditorTab tab)

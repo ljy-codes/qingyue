@@ -212,6 +212,7 @@ public partial class MainWindow
         var file = DocumentFile.Open(tab.File.Path, codec);
         int index = tabs.IndexOf(tab);
         var replacement = AddDocument(file);
+        tab.ReleaseReadingResources();
         replacement.RecoverDraft = tab.RecoverDraft;
         tabs.Remove(tab);
         tabs.Move(tabs.IndexOf(replacement), index);
@@ -225,7 +226,8 @@ public partial class MainWindow
         bool wasReading = tab.IsReading;
         tab.AutomaticKind = false;
         tab.Kind = kind;
-        tab.Reading = null;
+        tab.ReleaseReadingResources();
+        tab.IsReading = false;
         if (wasReading)
         {
             if (kind != TextKind.Markdown && tab.File.Text.Length <= 200_000 &&

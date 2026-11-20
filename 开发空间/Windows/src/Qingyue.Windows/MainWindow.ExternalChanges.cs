@@ -347,7 +347,8 @@ public partial class MainWindow
             readingEnd = tab.Reading.DisplayToSource(readingDisplayEnd);
         }
         double vertical = tab.Editor.VerticalOffset, horizontal = tab.Editor.HorizontalOffset;
-        double readingVertical = tab.Preview.VerticalOffset, readingHorizontal = tab.Preview.HorizontalOffset;
+        double readingVertical = reading && tab.IsPreviewCreated ? tab.Preview.VerticalOffset : 0;
+        double readingHorizontal = reading && tab.IsPreviewCreated ? tab.Preview.HorizontalOffset : 0;
         var markdown = markdownTab == tab && !reading ? markdownPreview : null;
         double markdownVertical = markdown?.VerticalOffset ?? 0;
         int markdownStart = markdown?.Document.ContentStart.GetOffsetToPosition(markdown.Selection.Start) ?? 0;
@@ -369,8 +370,7 @@ public partial class MainWindow
         // The existing TextChanged path invalidates models and refreshes automatic
         // kind. Suppress only its reading rebuild, then rebuild exactly once below.
         tab.IsReading = false;
-        tab.Reading = null;
-        tab.Rendered = null;
+        tab.ReleaseReadingResources();
         bool undoEnabled = tab.Editor.IsUndoEnabled;
         tab.Editor.IsUndoEnabled = false;
         try { tab.Editor.Text = tab.File.Text; }

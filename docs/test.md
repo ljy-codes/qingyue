@@ -1,5 +1,36 @@
 # Windows 验收记录
 
+## 2026-11-20｜Windows 0.17.0 构建 1（版本整理）
+
+本轮将当前 Windows 开发版统一升级为产品 `0.17.0`、文件版本 `0.17.0.1`，
+并保留前一轮已完成的延迟阅读控件、空置标签释放和主体色层调整。
+
+### 本轮核验
+
+| 检查 | 结果 |
+| --- | --- |
+| Windows 生产项目构建 | 0 警告、0 错误 |
+| 自包含发布 | 265 个载荷文件，139,737,088 字节；使用本机缓存的 .NET 10.0.11 win-x64 运行时 |
+| 安装包 | 产品 `0.17.0`、文件版本 `0.17.0.1`、Windows 构建 `1`；未签名 |
+| `Qingyue.exe` 文件版本 | `0.17.0.1` |
+| 产品版本 | `0.17.0+windows-build.1` |
+| 完整功能测试 | 本轮未重复执行，沿用前一轮代码验收记录 |
+
+执行命令：
+
+```powershell
+dotnet build 开发空间/Windows/src/Qingyue.Windows/Qingyue.Windows.csproj --no-restore -v:minimal
+pwsh -NoProfile -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
+```
+
+### 交付产物
+
+| 产物 | 大小 | SHA256 |
+| --- | ---: | --- |
+| `交付产品/轻阅-0.17.0-Windows构建1-x64.zip` | 62,778,712 字节 | `E9EC009ADBDBB530CBB06649B13183DF53E268A700EDA9C373518E60F805482B` |
+| `交付产品/轻阅-0.17.0-Windows构建1-x64-setup.exe` | 44,119,721 字节 | `49A4104E96B46414B60B88011E3B1933006A7B21849095EF31111E9DADF4BCF0` |
+| `交付产品/轻阅-Windows-x64/Qingyue.exe` | 308,736 字节 | `2615EB645B2CB8B9E944D5B2917A529FCCD2BA423464E69C50E892DFE98C629F` |
+
 ## 2026-11-19｜Windows 0.16.0 构建 1（低内存优化发布）
 
 本轮将低内存修复整理为下一版正式开发包。WPF 在启动最早阶段使用软件渲染，

@@ -88,9 +88,9 @@ public partial class MainWindow
         };
     }
 
-    private void AttachReadingNavigation(EditorTab tab)
+    private void AttachReadingNavigation(EditorTab tab, RichTextBox preview)
     {
-        tab.Preview.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
+        preview.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, e) =>
         {
             if (!tab.IsReading || e.VerticalChange == 0 || CurrentTab != tab) return;
             CaptureReadingViewport(tab);
