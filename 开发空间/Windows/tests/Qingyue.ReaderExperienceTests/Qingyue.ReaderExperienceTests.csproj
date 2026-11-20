@@ -5,6 +5,8 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../src/Qingyue.Windows/MarkdownImageCache.cs" Link="Production/MarkdownImageCache.cs" />
+    <Compile Include="../../src/Qingyue.Windows/MarkdownImageScheduler.cs" Link="Production/MarkdownImageScheduler.cs" />
     <Compile Include="../../src/Qingyue.Windows/ReadingRenderer*.cs" Link="Production/%(Filename)%(Extension)" />
     <Compile Include="../../src/Qingyue.Windows/MarkdownPreview.cs" Link="Production/MarkdownPreview.cs" />
     <Compile Include="../../src/Qingyue.Windows/RichDocumentMap.cs" Link="Production/RichDocumentMap.cs" />

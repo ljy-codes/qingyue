@@ -34,6 +34,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("符号链接与父目录重解析点拒绝写入", () => Run(ReparseSafety)),
     ("保存保留目标受保护 ACL", () => Run(AclPreservation)),
     ("不成对代理字符保存拒绝并保留编辑", () => Run(InvalidSurrogates)),
+    ("本地工作区扫描忽略规则与过滤", WorkspaceScanning),
+    ("全局搜索上下文与替换预览", GlobalSearching),
+    ("阅读清单持久化与状态恢复", ReadingListPersistence),
 };
 int failures = 0;
 foreach (var (name, run) in tests)
@@ -237,6 +240,85 @@ static void InvalidNames()
     var valid = new DocumentFile();
     valid.Rename("你好.md");
     Check(valid.SuggestedName == "你好.md" && valid.Title == "你好.md" && valid.Path is null, "新文档只应设置建议名");
+}
+
+static async Task WorkspaceScanning()
+{
+    using var tmp = new TempDirectory();
+    Directory.CreateDirectory(tmp.File("src/nested"));
+    Directory.CreateDirectory(tmp.File("bin"));
+    Directory.CreateDirectory(tmp.File("obj"));
+    Directory.CreateDirectory(tmp.File(".git"));
+    File.WriteAllText(tmp.File("README.md"), "needle");
+    File.WriteAllText(tmp.File("src/nested/code.cs"), "needle");
+    File.WriteAllText(tmp.File("src/image.bin"), "\0binary");
+    File.WriteAllText(tmp.File("bin/ignored.txt"), "needle");
+    File.WriteAllText(tmp.File("obj/ignored.cs"), "needle");
+    File.WriteAllText(tmp.File(".git/config"), "needle");
+
+    var scanner = new LocalWorkspaceScanner();
+    var result = await scanner.ScanAsync(tmp.Root, new WorkspaceScanOptions(
+        FileFilter: WorkspaceFileFilter.Code));
+
+    Check(result.Entries.Any(entry => entry.RelativePath == "src/nested/code.cs"), "代码文件未扫描");
+    Check(!result.Entries.Any(entry => entry.RelativePath.Contains("bin", StringComparison.OrdinalIgnoreCase)), "bin 未忽略");
+    Check(!result.Entries.Any(entry => entry.RelativePath.Contains("obj", StringComparison.OrdinalIgnoreCase)), "obj 未忽略");
+    Check(!result.Entries.Any(entry => entry.RelativePath.Contains(".git", StringComparison.OrdinalIgnoreCase)), ".git 未忽略");
+    Check(!result.Entries.Any(entry => entry.RelativePath == "README.md"), "类型过滤未生效");
+    var nameFiltered = await scanner.ScanAsync(tmp.Root, new WorkspaceScanOptions(FileNamePattern: "*.md"));
+    Check(nameFiltered.Entries.Any(entry => entry.RelativePath == "README.md") &&
+        !nameFiltered.Entries.Any(entry => entry.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)),
+        "文件名过滤未生效");
+}
+
+static async Task GlobalSearching()
+{
+    using var tmp = new TempDirectory();
+    File.WriteAllText(tmp.File("one.md"), "第一行\nneedle alpha\n第三行\n");
+    File.WriteAllText(tmp.File("two.txt"), "needle beta\nneedle gamma\n");
+    Directory.CreateDirectory(tmp.File("bin"));
+    File.WriteAllText(tmp.File("bin/ignored.txt"), "needle ignored");
+
+    var engine = new GlobalSearchEngine();
+    var result = await engine.SearchAsync(tmp.Root, "needle", new GlobalSearchOptions(
+        FileNamePattern: "*.*", Search: new SearchOptions()));
+    Check(result.Matches.Count == 3, "跨文件搜索匹配数量不正确");
+    var match = result.Matches.Single(item => item.Path.EndsWith("one.md", StringComparison.OrdinalIgnoreCase));
+    Check(match.LineNumber == 2 && match.LineText.Contains("needle alpha") &&
+        match.BeforeContext.Contains("第一行") && match.AfterContext.Contains("第三行"),
+        "搜索上下文或行号不正确");
+
+    var regex = await engine.SearchAsync(tmp.Root, "needle (?<word>\\w+)",
+        new GlobalSearchOptions(Search: new SearchOptions(Regex: true), Replacement: "$1"));
+    Check(regex.Matches.Count == 3 && regex.Matches[0].Replacement == "alpha", "正则捕获组预览不正确");
+    Check(regex.Files.All(file => file.ReplacementText is not null &&
+        !file.ReplacementText.Contains("needle", StringComparison.Ordinal)),
+        "替换预览未生成");
+}
+
+static async Task ReadingListPersistence()
+{
+    using var tmp = new TempDirectory();
+    var path = tmp.File("article.md");
+    var store = new ReadingListStore(tmp.Root);
+    store.Upsert(path, 42, 128, isRead: false);
+    store.SetPinned(path, true);
+    var saved = await store.SaveAsync();
+    Check(saved.Errors.Count == 0, string.Join("\n", saved.Errors));
+
+    var restored = new ReadingListStore(tmp.Root);
+    await restored.LoadAsync();
+    var item = restored.Find(path);
+    Check(item is not null && item.IsPinned && !item.IsRead &&
+        item.ProgressPercent == 42 && item.SourceAnchor == 128, "阅读清单状态未恢复");
+    restored.MarkRead(path, true);
+    Check(restored.Find(path)!.IsRead, "已读状态未更新");
+    File.WriteAllText(tmp.File("ReadingList.json"), "{bad");
+    var damaged = new ReadingListStore(tmp.Root);
+    await damaged.LoadAsync();
+    Check(damaged.Items.Count == 0 && damaged.LastWarning is not null &&
+        Directory.GetFiles(tmp.Root, "ReadingList.json.corrupt-*").Length == 1,
+        "损坏阅读清单未隔离");
 }
 static void SnapshotRoundTrip()
 {

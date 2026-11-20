@@ -53,16 +53,17 @@ internal static partial class Program
         var listParagraph = paragraphs.Single(p => p.Tag is ReadingBlock { Kind: ReadingBlockKind.ListItem });
         var listMargin = listParagraph.Margin;
         var caption = runs.Single(r => r.Text == "[图片：测试图注]");
-        foreach (double fontSize in new[] { 20d, 12, 32, 16 })
+        // Reading appearance accepts up to 30 pt; 32 pt must exercise that cap.
+        foreach (var (requestedSize, fontSize) in new[] { (20d, 20d), (12d, 12d), (32d, 30d), (16d, 16d) })
         {
-            Present(preview, fontSize, 680);
+            Present(preview, requestedSize, 680);
             foreach (var heading in paragraphs.Where(p => p.Tag is ReadingBlock { Kind: ReadingBlockKind.Heading }))
             {
                 int level = ((ReadingBlock)heading.Tag).Level;
                 double factor = level switch { 1 => 2, 2 => 1.6, 3 => 1.35, 4 => 1.2, 5 => 1.1, _ => 1 };
                 Check(Math.Abs(heading.FontSize - fontSize * factor) < .001,
                     $"字号 {fontSize} 时 H{level} 仍为 {heading.FontSize}，应为 {fontSize * factor}");
-                Check(Math.Abs(heading.LineHeight - heading.FontSize * 1.4) < .001, "标题行高未跟随字号");
+                Check(Math.Abs(heading.LineHeight - heading.FontSize * 1.75) < .001, "标题行高未跟随当前阅读外观的默认行距");
             }
             var code = paragraphs.First(p => p.Tag is ReadingBlock { Kind: ReadingBlockKind.Code });
             Check(Math.Abs(code.FontSize - fontSize * .9) < .001 &&

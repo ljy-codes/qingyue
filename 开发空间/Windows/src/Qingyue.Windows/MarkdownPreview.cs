@@ -20,27 +20,52 @@ namespace Qingyue.Windows;
 /// </summary>
 public sealed class MarkdownPreview : RichTextBox
 {
+    private const int SynchronousPreviewCharacterLimit = 32_000;
     private double readingWidth;
+    private ReadingPresentation presentation;
     private readonly string? sourcePath;
     private readonly bool includeDiagramSource;
     private string? renderedText;
 
     public MarkdownPreview(string text, double fontSize, double readingWidth, string? sourcePath = null,
         bool includeDiagramSource = false)
-        : this(fontSize, readingWidth, sourcePath, includeDiagramSource)
+        : this(new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13),
+            readingWidth, sourcePath, includeDiagramSource)
     {
         Update(text);
     }
 
-    private MarkdownPreview(double fontSize, double readingWidth, string? sourcePath, bool includeDiagramSource)
+    public MarkdownPreview(string text, ReadingPresentation presentation, double readingWidth,
+        string? sourcePath = null, bool includeDiagramSource = false)
+        : this(presentation, readingWidth, sourcePath, includeDiagramSource)
     {
+        Update(text);
+    }
+
+    /// <summary>
+    /// Small text-only Markdown is cheap enough to build before the split pane is
+    /// shown. Documents with images or more text stay on the cancellable async path
+    /// so opening a large file never blocks the dispatcher.
+    /// </summary>
+    internal static bool CanBuildSynchronously(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return text.Length <= SynchronousPreviewCharacterLimit &&
+            MarkdownImages.Extract(text).References.Count == 0;
+    }
+
+    private MarkdownPreview(ReadingPresentation value, double readingWidth, string? sourcePath,
+        bool includeDiagramSource)
+    {
+        presentation = value.Normalize();
+        double fontSize = presentation.FontSize;
         if (!double.IsFinite(fontSize) || fontSize <= 0) throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0) throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
         this.sourcePath = sourcePath;
         this.includeDiagramSource = includeDiagramSource;
         FontSize = fontSize;
-        FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI");
+        FontFamily = new FontFamily(presentation.FontFamily);
         IsReadOnly = true;
         IsUndoEnabled = false;
         IsDocumentEnabled = false;
@@ -74,14 +99,19 @@ public sealed class MarkdownPreview : RichTextBox
     /// rebuilding text, images or selection. Later Update(text) uses these settings.
     /// </summary>
     public void UpdatePresentation(double fontSize, double readingWidth)
+        => UpdatePresentation(new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    public void UpdatePresentation(ReadingPresentation value, double readingWidth)
     {
         VerifyAccess();
-        if (!double.IsFinite(fontSize) || fontSize <= 0)
-            throw new ArgumentOutOfRangeException(nameof(fontSize));
+        if (!double.IsFinite(value.FontSize) || value.FontSize <= 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(readingWidth));
         this.readingWidth = readingWidth;
-        RenderedReading.ApplyPresentation(this, fontSize, readingWidth);
+        presentation = value.Normalize();
+        RenderedReading.ApplyPresentation(this, presentation, readingWidth);
     }
 
     // Keep failure handling at the document-building boundary; the delegate also lets the
@@ -102,7 +132,7 @@ public sealed class MarkdownPreview : RichTextBox
             string safeText = MarkdownImages.Extract(text).FallbackText(text);
             document = new FlowDocument(new Paragraph(new Run(safeText)) { Margin = new Thickness(0) })
             {
-                FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
+                FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
                 ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left
             };
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
@@ -124,8 +154,13 @@ public sealed class MarkdownPreview : RichTextBox
 
     internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
         string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
+        => await BuildDocumentAsync(model, text, sourcePath,
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth, token);
+
+    internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
+        string? sourcePath, ReadingPresentation presentation, double readingWidth, CancellationToken token)
     {
-        var builder = new MarkdownPreview(fontSize, readingWidth, sourcePath, includeDiagramSource: true);
+        var builder = new MarkdownPreview(presentation, readingWidth, sourcePath, includeDiagramSource: true);
         // No WPF object escapes to the worker. Only the image projection and pure
         // ReadingModel parsing run there; the original model is supplied by the host.
         await Dispatcher.Yield(DispatcherPriority.Background);
@@ -174,7 +209,7 @@ public sealed class MarkdownPreview : RichTextBox
     {
         var document = new FlowDocument
         {
-            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * 1.75,
+            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
             ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left,
             PagePadding = new Thickness(36, 28, 36, 60)
         };
@@ -187,7 +222,7 @@ public sealed class MarkdownPreview : RichTextBox
         var (images, model, sourceBlocks) = prepared;
         string projected = images.Text;
         var diagramBudget = new MermaidBlock.Budget();
-        DocumentList? list = null;
+        var lists = new List<DocumentList>();
         int displayStart = 0;
         for (int i = 0; i < model.Blocks.Count; i++)
         {
@@ -201,38 +236,13 @@ public sealed class MarkdownPreview : RichTextBox
                 original.Kind == block.Kind && original.SourceLength == block.SourceLength)
                 block = original;
             displayStart = block.DisplayStart + block.Text.Length + 1;
-            var paragraph = new Paragraph(new Run(block.Text))
-            { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
-            document.Blocks.Add(paragraph);
-            RenderedReading.StyleBlock(paragraph, block, FontSize);
             string source = projected.Substring(parsedBlock.SourceStart, parsedBlock.SourceLength).TrimEnd('\r', '\n').ReplaceLineEndings("\n");
-            if (MermaidBlock.IsMermaid(block))
-            {
-                if (diagramBudget.TakeBlock(block))
-                {
-                    document.Blocks.InsertBefore(paragraph, new BlockUIContainer(
-                        MermaidBlock.Create(block, FontSize, sourceBelow: includeDiagramSource, budget: diagramBudget))
-                    {
-                        Tag = block,
-                        Margin = new Thickness(0, 8, 0, 18)
-                    });
-                    if (!includeDiagramSource) document.Blocks.Remove(paragraph);
-                }
-                else if (diagramBudget.LimitNotice() is { } notice)
-                    document.Blocks.InsertBefore(paragraph, notice);
-            }
-            else if (block.Kind == ReadingBlockKind.Table)
-            {
-                var table = TablePreview(parsedBlock.Text, source, images);
-                table.Tag = block;
-                document.Blocks.InsertBefore(paragraph, table);
-                document.Blocks.Remove(paragraph);
-            }
-            else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
-                DecorateInline(paragraph, InlineSource(source, block.Kind), parsedBlock.Text, images);
-
+            BlockCollection container = document.Blocks;
+            string? literalPrefix = null;
             if (block.Kind == ReadingBlockKind.ListItem)
             {
+                int depth = Math.Clamp(block.Level, 0, lists.Count);
+                if (lists.Count > depth + 1) lists.RemoveRange(depth + 1, lists.Count - depth - 1);
                 var marker = MarkdownSyntax.ListPattern.Match(source);
                 var body = source[marker.Length..];
                 bool task = TaskPattern.IsMatch(body);
@@ -243,30 +253,76 @@ public sealed class MarkdownPreview : RichTextBox
                 bool literalNumber = ordered && (digitEnd <= 0 ||
                     !int.TryParse(markerText[..digitEnd], NumberStyles.None, CultureInfo.InvariantCulture, out number) ||
                     number < 1);
-                // WPF StartIndex requires a positive int. Keep zero/unsupported markers
-                // literal even if the parser later accepts more than its current 9 digits.
-                if (literalNumber)
-                {
-                    var prefix = new Run(marker.Value.TrimStart());
-                    if (paragraph.Inlines.FirstInline is Inline first) paragraph.Inlines.InsertBefore(first, prefix);
-                    else paragraph.Inlines.Add(prefix);
-                }
-                var style = task || literalNumber ? TextMarkerStyle.None : ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc;
+                // WPF StartIndex requires a positive int. Preserve zero literally.
+                if (literalNumber) literalPrefix = marker.Value.TrimStart();
+                var style = task || literalNumber ? TextMarkerStyle.None : ordered ? TextMarkerStyle.Decimal :
+                    (depth % 3) switch { 0 => TextMarkerStyle.Disc, 1 => TextMarkerStyle.Circle, _ => TextMarkerStyle.Box };
+                DocumentList? list = depth < lists.Count ? lists[depth] : null;
                 if (list is null || list.MarkerStyle != style || literalNumber ||
                     ordered && number != (long)list.StartIndex + list.ListItems.Count)
                 {
                     list = new DocumentList
                     {
                         MarkerStyle = style, StartIndex = literalNumber ? 1 : number, MarkerOffset = 6,
-                        Margin = new Thickness(24 + block.Level * 12, 0, 0, 8), Padding = new Thickness(0)
+                        Margin = new Thickness(24, 0, 0, 8), Padding = new Thickness(0)
                     };
-                    document.Blocks.InsertBefore(paragraph, list);
+                    var parent = depth == 0 ? document.Blocks : lists[depth - 1].ListItems.LastListItem!.Blocks;
+                    parent.Add(list);
+                    if (depth < lists.Count) lists[depth] = list;
+                    else lists.Add(list);
                 }
-                document.Blocks.Remove(paragraph);
-                paragraph.Margin = new Thickness(0, 0, 0, 5);
-                list.ListItems.Add(new ListItem(paragraph));
+                var item = new ListItem();
+                list.ListItems.Add(item);
+                container = item.Blocks;
             }
-            else list = null;
+            else if (model.ListContainerLevels.TryGetValue(parsedBlock.SourceStart, out int containerLevel) &&
+                containerLevel < lists.Count)
+            {
+                if (lists.Count > containerLevel + 1)
+                    lists.RemoveRange(containerLevel + 1, lists.Count - containerLevel - 1);
+                container = lists[containerLevel].ListItems.LastListItem!.Blocks;
+            }
+            else lists.Clear();
+            var paragraph = new Paragraph(new Run(block.Text))
+            { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
+            container.Add(paragraph);
+            RenderedReading.StyleBlock(paragraph, block, presentation);
+            if (MermaidBlock.IsMermaid(block))
+            {
+                if (diagramBudget.TakeBlock(block))
+                {
+                    container.InsertBefore(paragraph, new BlockUIContainer(
+                        MermaidBlock.Create(block, FontSize, sourceBelow: includeDiagramSource, budget: diagramBudget))
+                    {
+                        Tag = block,
+                        Margin = new Thickness(0, 8, 0, 18)
+                    });
+                    if (!includeDiagramSource) container.Remove(paragraph);
+                }
+                else if (diagramBudget.LimitNotice() is { } notice)
+                    container.InsertBefore(paragraph, notice);
+            }
+            else if (block.Kind == ReadingBlockKind.Table)
+            {
+                var table = TablePreview(parsedBlock.Text, InlineSource(source, block), images, model.ReferenceDefinitions);
+                table.Tag = block;
+                container.InsertBefore(paragraph, table);
+                container.Remove(paragraph);
+            }
+            else if (block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Separator)
+                DecorateInline(paragraph, InlineSource(source, block), parsedBlock.Text, images,
+                    model.ReferenceDefinitions);
+
+            if (block.Kind == ReadingBlockKind.ListItem)
+            {
+                if (literalPrefix is not null)
+                {
+                    var prefix = new Run(literalPrefix);
+                    if (paragraph.Inlines.FirstInline is Inline first) paragraph.Inlines.InsertBefore(first, prefix);
+                    else paragraph.Inlines.Add(prefix);
+                }
+                paragraph.Margin = new Thickness(0, 0, 0, 5);
+            }
             yield return i;
         }
         if (document.Blocks.Count == 0) document.Blocks.Add(new Paragraph(new Run("")));
@@ -277,8 +333,13 @@ public sealed class MarkdownPreview : RichTextBox
     private static readonly Regex TaskPattern = new(@"^\[([ xX])\][ \t]+",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
-    private static string InlineSource(string source, ReadingBlockKind kind)
+    private static string InlineSource(string source, ReadingBlock block)
     {
+        var kind = block.Kind;
+        // Container indentation is syntax for non-code blocks. Remove it before
+        // detecting ATX/quote prefixes; fenced code never takes this path.
+        if (block.ListContinuation && kind != ReadingBlockKind.Code)
+            source = string.Join("\n", source.Split('\n').Select(line => line.TrimStart(' ', '\t')));
         if (kind == ReadingBlockKind.Heading)
         {
             var heading = MarkdownSyntax.HeadingPattern.Match(source.Split('\n')[0]);
@@ -303,10 +364,11 @@ public sealed class MarkdownPreview : RichTextBox
     private enum InlineFormat { None = 0, Code = 1, Strong = 2, Emphasis = 4, Strike = 8, Link = 16, Image = 32 }
     private readonly record struct Fragment(string Text, InlineFormat Format, string? ImageKey = null);
 
-    private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images)
+    private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images,
+        IReadOnlyDictionary<string, string> references)
     {
         var fragments = new List<Fragment>();
-        ParseInline(source, fragments);
+        ParseInline(source, fragments, references);
         // ReadingModel is authoritative. If its grammar changes or falls back to raw text,
         // keep its original Run rather than risk dropping, adding or moving visible text.
         if (!string.Equals(string.Concat(fragments.Select(f => f.Text)), expected, StringComparison.Ordinal)) return;
@@ -338,7 +400,9 @@ public sealed class MarkdownPreview : RichTextBox
         }
     }
 
-    private static void ParseInline(string text, List<Fragment> output, InlineFormat format = InlineFormat.None, int depth = 0)
+    private static void ParseInline(string text, List<Fragment> output,
+        IReadOnlyDictionary<string, string> references,
+        InlineFormat format = InlineFormat.None, int depth = 0)
     {
         if (depth >= 8) { output.Add(new(text, format)); return; }
         int cursor = 0;
@@ -347,14 +411,26 @@ public sealed class MarkdownPreview : RichTextBox
             if (match.Index > cursor) output.Add(new(text[cursor..match.Index], format));
             cursor = match.Index + match.Length;
             if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
+            else if (match.Groups[9].Success)
+                output.Add(new(match.Groups[9].Value, format | InlineFormat.Link));
+            else if (match.Groups[10].Success)
+            {
+                string referenceKey = match.Groups[11].Value;
+                if (referenceKey.Length == 0) referenceKey = match.Groups[10].Value;
+                if (references.ContainsKey(NormalizeReferenceKey(referenceKey)))
+                    ParseInline(match.Groups[10].Value, output, references, format | InlineFormat.Link, depth + 1);
+                else
+                    output.Add(new(match.Value, format));
+            }
             else if (match.Value.StartsWith("![", StringComparison.Ordinal))
             {
                 var title = new List<Fragment>();
-                ParseInline(match.Groups[1].Value, title, format | InlineFormat.Image, depth + 1);
+                ParseInline(match.Groups[1].Value, title, references, format | InlineFormat.Image, depth + 1);
                 output.Add(new("[图片：" + string.Concat(title.Select(f => f.Text)) + "]", format | InlineFormat.Image,
                     match.Groups[1].Value));
             }
-            else if (match.Value[0] == '[') ParseInline(match.Groups[2].Value, output, format | InlineFormat.Link, depth + 1);
+            else if (match.Value[0] == '[')
+                ParseInline(match.Groups[2].Value, output, references, format | InlineFormat.Link, depth + 1);
             else if (match.Value[0] == '`') output.Add(new(match.Groups[3].Value, format | InlineFormat.Code));
             else if (MarkdownSyntax.IsIntrawordUnderscore(text, match)) output.Add(new(match.Value, format));
             else
@@ -363,12 +439,30 @@ public sealed class MarkdownPreview : RichTextBox
                 {
                     if (!match.Groups[group].Success) continue;
                     var decoration = group <= 5 ? InlineFormat.Strong : group <= 7 ? InlineFormat.Emphasis : InlineFormat.Strike;
-                    ParseInline(match.Groups[group].Value, output, format | decoration, depth + 1);
+                    ParseInline(match.Groups[group].Value, output, references, format | decoration, depth + 1);
                     break;
                 }
             }
         }
         if (cursor < text.Length) output.Add(new(text[cursor..], format));
+    }
+
+    private static string NormalizeReferenceKey(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        bool whitespace = false;
+        foreach (char character in value.Trim())
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                whitespace = true;
+                continue;
+            }
+            if (whitespace && builder.Length > 0) builder.Append(' ');
+            whitespace = false;
+            builder.Append(char.ToLowerInvariant(character));
+        }
+        return builder.ToString();
     }
 
     private void AppendImage(Paragraph paragraph, MarkdownImageReference reference, MarkdownImages images)
@@ -408,7 +502,8 @@ public sealed class MarkdownPreview : RichTextBox
         _ => false
     };
 
-    private Table TablePreview(string text, string source, MarkdownImages images)
+    private Table TablePreview(string text, string source, MarkdownImages images,
+        IReadOnlyDictionary<string, string> references)
     {
         var rows = text.Split('\n').Select(line => line.Split('\t')).ToArray();
         var sourceLines = source.Split('\n');
@@ -434,7 +529,7 @@ public sealed class MarkdownPreview : RichTextBox
             {
                 var paragraph = new Paragraph(new Run(images.RestoreLabels(value))) { Margin = new Thickness(0) };
                 if (index < sourceRows.Length && sourceRows[index].Length == rows[index].Length)
-                    DecorateInline(paragraph, sourceRows[index][column], value, images);
+                    DecorateInline(paragraph, sourceRows[index][column], value, images, references);
                 string separator = column < separators.Length ? separators[column] : "";
                 paragraph.TextAlignment = separator.EndsWith(':')
                     ? separator.StartsWith(':') ? TextAlignment.Center : TextAlignment.Right : TextAlignment.Left;

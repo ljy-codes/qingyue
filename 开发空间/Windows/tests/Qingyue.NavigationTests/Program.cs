@@ -79,7 +79,7 @@ internal static class Program
                 await Idle(window);
                 Check(Math.Abs(before - tab.Preview.VerticalOffset) < 80, "退出查找回到查找前阅读视口");
                 var outline = (ListBox)window.FindName("OutlineList");
-                outline.SelectedItem = tab.Reading!.Headings.Last();
+                outline.SelectedIndex = outline.Items.Count - 1;
                 await Idle(window);
                 Check(tab.Preview.VerticalOffset > before + 100, "目录选择跳转到目标章节");
                 Invoke(window, "ReturnToReadingPosition");
@@ -106,7 +106,7 @@ internal static class Program
                 var saved = await window.PersistWorkspaceAsync();
                 Check(saved.Errors.Count == 0, "含视口的新会话可安全保存");
                 window.CloseForShutdown();
-                window = new MainWindow(Path.Combine(root, "profile"));
+                window = new MainWindow(Path.Combine(root, "profile"), enableStartupUpdateCheck: false);
                 window.Show();
                 await window.InitializeAsync();
                 await Idle(window);

@@ -15,6 +15,8 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
     private bool active;
     private bool nativeHidden;
     private bool rendering;
+    private bool layoutRetryPending;
+    private int layoutRetries;
     public JsonSyntaxLayer(EditorTab tab)
     {
         this.tab = tab;
@@ -35,6 +37,15 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
 
     public void Refresh()
     {
+        layoutRetries = 0;
+        if (!tab.Editor.IsLoaded || !tab.Editor.IsVisible)
+        {
+            active = false;
+            cache.Clear();
+            SetHighlighted(false);
+            InvalidateVisual();
+            return;
+        }
         active = !composing && cache.Update(tab.Editor.Text, tab.Kind);
         // Never hide native text until a complete, affordable viewport has been prepared.
         SetHighlighted(false);
@@ -62,10 +73,16 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
         // LineCount/GetRect can force layout in an earlier TextChanged subscriber,
         // before this layer receives TextChanged. Synchronize before ANY layout query.
         active = !composing && cache.Update(text, kind);
-        if (!active || !editor.IsLoaded || editor.LineCount <= 0 ||
+        if (!active || !editor.IsLoaded ||
             editor.FlowDirection != FlowDirection.LeftToRight || editor.TextAlignment != TextAlignment.Left)
         {
             SetHighlighted(false);
+            return;
+        }
+        if (editor.LineCount <= 0)
+        {
+            SetHighlighted(false);
+            RetryAfterLayout();
             return;
         }
         int first = editor.GetFirstVisibleLineIndex(), last = editor.GetLastVisibleLineIndex();
@@ -73,6 +90,7 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
             last - first + 1 > DocumentSyntaxCache.MaxVisibleLines)
         {
             SetHighlighted(false);
+            if (first < 0 || last < first || last >= editor.LineCount) RetryAfterLayout();
             return;
         }
         var rows = new List<(int Start, int Length, Rect Bounds)>();
@@ -107,6 +125,7 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
             if (bounds.IsEmpty)
             {
                 SetHighlighted(false);
+                RetryAfterLayout();
                 return;
             }
             rows.Add((start, length, bounds));
@@ -133,6 +152,16 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
             return;
         }
         var drawings = new List<(FormattedText Text, Point Origin)>();
+        var listDrawings = new List<(MarkdownListMarker Marker, Point Origin, double Height)>();
+        var markers = kind == TextKind.Markdown ? tab.MarkdownWriter.Markers : [];
+        int markerIndex = 0, markerEnd = markers.Count;
+        int firstOffset = rows.Count == 0 ? text.Length : rows[0].Start;
+        while (markerIndex < markerEnd)
+        {
+            int middle = markerIndex + (markerEnd - markerIndex) / 2;
+            if (markers[middle].Start < firstOffset) markerIndex = middle + 1;
+            else markerEnd = middle;
+        }
         foreach (var row in rows)
         {
             var formatted = new FormattedText(text.Substring(row.Start, row.Length),
@@ -140,14 +169,92 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
                 typeface, editor.FontSize, Brush("TextBrush"), dpi);
             foreach (var token in cache.TokensInRange(row.Start, row.Length))
                 formatted.SetForegroundBrush(Brush(token.ResourceKey), token.Start, token.Length);
+            while (markerIndex < markers.Count && markers[markerIndex].Start < row.Start + row.Length)
+            {
+                var marker = markers[markerIndex++];
+                if (marker.Start < row.Start || marker.Ordered && !marker.Task) continue;
+                int markerStart = marker.Start;
+                while (markerStart < text.Length && text[markerStart] is ' ' or '\t') markerStart++;
+                int hideEnd = Math.Min(marker.ContentStart, row.Start + row.Length);
+                if (markerStart >= hideEnd) continue;
+                // Transparent glyphs retain native character advances, hit testing and caret positions.
+                formatted.SetForegroundBrush(Brushes.Transparent, markerStart - row.Start, hideEnd - markerStart);
+                var bounds = editor.GetRectFromCharacterIndex(markerStart);
+                if (!bounds.IsEmpty)
+                    listDrawings.Add((marker, new(editorOrigin.X + bounds.X, editorOrigin.Y + bounds.Y), bounds.Height));
+            }
             drawings.Add((formatted, new Point(editorOrigin.X + row.Bounds.X, editorOrigin.Y + row.Bounds.Y)));
         }
-        SetHighlighted(true);
         dc.PushClip(new RectangleGeometry(new Rect(
             editorOrigin.X + editor.Padding.Left, editorOrigin.Y + editor.Padding.Top,
             Math.Max(0, right - editor.Padding.Left), Math.Max(0, bottom - editor.Padding.Top))));
+        if (kind == TextKind.Markdown && markers.Count > 0)
+            DrawIndentGuides(dc, text, rows, markers, editorOrigin);
+        // Foreground invalidates native text layout. Finish every geometry query first.
+        SetHighlighted(true);
         foreach (var drawing in drawings) dc.DrawText(drawing.Text, drawing.Origin);
+        foreach (var (marker, origin, height) in listDrawings)
+        {
+            var ink = Brush("TextBrush");
+            double size = editor.FontSize * (marker.Task ? .68 : .3);
+            var center = new Point(origin.X + editor.FontSize * .3, origin.Y + height * .53);
+            if (marker.Task)
+            {
+                var box = new Rect(center.X - size / 2, center.Y - size / 2, size, size);
+                dc.DrawRoundedRectangle(null, new Pen(ink, 1.2), box, 2, 2);
+                if (marker.Checked)
+                {
+                    dc.DrawLine(new Pen(ink, 1.5), new Point(box.Left + size * .2, center.Y),
+                        new Point(box.Left + size * .43, box.Bottom - size * .2));
+                    dc.DrawLine(new Pen(ink, 1.5), new Point(box.Left + size * .43, box.Bottom - size * .2),
+                        new Point(box.Right - size * .15, box.Top + size * .2));
+                }
+            }
+            else if (marker.Level % 3 == 2)
+                dc.DrawRectangle(ink, null, new Rect(center.X - size / 2, center.Y - size / 2, size, size));
+            else dc.DrawEllipse(marker.Level % 3 == 1 ? null : ink,
+                marker.Level % 3 == 1 ? new Pen(ink, 1.1) : null, center, size / 2, size / 2);
+        }
         dc.Pop();
+    }
+
+    private void DrawIndentGuides(DrawingContext dc, string text,
+        List<(int Start, int Length, Rect Bounds)> rows, IReadOnlyList<MarkdownListMarker> markers, Point origin)
+    {
+        var ink = Brush("MutedBrush").CloneCurrentValue();
+        ink.Opacity *= .35;
+        ink.Freeze();
+        var pen = new Pen(ink, .8);
+        int index = 0, high = markers.Count;
+        int firstOffset = rows.Count == 0 ? text.Length : rows[0].Start;
+        while (index < high)
+        {
+            int middle = index + (high - index) / 2;
+            if (markers[middle].Start <= firstOffset) index = middle + 1;
+            else high = middle;
+        }
+        index = Math.Max(0, index - 1);
+        foreach (var row in rows)
+        {
+            while (index + 1 < markers.Count && markers[index + 1].Start <= row.Start) index++;
+            var marker = markers[index];
+            if (marker.Start > row.Start || marker.Level == 0) continue;
+            // Only the actual marker's logical line and its visual wraps receive guides.
+            // Following code or unrelated paragraphs never inherit an old list's decoration.
+            int end = text.IndexOfAny(['\r', '\n'], marker.Start);
+            if (row.Start > (end < 0 ? text.Length : end)) continue;
+            foreach (int column in tab.MarkdownWriter.GuideColumns(marker))
+            {
+                int position = marker.Start + Math.Min(Math.Max(0, column - 1), marker.Length - 1);
+                if (position >= text.Length || text[position] != ' ') continue;
+                var bounds = tab.Editor.GetRectFromCharacterIndex(position);
+                var next = tab.Editor.GetRectFromCharacterIndex(position + 1);
+                if (bounds.IsEmpty || next.IsEmpty) continue;
+                double x = origin.X + (bounds.X + next.X) / 2;
+                dc.DrawLine(pen, new Point(x, origin.Y + row.Bounds.Top),
+                    new Point(x, origin.Y + row.Bounds.Bottom));
+            }
+        }
     }
 
     private void SetHighlighted(bool highlighted)
@@ -156,6 +263,24 @@ internal sealed class JsonSyntaxLayer : FrameworkElement
         nativeHidden = highlighted;
         if (highlighted) tab.Editor.Foreground = Brushes.Transparent;
         else tab.Editor.SetResourceReference(Control.ForegroundProperty, "TextBrush");
+    }
+
+    private void RetryAfterLayout()
+    {
+        // TextChanged can render the overlay while TextBox is still replacing
+        // its text container. A transient zero LineCount must not leave raw
+        // markers on screen until the next unrelated edit or resize.
+        if (layoutRetryPending || layoutRetries >= 2) return;
+        layoutRetryPending = true;
+        layoutRetries++;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ContextIdle, new Action(() =>
+        {
+            layoutRetryPending = false;
+            if (!IsVisible || !tab.Editor.IsLoaded) return;
+            tab.Editor.UpdateLayout();
+            _ = tab.Editor.GetFirstVisibleLineIndex();
+            InvalidateVisual();
+        }));
     }
 
     private Brush Brush(string key) => TryFindResource(key) as Brush ?? Brushes.White;
@@ -238,13 +363,21 @@ public readonly record struct SyntaxColorToken(int Start, int Length, string Res
 public sealed class DocumentSyntaxCache
 {
     public const int MaxVisibleLines = 250;
-    private const int MaxDocumentCharacters = 1_000_000;
+    internal const int MaxDocumentCharacters = 1_000_000;
     private const int MaxLogicalLineCharacters = 16_384;
     private const int MaxTokens = 100_000;
     private string? source;
     private TextKind kind;
     private bool supported;
     public IReadOnlyList<SyntaxColorToken> Tokens { get; private set; } = Array.Empty<SyntaxColorToken>();
+
+    public void Clear()
+    {
+        source = null;
+        kind = default;
+        supported = false;
+        Tokens = Array.Empty<SyntaxColorToken>();
+    }
 
     public bool Update(string text, TextKind language)
     {
@@ -344,7 +477,8 @@ public sealed class DocumentSyntaxCache
                 fenceLength = markers;
                 yield return new(start, line.Length, "SyntaxStringBrush");
             }
-            else if (line.StartsWith("    ", StringComparison.Ordinal) || line.StartsWith('\t'))
+            else if ((line.StartsWith("    ", StringComparison.Ordinal) || line.StartsWith('\t')) &&
+                !MarkdownSyntax.ListPattern.IsMatch(line))
             {
                 yield return new(start, line.Length, "SyntaxStringBrush");
             }

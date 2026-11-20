@@ -3,6 +3,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Qingyue.Core;
 
@@ -12,6 +13,9 @@ namespace Qingyue.Windows;
 public sealed class MermaidSequenceView : UserControl
 {
     private const double Gutter = 24;
+    private const int MaximumSnapshotWidth = 4096;
+    private const int MaximumSnapshotHeight = 8192;
+    private const long MaximumSnapshotPixels = 16_777_216;
     private static readonly IReadOnlyDictionary<string, DependencyProperty> ThemeProperties =
         new[] { "TextBrush", "MutedBrush", "AccentTextBrush", "SyntaxKeyBrush", "PanelBrush", "EditorBrush", "BorderBrush" }
         .ToDictionary(key => key, key => DependencyProperty.RegisterAttached("Resolved" + key,
@@ -28,6 +32,31 @@ public sealed class MermaidSequenceView : UserControl
     /// <summary>Unscaled drawing bounds, including room for edge notes and self messages.</summary>
     public double DiagramWidth { get; private set; }
     public double DiagramHeight { get; private set; }
+
+    /// <summary>
+    /// Creates a frozen, self-contained bitmap for rich clipboard export.
+    /// This method must run on the UI thread because it snapshots the WPF canvas.
+    /// </summary>
+    public BitmapSource? CreateClipboardSnapshot()
+    {
+        Dispatcher.VerifyAccess();
+        if (!double.IsFinite(DiagramWidth) || !double.IsFinite(DiagramHeight) ||
+            DiagramWidth <= 0 || DiagramHeight <= 0)
+            return null;
+        int width = (int)Math.Ceiling(DiagramWidth);
+        int height = (int)Math.Ceiling(DiagramHeight);
+        if (width > MaximumSnapshotWidth || height > MaximumSnapshotHeight ||
+            (long)width * height > MaximumSnapshotPixels)
+            return null;
+
+        canvas.Measure(new Size(width, height));
+        canvas.Arrange(new Rect(0, 0, width, height));
+        canvas.UpdateLayout();
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(canvas);
+        bitmap.Freeze();
+        return bitmap;
+    }
 
     public MermaidSequenceView(SequenceDiagram diagram, double fontSize = 14)
     {

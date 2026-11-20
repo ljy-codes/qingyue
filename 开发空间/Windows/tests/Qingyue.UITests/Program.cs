@@ -35,12 +35,35 @@ internal static class Program
             {
                 var started = Stopwatch.StartNew();
                 JsonSyntaxChecks.Check(Check);
+                UpdateServiceChecks.Run(Check);
                 window = new MainWindow(Path.Combine(root, "profile"), restoreSession: false);
                 window.Show();
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                IconThemeChecks.Run(Check, window, root);
+                var topChrome = (FrameworkElement)window.FindName("TopChrome");
+                var mainMenu = (FrameworkElement)window.FindName("MainMenu");
+                var brandHeader = (Border)window.FindName("BrandHeader");
+                var tabRow = (FrameworkElement)window.FindName("TabRow");
+                var editOnlyTools = (FrameworkElement)window.FindName("EditOnlyTools");
+                Check(ReferenceEquals(VisualTreeHelper.GetParent(mainMenu), topChrome) &&
+                    ReferenceEquals(VisualTreeHelper.GetParent(brandHeader), topChrome) &&
+                    Grid.GetRow(mainMenu) == Grid.GetRow(brandHeader),
+                    "顶部菜单与品牌区合并为同一行");
+                double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + editOnlyTools.ActualHeight;
+                Check(topChromeHeight <= 120,
+                    $"顶部工具区压缩到正文优先高度（实际 {topChromeHeight:0} 像素）");
+                Check(brandHeader.Background is SolidColorBrush headerBrush &&
+                    headerBrush.Color == ((SolidColorBrush)window.FindResource("PanelBrush")).Color,
+                    "品牌区与顶部菜单统一使用深色主体");
+                Check(window.FindName("Sidebar") is Border sidebar &&
+                    sidebar.Background is SolidColorBrush sidebarBrush &&
+                    window.CurrentTab!.Editor.Background is SolidColorBrush editorBrush &&
+                    sidebarBrush.Color != editorBrush.Color,
+                    "侧栏与编辑区保持深浅层次");
                 Build2Checks.CheckEntryPoints(window, Check);
                 var first = window.CurrentTab!;
+                Check(!first.IsPreviewCreated, "普通打开标签不预先创建阅读控件");
                 first.Editor.Text = "文档一 😀\n独立撤销";
                 first.Editor.CaretIndex = first.Editor.Text.Length;
                 first.Editor.AppendText("追加");
@@ -58,6 +81,43 @@ internal static class Program
                 window.SelectTab(first);
                 Check(ReferenceEquals(window.CurrentTab?.Editor, first.Editor), "切回标签保留原编辑器");
 
+                var progressTab = window.NewDocument(string.Join("\n", Enumerable.Range(1, 100).Select(i => "第 " + i + " 行")));
+                Check(!progressTab.IsPreviewCreated, "未进入阅读模式的标签保持轻量");
+                window.ToggleReading();
+                await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Check(progressTab.IsPreviewCreated, "进入阅读模式时才创建阅读控件");
+                Check(((TextBlock)window.FindName("ReadingStatus")).Text.Contains("%"), "阅读态显示百分比进度");
+                window.ToggleBookmark();
+                Check(window.CurrentBookmarks(progressTab).Count == 1, "当前阅读位置可以添加书签");
+                window.ToggleBookmark();
+                Check(window.CurrentBookmarks(progressTab).Count == 0, "同一位置再次操作可以删除书签");
+                window.ToggleReading();
+                Check(progressTab.Rendered is null, "退出阅读模式立即释放渲染文档");
+                var sidebarTabs = (TabControl)window.FindName("SidebarTabs");
+                Check(sidebarTabs.Items.Cast<TabItem>().Any(item => Equals(item.Header, "书签")),
+                    "侧栏包含书签页");
+                var tabHeader = FindTabHeader(window, progressTab);
+                Check(tabHeader.ContextMenu is not null, "标签拥有右键菜单");
+                tabHeader.ContextMenu!.IsOpen = true;
+                Check(tabHeader.ContextMenu.Items.Cast<MenuItem>().Any(item => Equals(item.Header, "关闭其他标签")),
+                    "标签右键菜单包含关闭其他标签");
+                tabHeader.ContextMenu.IsOpen = false;
+
+                string missing = Path.Combine(root, "已删除.md");
+                File.WriteAllText(missing, "# 已删除");
+                await window.OpenPathsAsync([missing]);
+                File.Delete(missing);
+                window.RefreshRecent();
+                var recent = (ListBox)window.FindName("RecentList");
+                Check(recent.Items.Cast<object>().Any(item =>
+                {
+                    var type = item.GetType();
+                    return string.Equals(type.GetProperty("Path")?.GetValue(item) as string,
+                        Path.GetFullPath(missing), StringComparison.OrdinalIgnoreCase)
+                        && type.GetProperty("Exists")?.GetValue(item) is false
+                        && (type.GetProperty("StateText")?.GetValue(item) as string)?.Contains("不存在") == true;
+                }), "最近文件显示失效状态");
+
                 string filePath = Path.Combine(root, "中文配置.json");
                 Check(window.SaveTabToPath(first, filePath), "窗口保存到中文路径");
                 first.Editor.AppendText("\n未保存内容");
@@ -66,17 +126,45 @@ internal static class Program
                 Check(!File.ReadAllText(first.File.Path!).Contains("未保存内容"), "重命名不写回脏正文");
                 Check(first.File.IsDirty && first.Editor.Text.Contains("未保存内容"), "重命名保留未保存编辑");
 
-                var markdown = window.NewDocument("# 阅读标题\n\n这是 **中文** 与 😀。\n\n## 第二章\n- 一项\n");
+                var markdown = window.NewDocument("# 阅读标题\n\n这是 **中文** 与 😀。\n\n## 第二章\n- 一项\n  - 子项\n");
                 window.ToggleReading();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 Check(markdown.IsReading, "进入原生阅读视图");
                 Check(markdown.Reading?.Headings.Count == 2, "阅读目录生成");
                 Check(markdown.Reading?.VisibleText.Contains("中文") == true, "阅读显示中文");
                 Check(markdown.Preview.IsReadOnly, "阅读页面不允许修改原文");
+                Check(markdown.Preview.Document.Blocks.OfType<System.Windows.Documents.List>()
+                    .Any(list => list.MarkerStyle == TextMarkerStyle.Disc),
+                    "Markdown预览显示圆点列表");
+                Check(window.FindName("ReadingToolbar") is FrameworkElement { Visibility: Visibility.Visible },
+                    "阅读态显示轻量工具条");
+                Check(((FrameworkElement)window.FindName("FormatButton")).Visibility == Visibility.Collapsed &&
+                    ((FrameworkElement)window.FindName("StructureButton")).Visibility == Visibility.Collapsed &&
+                    ((FrameworkElement)window.FindName("MarkdownButton")).Visibility == Visibility.Collapsed,
+                    "阅读态隐藏编辑专用工具");
                 Check(markdown.Rendered!.PointerAt(0).GetCharacterRect(System.Windows.Documents.LogicalDirection.Forward).Left >= 20,
                     "首次阅读排版保留正文边距");
                 window.ToggleReading();
                 Check(!markdown.IsReading && markdown.Editor.Text.Contains("**中文**"), "返回编辑保留原始 Markdown");
+                Check(window.FindName("MarkdownWritingToolbar") is FrameworkElement { Visibility: Visibility.Visible } &&
+                    window.FindName("MarkdownWritingHint") is TextBlock { Visibility: Visibility.Visible, Text: var hint } &&
+                    hint.Contains("空格", StringComparison.Ordinal),
+                    "Markdown编辑工具条显示列表快捷提示");
+                markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("- 一项", StringComparison.Ordinal) + 2;
+                Check(window.FindName("MarkdownWritingState") is TextBlock { Text: var state } &&
+                    state.Contains("无序列表", StringComparison.Ordinal) &&
+                    state.Contains("第 1 层", StringComparison.Ordinal),
+                    "Markdown编辑区显示当前列表层级");
+                markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("中文", StringComparison.Ordinal) + 2;
+                int expectedSourceAnchor = markdown.Positions.ToSource(markdown.Editor.CaretIndex);
+                window.ToggleReading();
+                await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                var expectedBlock = markdown.Reading!.Blocks.FirstOrDefault(block =>
+                    expectedSourceAnchor >= block.SourceStart && expectedSourceAnchor <= block.SourceStart + block.SourceLength)
+                    ?? markdown.Reading.Blocks.Last();
+                Check(markdown.IsReading && markdown.Rendered!.OffsetAt(markdown.Preview.Selection.Start) == expectedBlock.DisplayStart,
+                    "从段落中间进入阅读时吸附到内容块开头");
+                window.ToggleReading();
 
                 window.ToggleSidebar();
                 Check(window.FindName("SidebarToggle") is Button { IsVisible: true }, "收起侧栏后仍有展开按钮");
@@ -107,7 +195,7 @@ internal static class Program
                 var persisted = await window.PersistWorkspaceAsync();
                 Check(persisted.Errors.Count == 0, "更新草稿与会话成功：" + string.Join(';', persisted.Errors));
                 window.CloseForShutdown();
-                window = new MainWindow(Path.Combine(root, "profile"));
+                window = new MainWindow(Path.Combine(root, "profile"), enableStartupUpdateCheck: false);
                 window.Show();
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -119,7 +207,7 @@ internal static class Program
                 ((ComboBox)window.FindName("KindCombo")).SelectedItem = TextKind.Markdown;
                 ClickAction(window, "find");
                 ((TextBox)window.FindName("SearchQuery")).Text = "中文";
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 1");
                 ClickAction(window, "next");
                 Check(markdown.IsReading && markdown.Preview.Selection.Text == "中文", "阅读查找选中实际可见文字");
                 ClickAction(window, "hideFind");
@@ -128,7 +216,7 @@ internal static class Program
                 ClickAction(window, "find");
                 ((TextBox)window.FindName("SearchQuery")).Text = "x";
                 ((TextBox)window.FindName("ReplacementText")).Text = new string('a', 1_000_000);
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "11 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 11");
                 Check(true, "仅查找不受隐藏替换内容上限影响");
                 ((TextBox)window.FindName("ReplacementText")).Text = "";
                 ClickAction(window, "hideFind");
@@ -137,7 +225,7 @@ internal static class Program
                 ClickAction(window, "replace");
                 ((TextBox)window.FindName("SearchQuery")).Text = "中文";
                 ((TextBox)window.FindName("ReplacementText")).Text = "值$";
-                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "2 处匹配");
+                await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 2");
                 ClickAction(window, "replaceAll");
                 Check(searchTab.File.Text == "甲\n值$ 😀 值$", "CRLF源文替换偏移与字面替换正确");
                 searchTab.Editor.Undo();
@@ -357,6 +445,26 @@ internal static class Program
             if (found is not null) return found;
         }
         return null;
+    }
+
+    private static FrameworkElement FindTabHeader(MainWindow window, EditorTab tab)
+    {
+        var root = (DependencyObject)window.FindName("TabStrip");
+        var matches = Descendants(root).OfType<FrameworkElement>()
+            .Where(item => ReferenceEquals(item.DataContext, tab))
+            .ToArray();
+        return matches.FirstOrDefault(item => item is StackPanel)
+            ?? throw new Exception("未找到标签头。");
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var nested in Descendants(child)) yield return nested;
+        }
     }
 
     internal static void SaveScreenshot(Window window, string path)

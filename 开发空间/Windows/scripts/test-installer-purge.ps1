@@ -23,12 +23,19 @@ $link = Join-Path $data '外部目录联接'
 New-Item -ItemType Junction -Path $link -Target $external | Out-Null
 $unknown = Join-Path $target '保留的额外文件.txt'
 Set-Content -LiteralPath $unknown -Value 'unknown installed folder file'
+# Use the production association macro as well as the shared removal actions.
+# Loading qingyue.nsi itself would also compile its real installation sections.
+$installerSource = Get-Content -LiteralPath (Join-Path $windowsRoot 'installer/qingyue.nsi') -Raw
+$associationMacro = [regex]::Match($installerSource,
+    '(?ms)^!macro QingyueUnregisterAssociation EXT\r?\n.*?^!macroend').Value
+if (-not $associationMacro) { throw '未找到生产文件关联清理宏。' }
 $harness = @'
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
 !include LogicLib.nsh
 !include nsDialogs.nsh
+@ASSOCIATION_MACRO@
 !include "@SOURCE@\uninstall-actions.nsh"
 !addplugindir "@BUILD@"
 !define DATA_LEAF "QingyueInstallerTest"
@@ -50,7 +57,7 @@ StrCpy $PurgeChoice ${BST_CHECKED}
 !insertmacro QingyueRemoveActions
 SectionEnd
 '@
-$text=$harness.Replace('@SOURCE@',(Join-Path $windowsRoot 'installer')).Replace('@BUILD@',$build).Replace('@TARGET@',$target)
+$text=$harness.Replace('@ASSOCIATION_MACRO@',$associationMacro).Replace('@SOURCE@',(Join-Path $windowsRoot 'installer')).Replace('@BUILD@',$build).Replace('@TARGET@',$target)
 $script=Join-Path $build 'purge-fixture.nsi'
 Set-Content -LiteralPath $script -Value $text -Encoding utf8
 & "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe" /INPUTCHARSET UTF8 /V2 $script
@@ -72,8 +79,9 @@ $p=Start-Process -FilePath $exe -WindowStyle Hidden -Wait -PassThru
 Check '共享生产清理流程完成彻底卸载' ($p.ExitCode -eq 0)
 Check '彻底清理移除默认测试数据目录含只读文件' (-not (Test-Path -LiteralPath $data))
 Check '彻底卸载移除程序及应用列表登记' (-not (Test-Path $unreg) -and -not (Test-Path -LiteralPath (Join-Path $target 'Qingyue.exe')))
-Check '彻底卸载仍保留未知安装文件与外部文档' (
-    (Test-Path -LiteralPath $unknown) -and
+Check '彻底卸载移除专用安装目录中的未知文件且不影响外部文档' (
+    (-not (Test-Path -LiteralPath $unknown)) -and
+    (-not (Test-Path -LiteralPath $target)) -and
     (Get-FileHash -LiteralPath (Join-Path $external '外部文档.txt')).Hash -eq $externalHash)
 # The fixed data root itself must never be a junction followed by deletion.
 New-Item -ItemType Junction -Path $data -Target $external | Out-Null
@@ -105,9 +113,6 @@ try {
     # Delete the link object, not the linked directory tree.
     [IO.Directory]::Delete($data)
 }
-# Only remove the exact unknown-file fixture we created. Empty directory only.
-Remove-Item -LiteralPath $unknown
-[IO.Directory]::Delete($target)
 [ordered]@{verifiedAt=(Get-Date).ToString('o');passed=$record.Count;checks=$record;
     method='Shared production removal macro with isolated product identity; no GUI purge automation'
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $build 'purge-results.json') -Encoding utf8

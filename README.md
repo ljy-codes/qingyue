@@ -8,11 +8,19 @@ macOS 当前为 **0.1.0 · Mac 构建 8**，继续对齐 Windows 0.18.0：本轮
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
-Windows 当前为 **0.18.0 · 构建 1**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
-已加入工作区搜索、阅读清单、本机批注与阅读简报、Markdown 列表写作、嵌套层次预览、表格单元格编辑、TSV 粘贴以及截图/本地图片插入；
-Markdown 图片保存在文档旁 `.assets`，继续提供异步预览、富文本复制、有限 Mermaid 流程图和安全保存链路。
-Windows 的安装、更新检查和功能验收见 [Windows 使用说明](操作指导/Windows使用说明.md) 与 [Windows 验收](开发空间/Windows/docs/test.md)。
-本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)，操作差异见 [Windows 使用说明](操作指导/Windows使用说明.md)。
+Windows 当前开发版为 **0.18.0 · 构建 1**，下载：[Windows 0.18.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.18.0)。
+使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
+应用内置天空蓝、樱花紫、薄荷珊瑚和蜜桃紫四套动漫风格图标，可在“视图 → 阅读外观”中切换并保存在本机；
+0.18.0 将顶部菜单与品牌区合并为一行，编辑操作移到右上角，并将深色编辑区调整为中性冷灰；
+Markdown 编辑工具条显示当前块与列表层级，输入 `-` 加空格显示圆点，预览继续保留嵌套圆点层次；
+0.17.0 默认延迟创建未展开标签的阅读控件，切换、关闭和批量打开时及时释放旧阅读文档，降低未展开文档场景的内存占用；
+顶部品牌栏、标签栏和编辑工具栏统一增加主体色层，形成窗口色 → 主体色 → 编辑器色的视觉层次；
+新增 Markdown 层次参考线、列表内部标题/引用/表格排版、表格单元格导航与增删行列，以及截图粘贴、选图和拖图插入；
+文件继续保存标准 Markdown，图片保存在文档旁的 `.assets` 文件夹，预览、阅读和富文本复制保留层次。
+已支持本机批注与阅读简报、阅读外观、本地工作区、全局搜索、阅读清单、TXT/Markdown 格式化、
+JSON 结构折叠、本地图片与有限 Mermaid 图形；保留安全保存、撤销、恢复和外部修改保护。
+操作与解析边界见 [Windows 使用说明](操作指导/Windows使用说明.md)。
+本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
 
 ## Mac 构建 8 的 Windows 功能对齐
@@ -100,4 +108,4 @@ Markdown 仍为轻量原生排版。Mac 与 Windows 均支持受限的本地位�
 
 ![Mac 构建2的专注阅读](docs/screenshots/macos-focus-build2.png)
 
-本轮验证细节见[Mac 构建 5 功能对齐](docs/Mac构建5功能对齐.md)，此前的[构建 4 验收](docs/Mac构建4验收.md)、[构建 3 验收](docs/Mac构建3验收.md)和[构建 2 验收](docs/Mac构建2验收.md)保留；Windows 的独立处理记录见[Windows后续实现](docs/Windows后续实现.md)。
+本轮验证见[Mac 构建 8 验收](docs/Mac构建8验收.md)，[Mac 构建 5 功能对齐](docs/Mac构建5功能对齐.md)保留，此前的[构建 4 验收](docs/Mac构建4验收.md)、[构建 3 验收](docs/Mac构建3验收.md)和[构建 2 验收](docs/Mac构建2验收.md)保留；Windows 的独立处理记录见[Windows后续实现](docs/Windows后续实现.md)。

@@ -21,6 +21,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--list-marker-audit")
+        {
+            NestedListChecks.CompareMarkerRendering(args[1]);
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--table-audit")
         {
             // Read-only aggregate diagnostics; never print document text or image data.
@@ -37,7 +42,26 @@ internal static class Program
             ("existing mapping and visible text", Mapping),
             ("block hierarchy and literal code", Blocks),
             ("preview inline styles and inert content", InlinePreview),
+            ("preview GFM autolinks and reference links", GfmPreview),
             ("preview lists and table grid", ListsAndTables),
+            ("nested list levels and original CRLF ranges", NestedListChecks.Model),
+            ("nested bullet containers and three marker styles", NestedListChecks.Preview),
+            ("mixed lists keep parent continuation and inline styles", NestedListChecks.Continuations),
+            ("nested fenced code stays literal", NestedListChecks.Fences),
+            ("nested reading source and decorated pointer mapping", NestedListChecks.Mapping),
+            ("nested list syntax keeps original token offsets", NestedListChecks.Tokens),
+            ("consecutive continuations return to their own ancestors", NestedListChecks.AncestorContinuations),
+            ("nested fences isolate references and literal images", NestedListChecks.FenceIsolation),
+            ("reading list grammar agrees with writing marker widths", NestedListChecks.MarkerGrammar),
+            ("productivity nested blocks preserve CRLF source ranges", ProductivityHierarchyChecks.ModelRanges),
+            ("productivity quote and real table belong to ListItem", ProductivityHierarchyChecks.PreviewContainers),
+            ("productivity blocks return to ancestors with inline styles", ProductivityHierarchyChecks.AncestorsAndStyles),
+            ("productivity relative indentation and outside table boundaries", ProductivityHierarchyChecks.ClosingAndRelativeIndent),
+            ("productivity nested fences retain literal code semantics", ProductivityHierarchyChecks.CodeSemantics),
+            ("productivity nested block navigation and UTF16 mapping", ProductivityHierarchyChecks.Navigation),
+#if QINGYUE_HIERARCHY_EXPORT_CHECKS
+            ("productivity clipboard and HTML export preserve actual hierarchy", ProductivityHierarchyChecks.ExportedHierarchy),
+#endif
             ("preview one-dash table syntax", () => TableSyntaxCompatibility(1)),
             ("preview two-dash table syntax", () => TableSyntaxCompatibility(2)),
             ("preview three-dash table syntax", () => TableSyntaxCompatibility(3)),
@@ -50,7 +74,10 @@ internal static class Program
             ("ordered marker numeric limits", OrderedMarkerLimits),
             ("successive incomplete edits remain renderable", EditingStates),
             ("parser failures show raw text and recover", ParserFailureRecovery),
+            ("markdown outline preserves heading levels and source ranges", Outline),
+            ("text diff marks changed lines and keeps line numbers", Diff),
             ("pasted Markdown shows a sequence diagram", MermaidChecks.Preview),
+            ("pasted Markdown shows a flowchart", MermaidChecks.FlowchartPreview),
             ("Mermaid fences, literal code and failure recovery", MermaidChecks.FencesAndFallback),
             ("Mermaid reader preserves search and source mapping", MermaidChecks.ReadingMapping),
             ("Mermaid has visible geometry and overflow scrolling", MermaidChecks.Layout),
@@ -65,6 +92,20 @@ internal static class Program
         if (args.Length == 2 && args[0] == "--screenshots") Screenshots(args[1]);
         Console.WriteLine($"Markdown checks: {tests.Length - failed}/{tests.Length} passed");
         return failed == 0 ? 0 : 1;
+    }
+
+    private static void GfmPreview()
+    {
+        const string input = "[guide]: https://example.test/guide \"指南\"\n\n" +
+            "<https://example.test> <mailto:reader@example.test>\n[文档][guide]\n[未解析][missing]";
+        var preview = new MarkdownPreview(input, 16, 680);
+        string visible = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text;
+        Check(visible.Contains("https://example.test", StringComparison.Ordinal), "HTTP autolink preview text");
+        Check(visible.Contains("mailto:reader@example.test", StringComparison.Ordinal), "mailto autolink preview text");
+        Check(visible.Contains("文档", StringComparison.Ordinal) &&
+            !visible.Contains("[文档][guide]", StringComparison.Ordinal), "reference link preview text");
+        Check(visible.Contains("[未解析][missing]", StringComparison.Ordinal), "unresolved reference stays visible");
+        Check(!visible.Contains("[guide]:", StringComparison.Ordinal), "reference definition stays hidden");
     }
 
     private static void Mapping()
@@ -355,6 +396,38 @@ internal static class Program
         try { preview.Update(raw, _ => throw new OutOfMemoryException("simulated; no allocation")); }
         catch (OutOfMemoryException) { propagated = true; }
         Check(propagated && ReferenceEquals(before, preview.Document), "fatal runtime failures are not disguised as content errors");
+    }
+
+    private static void Outline()
+    {
+        const string source = "# 一级\n\n正文\n\n## 二级\n\n### 三级";
+        var model = ReadingModel.Build(source, TextKind.Markdown);
+        var outline = MarkdownOutline.Build(source, model);
+        Equal(3, outline.Count, "outline count");
+        Equal(1, outline[0].Level, "outline H1 level");
+        Equal(2, outline[1].Level, "outline H2 level");
+        Equal(3, outline[2].Level, "outline H3 level");
+        Equal("# 一级\n".Length, outline[0].SourceLength, "outline source range");
+        Equal("二级", outline[1].Title, "outline visible title");
+        Check(outline[2].DisplayStart > outline[1].DisplayStart, "outline display order");
+        Check(MarkdownOutline.Build("正文", ReadingModel.Build("正文", TextKind.Markdown)).Count == 0,
+            "plain markdown has no outline");
+    }
+
+    private static void Diff()
+    {
+        var diff = TextDiff.Build("a\nsame\nold", "a\nsame\nnew\nadd");
+        Check(diff.Any(line => line.Kind == TextDiffLineKind.Equal && line.Text == "same"),
+            "diff equal line");
+        Check(diff.Count(line => line.Kind == TextDiffLineKind.Changed) == 2,
+            "diff changed pair");
+        Check(diff.Any(line => line.Kind == TextDiffLineKind.Added && line.Text == "add"),
+            "diff added line");
+        Check(diff.All(line => line.LeftLine >= 0 && line.RightLine >= 0), "diff line numbers");
+        bool rejected = false;
+        try { _ = TextDiff.Build(new string('x', TextDiff.MaximumCharacters + 1), ""); }
+        catch (ArgumentException) { rejected = true; }
+        Check(rejected, "diff character budget");
     }
 
     private static void Screenshots(string directory)

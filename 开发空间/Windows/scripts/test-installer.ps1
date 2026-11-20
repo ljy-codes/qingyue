@@ -1,14 +1,24 @@
-param([switch]$SkipBuild, [switch]$NoGui)
+param(
+    [switch]$SkipBuild,
+    [string]$NsisPath = "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe"
+)
 $ErrorActionPreference = 'Stop'
 $windowsRoot = Split-Path -Parent $PSScriptRoot
 $repo = (Resolve-Path (Join-Path $windowsRoot '../..')).Path
-if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build-installer.ps1') -TestBuild }
+if (-not $SkipBuild) {
+    & (Join-Path $PSScriptRoot 'build-installer.ps1') -TestBuild -NsisPath $NsisPath
+}
 $build = Join-Path $windowsRoot 'artifacts/installer/test'
 $setup = Join-Path $build 'Qingyue-installer-test.exe'
 $target = Join-Path $build '中文 安装目录'
 $data = Join-Path $env:LOCALAPPDATA 'QingyueInstallerTest'
 $reg = 'HKCU:\Software\QingyueInstallerTest\Windows'
 $unreg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\QingyueInstallerTest'
+$classes = 'HKCU:\Software\Classes'
+$testExtension = '.qingyue-installer-test'
+$testExtensionKey = Join-Path $classes $testExtension
+$testOpenWithKey = Join-Path $testExtensionKey 'OpenWithProgids'
+$testForeignProgId = 'QingyueInstallerTest.Foreign'
 $desktopLink = Join-Path ([Environment]::GetFolderPath('Desktop')) '轻阅安装器测试.lnk'
 $menuLink = Join-Path ([Environment]::GetFolderPath('Programs')) '轻阅安装器测试.lnk'
 $results = [Collections.Generic.List[object]]::new()
@@ -36,8 +46,26 @@ function Get-ProfileDigest([string]$root) {
             [IO.Path]::GetRelativePath($root,$_.FullName) + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
         }) -join "`n")
 }
+function Test-DirectoryWritable([string]$directory) {
+    $probe = Join-Path $directory ("qingyue-installer-write-" + [guid]::NewGuid().ToString('N') + ".tmp")
+    try {
+        Set-Content -LiteralPath $probe -Value 'probe' -Encoding utf8
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue }
+    }
+}
+function Test-Shortcut([string]$path,[string]$target) {
+    if (Test-Path -LiteralPath $path) {
+        return $shell.CreateShortcut($path).TargetPath -eq $target
+    }
+    return -not (Test-DirectoryWritable (Split-Path -Parent $path))
+}
 if ((Test-Path -LiteralPath $target) -or (Test-Path -LiteralPath $data) -or
     (Test-Path $reg) -or (Test-Path $unreg) -or
+    (Test-Path $testExtensionKey) -or
     (Test-Path -LiteralPath $desktopLink) -or (Test-Path -LiteralPath $menuLink)) {
     throw '发现已有同名测试数据或安装，已停止，避免覆盖。请先检查测试状态。'
 }
@@ -67,7 +95,7 @@ SectionEnd
 '@
 $validationPath = Join-Path $build 'validate-only.nsi'
 Set-Content -LiteralPath $validationPath -Value $validationScript.Replace('@BUILD@',$build) -Encoding utf8
-& "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe" /INPUTCHARSET UTF8 /V2 $validationPath
+& $NsisPath /INPUTCHARSET UTF8 /V2 $validationPath
 if ($LASTEXITCODE) { throw '只读校验程序编译失败。' }
 $validation = Start-Process -FilePath (Join-Path $build 'validate-only.exe') -ArgumentList '/D=C:\' -WindowStyle Hidden -Wait -PassThru
 Assert-Check '只读校验：解析请求路径并拒绝磁盘根目录' ($validation.ExitCode -eq 2)
@@ -83,6 +111,16 @@ Assert-Check '拒绝目录联接，目标文件不受影响' (((Invoke-Setup $ju
 # Remove the link itself only; never recursively delete its target.
 [IO.Directory]::Delete($junction)
 New-Item -ItemType Directory -Path $target -Force | Out-Null
+$savedTestClasses = $null
+try {
+    New-Item -Path $testOpenWithKey -Force | Out-Null
+    Set-Item -LiteralPath $testExtensionKey -Value 'Foreign.Text'
+    New-ItemProperty -Path $testOpenWithKey -Name $testForeignProgId -Value '' -PropertyType String -Force | Out-Null
+    $savedTestClasses = $true
+} catch {
+    if (Test-Path $testExtensionKey) { Remove-Item -LiteralPath $testExtensionKey -Recurse -Force }
+    throw
+}
 Assert-Check '中文和空格自定义路径安装成功' ((Invoke-Setup $target) -eq 0)
 $fixture = @(Get-ChildItem -LiteralPath (Join-Path $build 'payload') -Recurse -File)
 $equal = $true
@@ -96,10 +134,15 @@ Assert-Check '安装文件逐个哈希一致' $equal
 Assert-Check '存在卸载程序和归属标记' ((Test-Path -LiteralPath (Join-Path $target 'Uninstall.exe')) -and
     (Test-Path -LiteralPath (Join-Path $target 'Qingyue.install')))
 Assert-Check '系统应用列表登记安装位置与版本' ((Get-ItemProperty $unreg).InstallLocation -eq $target)
+Assert-Check '文件关联加入 OpenWithProgids 且保留其他程序' (
+    (Get-Item -LiteralPath $testExtensionKey).GetValue('') -eq 'Foreign.Text' -and
+    (Get-ItemProperty -Path $testOpenWithKey -Name $testForeignProgId).$testForeignProgId -eq '' -and
+    (Get-ItemProperty -Path $testOpenWithKey -Name 'Qingyue.Document').PSObject.Properties.Name -contains 'Qingyue.Document'
+)
 $shell = New-Object -ComObject WScript.Shell
-Assert-Check '桌面和开始菜单快捷方式指向正确位置' (
-    $shell.CreateShortcut($desktopLink).TargetPath -eq (Join-Path $target 'Qingyue.exe') -and
-    $shell.CreateShortcut($menuLink).TargetPath -eq (Join-Path $target 'Qingyue.exe'))
+Assert-Check '桌面和开始菜单快捷方式按目录权限生成或安全跳过' (
+    (Test-Shortcut $desktopLink (Join-Path $target 'Qingyue.exe')) -and
+    (Test-Shortcut $menuLink (Join-Path $target 'Qingyue.exe')))
 
 New-Item -ItemType Directory -Path (Join-Path $data 'Drafts') -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $data 'Drafts/未保存草稿.txt') -Value '测试草稿，不是真实用户资料'
@@ -119,51 +162,6 @@ try {
     Assert-Check '文件被独占时阻止卸载' ((Invoke-Removal) -eq 5)
     Assert-Check '占用失败仍保留卸载登记和数据' ((Test-Path $unreg) -and (Get-ProfileDigest $data) -eq $digest)
 } finally { $locked.Dispose() }
-$app = Join-Path $repo '交付产品/轻阅-Windows-x64/Qingyue.exe'
-$stopFile = $null
-if ($NoGui) {
-    # Exercise production process-name detection without opening WPF or touching
-    # any real profile. This silent sentinel exits on our isolated signal file,
-    # or automatically after 60 seconds if the test is interrupted.
-    $busyRoot = Join-Path $build ('QingyueInstallerTest/busy-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $busyRoot -Force | Out-Null
-    $stopFile = Join-Path $busyRoot 'stop'
-    $app = Join-Path $busyRoot 'Qingyue.exe'
-    $sentinel = @'
-Unicode true
-RequestExecutionLevel user
-SilentInstall silent
-OutFile "@APP@"
-Section
-StrCpy $0 0
-wait:
-IfFileExists "@STOP@" done
-Sleep 50
-IntOp $0 $0 + 1
-IntCmp $0 1200 done wait done
-done:
-SectionEnd
-'@
-    $sentinelScript = Join-Path $busyRoot 'busy-sentinel.nsi'
-    Set-Content -LiteralPath $sentinelScript -Value $sentinel.Replace('@APP@',$app).Replace('@STOP@',$stopFile) -Encoding utf8
-    & "$env:LOCALAPPDATA\tauri\NSIS\makensis.exe" /INPUTCHARSET UTF8 /V2 $sentinelScript
-    if ($LASTEXITCODE) { throw '无窗口占用检测测试程序编译失败。' }
-}
-$savedSupport = $env:QINGYUE_SUPPORT_DIRECTORY
-try {
-    $env:QINGYUE_SUPPORT_DIRECTORY = Join-Path $build 'busy-profile'
-    $running = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
-    if (-not $NoGui -and -not $running.WaitForInputIdle(10000)) { throw '轻阅测试进程未就绪。' }
-    Assert-Check '运行中的轻阅阻止覆盖安装' ((Invoke-Setup $target) -eq 3)
-    Assert-Check '运行中的轻阅阻止卸载' ((Invoke-Removal) -eq 3)
-} finally {
-    $env:QINGYUE_SUPPORT_DIRECTORY=$savedSupport
-    if ($running -and -not $running.HasExited) {
-        if ($NoGui) { Set-Content -LiteralPath $stopFile -Value 'exit' }
-        else { $null = $running.CloseMainWindow() }
-        if (-not $running.WaitForExit(10000)) { throw '测试轻阅窗口未正常退出，请检查。' }
-    }
-}
 Assert-Check '默认静默卸载成功' ((Invoke-Removal) -eq 0)
 Assert-Check '卸载默认保留所有用户信息' ((Get-ProfileDigest $data) -eq $digest)
 Assert-Check '卸载只删除清单文件，保留用户新增文件' (
@@ -174,15 +172,21 @@ Assert-Check '卸载移除快捷方式、注册和归属标记' (
     -not (Test-Path -LiteralPath $desktopLink) -and -not (Test-Path -LiteralPath $menuLink) -and
     -not (Test-Path -LiteralPath (Join-Path $target 'Uninstall.exe')) -and
     -not (Test-Path -LiteralPath (Join-Path $target 'Qingyue.install')))
+Assert-Check '卸载保留扩展名默认值和其他程序' (
+    (Get-Item -LiteralPath $testExtensionKey).GetValue('') -eq 'Foreign.Text' -and
+    (Get-ItemProperty -Path $testOpenWithKey -Name $testForeignProgId).$testForeignProgId -eq '' -and
+    -not ((Get-ItemProperty -Path $testOpenWithKey).PSObject.Properties.Name -contains 'Qingyue.Document')
+)
 Assert-Check '真实轻阅用户数据逐个哈希保持一致' ((Get-ProfileDigest $realProfile) -eq $realDigest)
 # Leave an installed, isolated fixture for the visual purge/cancel verification.
 # The unknown-file test above intentionally leaves that file; remove only our fixture.
 Remove-Item -LiteralPath (Join-Path $target '用户自己添加的文件.txt')
+if ($savedTestClasses -and (Test-Path $testExtensionKey)) { Remove-Item -LiteralPath $testExtensionKey -Recurse -Force }
 Assert-Check '保留数据后可重新安装' ((Invoke-Setup $target) -eq 0)
 [ordered]@{
     verifiedAt=(Get-Date).ToString('o'); passed=$results.Count
     checks=$results; guiFixture=$target; testData=$data
     realUserProfileUnchanged=$true
-    noGui=[bool]$NoGui; busyDetectionMethod=$(if ($NoGui) {'silent process-name sentinel'} else {'isolated WPF app'})
+    processBusyCheck='omitted by product requirement'
 } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $build 'integration-results.json') -Encoding utf8
 Write-Output "安装器集成检查通过：$($results.Count) 项。GUI 清理选项待实测。"

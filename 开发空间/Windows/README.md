@@ -16,19 +16,20 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
 这些构建命令生成产物，不自动安装或签名。
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、`交付产品/轻阅-0.3.0-Windows构建1-x64.zip`
-及 `交付产品/轻阅-0.3.0-Windows构建1-x64-setup.exe`。
+输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
+`交付产品/轻阅-0.18.0-Windows构建1-x64.zip` 和
+`交付产品/轻阅-0.18.0-Windows构建1-x64-setup.exe`。
 采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
 
 工程入口：
 
-- `src/Qingyue.Core`：文件与会话安全、搜索、格式、原生阅读模型。
-- `src/Qingyue.Windows`：每标签独立 WPF 编辑器、FlowDocument 阅读、菜单、搜索、恢复。
+- `src/Qingyue.Core`：文件与会话安全、工作区扫描、全局搜索、阅读清单、格式和原生阅读模型。
+- `src/Qingyue.Windows`：每标签独立 WPF 编辑器、工作区、阅读清单、全局搜索、FlowDocument 阅读、菜单和恢复。
 - `tests/Qingyue.FileTests`：真实临时文件与 Windows 文件系统行为。
 - `tests/Qingyue.TextTests`：Unicode、搜索与文本转换。
 - `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。
-- `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序与恢复。
-- `tests/Qingyue.MarkdownTests`：Markdown 分色、预览与阅读映射兼容。
+- `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序、恢复、Markdown 结构命令、输入法与分屏定位。
+- `tests/Qingyue.MarkdownTests`：Markdown 分色、嵌套列表、预览与阅读映射兼容。
 - `tests/Qingyue.SequenceTests`：有限 Mermaid 时序语法、错误与资源限制。
 - `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
 - `tests/Qingyue.ReadingTests`：默认全宽预览、富文本导航、自动查找与实际刷新钩子。
@@ -39,14 +40,29 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.NavigationTests`：打开取消、真实视口、查找返回与目录跳转。
 - `tests/Qingyue.RecoveryTests`：未加载草稿保护、改名中断和退出冻结。
 - `tests/Qingyue.ReaderExperienceTests`：图片窗口、表格对齐、展开阅读及资源边界。
+- `tests/Qingyue.AnnotationTests`：批注存储、路径迁移、锚点修复与阅读简报安全。
+- `tests/Qingyue.ReadingOutcomeTests`：阅读外观、主题画刷、批注选区、高亮与简报导出。
 
-构建 3 支持 `mermaid` 围栏中的离线 `sequenceDiagram`，不引入 WebView 或脚本运行时。
+当前版本支持 `mermaid` 围栏中的离线 `sequenceDiagram` 和有限 `flowchart` / `graph` 流程图，不引入 WebView 或脚本运行时。
 语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。
+
+0.15.0 增加四套动漫风格应用图标：天空蓝、樱花紫、薄荷珊瑚和蜜桃紫。
+默认使用天空蓝，用户可在“视图 → 阅读外观”中切换，选择保存到本机 `Settings.json`，
+重启后继续使用；安装包、EXE 和资源管理器固定使用天空蓝。
+构建 2 在 WPF 启动阶段启用软件渲染，规避部分显卡驱动路径造成的异常 native render memory
+占用；本机完整窗口验证约 62–75 MB 私有内存，具体结果见 `docs/test.md`。
+0.14.0 增加 Markdown 层次参考线、嵌套容器排版、表格编辑和截图插图。
+输入和保存仍使用原生 TextBox 与标准 Markdown，预览和复制使用真实嵌套列表。
+批注、书签、设置、阅读清单和恢复数据默认写入
+`%LOCALAPPDATA%\\Qingyue`；批注文件为 `Annotations.json`，原文仍需用户明确保存。
+本版本只支持本机数据，不提供账号、云同步或历史数据迁移。
 
 测试产物在 `artifacts`，不纳入 Git。GUI 流程测试需要可用的 Windows 交互桌面。
 手工验收范围与结果见仓库 `docs/test.md`，用户操作见 `操作指导/Windows使用说明.md`。
 
 安装器使用自定义 NSIS 对话框和原生深色控件，提供可选路径、快捷方式、系统卸载入口。
+正式安装以管理员权限写入 `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall`，
+这样 Windows 设置的“已安装的应用”可以稳定发现轻阅；隔离测试包仍使用 HKCU，不触发 UAC。
 默认卸载保留用户数据；彻底清理需明确选择和再次确认，仅作用于轻阅默认数据目录。
 程序文件按构建生成的清单删除，保留未知文件。静默卸载永远保留用户数据。
 

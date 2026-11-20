@@ -122,15 +122,23 @@ internal sealed class ReaderImageWindow : Window
         var menu = new ContextMenu();
         var open = new MenuItem { Header = "放大图片" };
         var copy = new MenuItem { Header = "复制图片" };
+        var retry = new MenuItem { Header = "重试加载" };
         open.Click += (_, _) => Open();
         copy.Click += (_, _) =>
         {
             if (Decoded() is { } bitmap && !CopyBitmap(bitmap))
                 view.ToolTip = "剪贴板暂时不可用，请重试";
         };
+        if (view is MarkdownImageView markdownView)
+            retry.Click += (_, _) => markdownView.Retry();
         menu.Items.Add(open);
         menu.Items.Add(copy);
-        menu.Opened += (_, _) => open.IsEnabled = copy.IsEnabled = Decoded() is not null;
+        menu.Items.Add(retry);
+        menu.Opened += (_, _) =>
+        {
+            open.IsEnabled = copy.IsEnabled = Decoded() is not null;
+            retry.IsEnabled = view is MarkdownImageView markdownView && markdownView.IsFailed;
+        };
         view.ContextMenu = menu;
         view.ToolTip = "点击放大图片；右键复制已加载图片";
         image.Cursor = Cursors.Hand;

@@ -83,7 +83,7 @@ internal static class MermaidUiChecks
         ((TextBox)window.FindName("SearchQuery")).Text = "/api/tasks/approve";
         await Task.Delay(500);
         await Idle(window);
-        check(((TextBlock)window.FindName("SearchCount")).Text == "1 处匹配",
+        check(((TextBlock)window.FindName("SearchCount")).Text == "1 / 1",
             "构建3：时序图阅读仍能查找原始消息");
         Click("next");
         check(tab.Preview.Selection.Text == "/api/tasks/approve", "构建3：图形插入不破坏搜索位置");

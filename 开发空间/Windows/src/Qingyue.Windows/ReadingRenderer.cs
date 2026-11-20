@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Automation;
@@ -23,8 +24,12 @@ public sealed partial class RenderedReading
     };
 
     public RenderedReading(ReadingModel model, bool renderMermaid = true, string? sourcePath = null,
-        string? sourceText = null)
+        string? sourceText = null, ReadingPresentation? presentation = null)
     {
+        var normalized = (presentation ?? ReadingPresentation.Default).Normalize();
+        Document.FontFamily = new FontFamily(normalized.FontFamily);
+        Document.FontSize = normalized.FontSize;
+        Document.LineHeight = normalized.FontSize * normalized.LineHeight;
         Document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         var diagramBudget = new MermaidBlock.Budget();
         // Core intentionally exposes only visible image labels. The host can supply the
@@ -35,7 +40,7 @@ public sealed partial class RenderedReading
             var run = new Run(block.Text);
             runs.Add((block.DisplayStart, run));
             var paragraph = new Paragraph(run) { Tag = block, Margin = new Thickness(0, 0, 0, 13) };
-            StyleBlock(paragraph, block, Document.FontSize);
+            StyleBlock(paragraph, block, normalized);
             if (renderMermaid && MermaidBlock.IsMermaid(block))
             {
                 if (diagramBudget.TakeBlock(block))
@@ -72,8 +77,16 @@ public sealed partial class RenderedReading
     }
 
     // Style only: the single Run and its text must stay intact for PointerAt/OffsetAt.
-    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block, double fontSize)
+    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block, double fontSize) =>
+        StyleBlock(paragraph, block, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13));
+
+    internal static void StyleBlock(Paragraph paragraph, ReadingBlock block,
+        ReadingPresentation presentation)
     {
+        presentation = presentation.Normalize();
+        double fontSize = presentation.FontSize;
+        paragraph.Margin = new Thickness(0, 0, 0, presentation.ParagraphSpacing);
         switch (block.Kind)
         {
             case ReadingBlockKind.Heading:
@@ -83,7 +96,7 @@ public sealed partial class RenderedReading
                 paragraph.SetResourceReference(Paragraph.ForegroundProperty,
                     level == 1 ? "AccentTextBrush" : level == 2 ? "SyntaxKeyBrush" : "TextBrush");
                 paragraph.Margin = new Thickness(0, fontSize * (level switch { 1 => 1.75, 2 => 1.5, _ => 1.25 }), 0, fontSize * .75);
-                paragraph.LineHeight = paragraph.FontSize * 1.4;
+                paragraph.LineHeight = paragraph.FontSize * Math.Min(1.75, presentation.LineHeight);
                 paragraph.KeepWithNext = true;
                 break;
             case ReadingBlockKind.Code:
@@ -143,32 +156,51 @@ public sealed partial class RenderedReading
     /// contain Document. Selection pointers, mapping and decoded images stay valid.
     /// </summary>
     public void UpdatePresentation(RichTextBox host, double fontSize, double readingWidth)
+        => UpdatePresentation(host, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    public void UpdatePresentation(RichTextBox host, ReadingPresentation presentation, double readingWidth)
     {
         ArgumentNullException.ThrowIfNull(host);
         if (!ReferenceEquals(host.Document, Document))
             throw new ArgumentException("The host must contain this reading document.", nameof(host));
-        ApplyPresentation(host, fontSize, readingWidth);
+        ApplyPresentation(host, presentation, readingWidth);
     }
 
     internal static void ApplyPresentation(RichTextBox host, double fontSize, double readingWidth)
+        => ApplyPresentation(host, new ReadingPresentation(
+            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+
+    internal static void ApplyPresentation(RichTextBox host, ReadingPresentation value, double readingWidth)
     {
         host.VerifyAccess();
+        var presentation = value.Normalize();
+        double fontSize = presentation.FontSize;
         if (!double.IsFinite(fontSize) || fontSize <= 0)
             throw new ArgumentOutOfRangeException(nameof(fontSize));
         if (!double.IsFinite(readingWidth) || readingWidth <= 0)
             throw new ArgumentOutOfRangeException(nameof(readingWidth));
         var document = host.Document;
         double oldFontSize = document.FontSize;
-        bool fontChanged = oldFontSize != fontSize || document.LineHeight != fontSize * 1.75;
+        bool fontChanged = oldFontSize != fontSize
+            || document.LineHeight != fontSize * presentation.LineHeight
+            || !string.Equals(document.FontFamily.Source, presentation.FontFamily, StringComparison.OrdinalIgnoreCase);
         var oldPadding = document.PagePadding;
         double vertical = host.VerticalOffset, horizontal = host.HorizontalOffset;
         if (fontChanged)
         {
+            document.FontFamily = new FontFamily(presentation.FontFamily);
             document.FontSize = fontSize;
-            document.LineHeight = fontSize * 1.75;
+            document.LineHeight = fontSize * presentation.LineHeight;
             foreach (var block in document.Blocks)
-                UpdateBlockPresentation(block, fontSize, fontSize / oldFontSize);
+                UpdateBlockPresentation(block, presentation, fontSize / oldFontSize);
         }
+        else
+        {
+            foreach (var block in document.Blocks)
+                UpdateBlockPresentation(block, presentation, 1);
+        }
+        host.FontFamily = new FontFamily(presentation.FontFamily);
         if (host.FontSize != fontSize) host.FontSize = fontSize;
         ApplyPageLayout(host, readingWidth);
         if (!fontChanged && oldPadding == document.PagePadding) return;
@@ -189,15 +221,16 @@ public sealed partial class RenderedReading
         caption.FontSize = Math.Max(11, fontSize * .8);
     }
 
-    private static void UpdateBlockPresentation(Block block, double fontSize, double ratio)
+    private static void UpdateBlockPresentation(Block block, ReadingPresentation presentation, double ratio)
     {
+        double fontSize = presentation.FontSize;
         switch (block)
         {
             case Paragraph paragraph:
                 if (paragraph.Tag is ReadingBlock source)
                 {
                     var margin = paragraph.Margin;
-                    StyleBlock(paragraph, source, fontSize);
+                    StyleBlock(paragraph, source, presentation);
                     // Rich lists put indentation on the outer List, not its paragraphs.
                     if (paragraph.Parent is ListItem) paragraph.Margin = margin;
                 }
@@ -205,17 +238,17 @@ public sealed partial class RenderedReading
                 break;
             case System.Windows.Documents.List list:
                 foreach (var item in list.ListItems)
-                    foreach (var child in item.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                    foreach (var child in item.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case Table table:
                 table.FontSize = fontSize * .9;
                 foreach (var group in table.RowGroups)
                     foreach (var row in group.Rows)
                         foreach (var cell in row.Cells)
-                            foreach (var child in cell.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                            foreach (var child in cell.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case Section section:
-                foreach (var child in section.Blocks) UpdateBlockPresentation(child, fontSize, ratio);
+                foreach (var child in section.Blocks) UpdateBlockPresentation(child, presentation, ratio);
                 break;
             case BlockUIContainer { Tag: ReadingBlock diagramSource, Child: FrameworkElement diagram }
                 when MermaidBlock.IsMermaid(diagramSource):
@@ -553,6 +586,7 @@ internal sealed class MarkdownImageResult(BitmapSource? bitmap, string? error, A
 internal static class MarkdownImageLoader
 {
     private sealed class ImageSourceException(string message) : Exception(message);
+    private sealed record ImageInput(string? Path, byte[]? InlineBytes, MarkdownImageCacheKey CacheKey);
     internal const int MaximumBytes = 16 * 1024 * 1024;
     internal const long MaximumPixels = 32_000_000;
     private static readonly SemaphoreSlim DecodeSlots = new(2);
@@ -560,6 +594,24 @@ internal static class MarkdownImageLoader
     internal static async Task<MarkdownImageResult> LoadAsync(string target, string? sourcePath,
         MarkdownImageBudget budget, CancellationToken cancellation)
     {
+        ImageInput input;
+        try { input = await Task.Run(() => PrepareInput(target, sourcePath), cancellation).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (FileNotFoundException) { return new(null, "找不到图片文件"); }
+        catch (DirectoryNotFoundException) { return new(null, "找不到图片目录"); }
+        catch (ImageSourceException error) { return new(null, error.Message); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or SecurityException or
+            FormatException or ArgumentException or OverflowException)
+        { return new(null, "图片缺失、损坏或无法读取"); }
+
+        if (MarkdownImageCache.TryGet(input.CacheKey, out var cached))
+        {
+            if (!budget.Reserve(cached.SourceBytes, cached.DecodedPixels))
+                return new(null, "本篇图片总量超过上限（64 MiB / 4800 万解码像素）");
+            return new MarkdownImageResult(cached.Bitmap, null,
+                () => budget.Release(cached.SourceBytes, cached.DecodedPixels));
+        }
+
         await DecodeSlots.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
@@ -570,28 +622,16 @@ internal static class MarkdownImageLoader
                 try
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    byte[] bytes;
-                    if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                    byte[] bytes = input.InlineBytes ?? await ReadFileAsync(input.Path!, cancellation);
+                    if (bytes.Length > MaximumBytes)
+                        return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                    if (input.Path is not null)
                     {
-                        const string header = "data:image/png;base64,";
-                        if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
-                            return new MarkdownImageResult(null, "仅支持 data:image/png;base64 内嵌图片");
-                        if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
-                            return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
-                        bytes = Convert.FromBase64String(target[header.Length..]);
-                    }
-                    else
-                    {
-                        string path = LocalPath(target, sourcePath);
-                        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
-                            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                        if (file.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
-                        bytes = new byte[checked((int)file.Length)];
-                        await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
-                        if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
+                        var info = new FileInfo(input.Path);
+                        if (!info.Exists || info.Length != input.CacheKey.SourceLength ||
+                            info.LastWriteTimeUtc.Ticks != input.CacheKey.LastWriteUtcTicks)
                             return new MarkdownImageResult(null, "图片读取期间发生变化，请刷新预览");
                     }
-                    if (bytes.Length > MaximumBytes) return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
                     cancellation.ThrowIfCancellationRequested();
                     using var stream = new MemoryStream(bytes, writable: false);
                     var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnDemand);
@@ -621,6 +661,8 @@ internal static class MarkdownImageLoader
                         cancellation.ThrowIfCancellationRequested();
                         bitmap.Freeze();
                         success = true;
+                        MarkdownImageCache.Add(input.CacheKey,
+                            new MarkdownImageCacheEntry(bitmap, bytes.Length, pixels));
                         return new MarkdownImageResult(bitmap, null, () => budget.Release(bytes.Length, pixels));
                     }
                     finally { if (!success) budget.Release(bytes.Length, pixels); }
@@ -637,6 +679,41 @@ internal static class MarkdownImageLoader
         finally { DecodeSlots.Release(); }
     }
 
+    private static ImageInput PrepareInput(string target, string? sourcePath)
+    {
+        if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            const string header = "data:image/png;base64,";
+            if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
+                throw new ImageSourceException("仅支持 data:image/png;base64 内嵌图片");
+            if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
+                throw new ImageSourceException("图片超过 16 MiB 上限");
+            string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)));
+            return new ImageInput(null, Convert.FromBase64String(target[header.Length..]),
+                new MarkdownImageCacheKey("data:" + identity, target.Length, 0, 0, 0));
+        }
+
+        string path = LocalPath(target, sourcePath);
+        var info = new FileInfo(path);
+        if (!info.Exists) throw new FileNotFoundException(path);
+        if (info.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
+        return new ImageInput(path, null, new MarkdownImageCacheKey(path, info.Length,
+            info.LastWriteTimeUtc.Ticks, 0, 0));
+    }
+
+    private static async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellation)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (file.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
+        byte[] bytes = new byte[checked((int)file.Length)];
+        await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
+        if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
+            throw new ImageSourceException("图片读取期间发生变化，请刷新预览");
+        return bytes;
+    }
+
     private static string LocalPath(string target, string? sourcePath)
     {
         if (target.Length > 32767) throw new ImageSourceException("图片路径过长");
@@ -649,7 +726,11 @@ internal static class MarkdownImageLoader
                 throw new ImageSourceException("网络图片未加载");
             path = uri.LocalPath;
         }
-        else path = Uri.UnescapeDataString(target);
+        else
+        {
+            path = Uri.UnescapeDataString(target);
+        }
+        path = path.Replace('/', Path.DirectorySeparatorChar);
         if (MarkdownImages.IsRemote(path)) throw new ImageSourceException("网络图片未加载");
         if (string.IsNullOrWhiteSpace(path)) throw new ImageSourceException("图片路径为空");
         if (!Path.IsPathFullyQualified(path))
@@ -699,12 +780,34 @@ internal sealed class MarkdownImageView : Grid
         Unloaded += (_, _) =>
         {
             loading?.Cancel();
+            if (!finished) LoadingStarted = false;
+            MarkdownImageScheduler.Unregister(this, host);
             if (host is not null) host.SizeChanged -= HostSizeChanged;
             host = null;
         };
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs args)
+    internal bool LoadingStarted { get; private set; }
+    internal bool IsReady => finished && image.Source is BitmapSource;
+    internal bool IsFailed => finished && image.Source is null;
+
+    public void Retry()
+    {
+        if (!IsFailed) return;
+        loading?.Cancel();
+        MarkdownImageScheduler.Unregister(this, host);
+        loading = null;
+        LoadingStarted = false;
+        finished = false;
+        image.Source = null;
+        image.Visibility = Visibility.Collapsed;
+        status.Text = "图片加载中：" + (reference.Alt.Length > 160 ? reference.Alt[..160] + "…" : reference.Alt);
+        status.Visibility = Visibility.Visible;
+        InvalidateMeasure();
+        OnLoaded(this, new RoutedEventArgs(LoadedEvent));
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs args)
     {
         if (host is null)
         {
@@ -717,6 +820,13 @@ internal sealed class MarkdownImageView : Grid
         }
         InvalidateMeasure();
         if (finished || loading is { IsCancellationRequested: false }) return;
+        MarkdownImageScheduler.Register(this, host);
+    }
+
+    internal async void StartLoading()
+    {
+        if (finished || loading is { IsCancellationRequested: false } || LoadingStarted) return;
+        LoadingStarted = true;
         using var request = new CancellationTokenSource();
         loading = request;
         try
@@ -735,12 +845,19 @@ internal sealed class MarkdownImageView : Grid
                     image.Visibility = Visibility.Visible;
                     status.Visibility = Visibility.Collapsed;
                 }
-                else status.Text = "图片加载失败：" + result.Error;
+                else status.Text = "图片加载失败：" + result.Error + "  · 点击重试";
                 InvalidateMeasure();
             });
         }
         catch (OperationCanceledException) { }
-        finally { if (ReferenceEquals(loading, request)) loading = null; }
+        finally
+        {
+            if (ReferenceEquals(loading, request))
+            {
+                loading = null;
+                if (request.IsCancellationRequested && !finished) LoadingStarted = false;
+            }
+        }
     }
 
     private void HostSizeChanged(object sender, SizeChangedEventArgs args) => InvalidateMeasure();

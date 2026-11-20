@@ -37,6 +37,9 @@ internal static class Program
         Test("real native selection copy adds image-bearing RTF for full and partial image selections", NativeSelectedImages);
         Test("WPF default in-memory paste chooses a complete image-bearing selection format", NativeDefaultPaste);
         Test("line breaks code quote emphasis and ordered list semantics survive export", Formatting);
+        Test("Markdown nested mixed lists export real parent child HTML", NestedListClipboardChecks.Structure);
+        Test("Markdown zero and discontinuous ordered children retain numbers", NestedListClipboardChecks.Numbering);
+        Test("partial nested list copy excludes parents and siblings", NestedListClipboardChecks.Partial);
         Test("rectangular selection excludes adjacent image-only cells", RectangularImages);
         Test("unknown UI containers are not exported as missing images", UnknownUi);
         Test("blank table cells retain their column position in HTML and native rich formats", EmptyCells);
@@ -46,6 +49,10 @@ internal static class Program
         Test("disabled empty drag and nested text input copy keep defaults", DefaultBehavior);
         Test("pending and excessive images have explicit placeholders without URI access", MissingAndLimitedImages);
         Test("oversized selected text falls back atomically to native formats", TextLimit);
+        Test("复制快照只依赖已冻结资源", ClipboardSnapshotIsSelfContained);
+        Test("全文快照发布完整格式并按图片数量选择 Bitmap", ClipboardSnapshotFormats);
+        Test("富文本导出失败仍保留 UnicodeText", RichExportFailureKeepsUnicodeText);
+        Test("Attach 富文本失败只发布 UnicodeText 和 Text", AttachRichExportFailureIsAtomic);
         SharingChecks.Run(Test);
         MainWindowSharingChecks.Run(Test);
         Console.WriteLine($"Clipboard checks: {passed}/{passed + failed} passed");
@@ -61,6 +68,190 @@ internal static class Program
         Check(data.GetDataPresent(DataFormats.Rtf, false), "WPF default lacks RTF");
         Check(data.GetDataPresent(DataFormats.Xaml, false), "WPF default lacks XAML");
         Check(!data.GetDataPresent(DataFormats.Html, false), "WPF baseline unexpectedly has HTML");
+    }
+
+    private static void ClipboardSnapshotIsSelfContained()
+    {
+        var image = Image();
+        var box = Box(new Paragraph(new Run("前文😀")), new Paragraph(new InlineUIContainer(image)),
+            new Paragraph(new Run("后文")));
+        box.SelectAll();
+        var snapshotFactory = typeof(ReadingClipboard).GetMethod("CreateSnapshot",
+            BindingFlags.NonPublic | BindingFlags.Static, binder: null,
+            types: new[] { typeof(FlowDocument), typeof(TextRange) }, modifiers: null);
+        Check(snapshotFactory is not null, "缺少冻结剪贴板快照接口");
+        var snapshot = snapshotFactory!.Invoke(null,
+            new object[] { box.Document, new TextRange(box.Document.ContentStart, box.Document.ContentEnd) });
+        Check(snapshot is not null, "冻结剪贴板快照创建失败");
+        var dataFactory = typeof(ReadingClipboard).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(method => method.Name == "CreateData" &&
+                method.GetParameters() is [{ ParameterType: var parameterType }] &&
+                parameterType == snapshot!.GetType());
+        Check(dataFactory is not null, "缺少从冻结快照创建剪贴板数据的接口");
+        var result = dataFactory!.Invoke(null, new[] { snapshot }) as ReadingClipboardResult;
+        Check(result is not null, "快照创建剪贴板数据失败");
+        Check(result!.Data.GetDataPresent(DataFormats.XamlPackage, false), "快照缺少 XamlPackage");
+        image.Source = null;
+        Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
+            ((string)result.Data.GetData(DataFormats.UnicodeText, false)!).Contains("前文😀"),
+            "快照仍依赖已变更的实时控件资源");
+        using var package = (MemoryStream)result.Data.GetData(DataFormats.XamlPackage, false)!;
+        package.Position = 0;
+        var restored = new FlowDocument();
+        new TextRange(restored.ContentStart, restored.ContentEnd).Load(package, DataFormats.XamlPackage);
+        Check(restored.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Select(c => c.Child).OfType<Image>()
+            .Any(item => item.Source is BitmapSource),
+            "冻结快照中的图片无法独立还原");
+    }
+
+    private static void RichExportFailureKeepsUnicodeText()
+    {
+        var document = new FlowDocument();
+        int maximumElements = (int)typeof(ReadingClipboard)
+            .GetField("MaximumElements", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        for (int i = 0; i <= maximumElements; i++)
+            document.Blocks.Add(new Paragraph(new Run("Unicode😀保留")));
+        var box = new RichTextBox { Document = document };
+        box.SelectAll();
+        ReadingClipboard.Attach(box, () => true);
+        var result = ReadingClipboard.CreateFullDocumentData(box);
+        Check(result is not null, "富文本导出失败后没有返回降级数据");
+        Check(result!.Data.GetDataPresent(DataFormats.UnicodeText, false),
+            "富文本导出失败后没有保留 UnicodeText");
+        Check(result.Data.GetDataPresent(DataFormats.Text, false),
+            "富文本导出失败后没有保留 Text");
+        Check(!result.Data.GetDataPresent(DataFormats.Html, false) &&
+            !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
+            !result.Data.GetDataPresent(DataFormats.XamlPackage, false),
+            "富文本导出失败后仍发布了不完整的富文本格式");
+    }
+
+    private static void AttachRichExportFailureIsAtomic()
+    {
+        var document = new FlowDocument();
+        int maximumElements = (int)typeof(ReadingClipboard)
+            .GetField("MaximumElements", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        for (int i = 0; i <= maximumElements; i++)
+            document.Blocks.Add(new Paragraph(new Run("Attach 快照文本😀")));
+        var box = new RichTextBox { Document = document };
+        box.SelectAll();
+        var prepare = typeof(ReadingClipboard).GetMethod("PrepareSelection",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var payload = prepare.Invoke(null, [box])!;
+        var result = (ReadingClipboardResult)payload.GetType().GetProperty("Result")!.GetValue(payload)!;
+        Check(result.Data.GetDataPresent(DataFormats.UnicodeText, false) &&
+            result.Data.GetDataPresent(DataFormats.Text, false),
+            "Attach degradation did not prepare both plain text flavors");
+        Check(!result.Data.GetDataPresent(DataFormats.Html, false) &&
+            !result.Data.GetDataPresent(DataFormats.Rtf, false) &&
+            !result.Data.GetDataPresent(DataFormats.XamlPackage, false) &&
+            !result.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "Attach degradation prepared a rich format");
+        string snapshotText = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(snapshotText == box.Selection.Text,
+            "Attach degradation did not use the selection snapshot plain text");
+        var settingData = new DataObject();
+        ReadingClipboard.Attach(box, () => true);
+        var setting = new DataObjectSettingDataEventArgs(settingData, DataFormats.Xaml);
+        box.RaiseEvent(setting);
+        Check(setting.CommandCancelled,
+            "Attach degradation did not cancel WPF live XAML generation");
+        Check(snapshotText == (string)result.Data.GetData(DataFormats.Text, false)!,
+            "Attach degradation plain text flavors differ");
+
+        var stableRun = new Run("Attach 冻结文本😀");
+        var stableBox = Box(new Paragraph(stableRun));
+        stableBox.SelectAll();
+        var stableData = NativeData(stableBox);
+        ReadingClipboard.Attach(stableBox, () => true);
+        var stableSetting = new DataObjectSettingDataEventArgs(stableData, DataFormats.Xaml);
+        stableBox.RaiseEvent(stableSetting);
+        Check(stableSetting.CommandCancelled,
+            "Attach did not cancel WPF live XAML generation before Copying");
+        string stableSnapshotText = stableBox.Selection.Text;
+        stableRun.Text = "Attach 实时文本";
+        stableBox.RaiseEvent(new DataObjectCopyingEventArgs(stableData, false));
+        Check((string)stableData.GetData(DataFormats.UnicodeText, false)! == stableSnapshotText,
+            "Attach Copying read plain text from the live selection");
+    }
+
+    private static void ClipboardSnapshotFormats()
+    {
+        var image = Image();
+        var preview = Box(new Paragraph(new Run("前文😀")), new Paragraph(new InlineUIContainer(image)),
+            new Paragraph(new Run("后文")));
+        preview.SelectAll();
+        var result = ReadingClipboard.CreateFullDocumentData(preview);
+        Check(result is not null, "全文复制没有返回结果");
+        Check(result!.Data.GetDataPresent(DataFormats.Html, false), "HTML missing");
+        Check(result.Data.GetDataPresent(DataFormats.Rtf, false), "RTF missing");
+        Check(result.Data.GetDataPresent(DataFormats.XamlPackage, false), "XamlPackage missing");
+        Check(result.Data.GetDataPresent(DataFormats.UnicodeText, false), "UnicodeText missing");
+        Check(result.Data.GetDataPresent(DataFormats.Bitmap, false) == false,
+            "混合文字和图片全文发布了误导性的 Bitmap");
+
+        string html = (string)result.Data.GetData(DataFormats.Html, false)!;
+        byte[] htmlBytes = Encoding.UTF8.GetBytes(html);
+        int fragmentStart = FieldOffset(html, "StartFragment");
+        int fragmentEnd = FieldOffset(html, "EndFragment");
+        string fragment = Encoding.UTF8.GetString(htmlBytes, fragmentStart, fragmentEnd - fragmentStart);
+        var htmlImage = XDocument.Parse("<root>" + fragment + "</root>").Descendants("img").Single();
+        using var htmlStream = new MemoryStream(Convert.FromBase64String(
+            htmlImage.Attribute("src")!.Value["data:image/png;base64,".Length..]));
+        Check(BitmapFrame.Create(htmlStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).PixelWidth == 2,
+            "HTML 图片在删除源资源后无法解码");
+
+        string rtf = (string)result.Data.GetData(DataFormats.Rtf, false)!;
+        Check(rtf.Contains("\\pict"), "RTF 缺少图片");
+        using var rtfStream = new MemoryStream(Encoding.ASCII.GetBytes(rtf));
+        var restoredRtf = new FlowDocument();
+        new TextRange(restoredRtf.ContentStart, restoredRtf.ContentEnd).Load(rtfStream, DataFormats.Rtf);
+        Check(restoredRtf.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Any(container => container.Child is Image { Source: BitmapSource }),
+            "RTF 图片在删除源资源后无法解码");
+
+        using var package = new MemoryStream(((MemoryStream)result.Data.GetData(DataFormats.XamlPackage, false)!).ToArray());
+        var restoredPackage = new FlowDocument();
+        new TextRange(restoredPackage.ContentStart, restoredPackage.ContentEnd).Load(package, DataFormats.XamlPackage);
+        Check(restoredPackage.Blocks.OfType<Paragraph>().SelectMany(p => p.Inlines)
+            .OfType<InlineUIContainer>().Any(container => container.Child is Image { Source: BitmapSource }),
+            "XamlPackage 图片在删除源资源后无法解码");
+
+        image.Source = null;
+        htmlStream.Position = 0;
+        Check(BitmapFrame.Create(htmlStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).PixelHeight == 1,
+            "快照输出依赖删除后的实时图片资源");
+
+        var mixed = Box(new Paragraph(new InlineUIContainer(Image())),
+            new Paragraph(new InlineUIContainer(Image())));
+        mixed.SelectAll();
+        var mixedResult = ReadingClipboard.CreateFullDocumentData(mixed);
+        Check(mixedResult is not null && !mixedResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "多图全文发布了误导性的 Bitmap");
+
+        var single = Box(new Paragraph(new InlineUIContainer(Image())));
+        single.SelectAll();
+        var singleResult = ReadingClipboard.CreateFullDocumentData(single);
+        Check(singleResult is not null && singleResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "单图选区没有发布 Bitmap");
+
+        var imageWithPlaceholderParagraph = new Paragraph(new InlineUIContainer(Image()));
+        imageWithPlaceholderParagraph.Inlines.Add(
+            new InlineUIContainer(new Border { Child = new TextBlock { Text = "图表暂未显示" } }));
+        var imageWithPlaceholder = Box(imageWithPlaceholderParagraph);
+        imageWithPlaceholder.SelectAll();
+        var placeholderResult = ReadingClipboard.CreateFullDocumentData(imageWithPlaceholder);
+        Check(placeholderResult is not null && !placeholderResult.Data.GetDataPresent(DataFormats.Bitmap, false),
+            "图片和占位内容全文发布了误导性的 Bitmap");
+    }
+
+    private static int FieldOffset(string cfHtml, string field)
+    {
+        int start = cfHtml.IndexOf(field + ":", StringComparison.Ordinal) + field.Length + 1;
+        return int.Parse(cfHtml.AsSpan(start, 10), CultureInfo.InvariantCulture);
     }
 
     private static void Structure()
@@ -232,6 +423,9 @@ internal static class Program
             Check((string)native.GetData(DataFormats.UnicodeText, false)! == plain, "native plain text changed");
             Check(!ReferenceEquals(native.GetData(DataFormats.XamlPackage, false), package), "image selection kept stale native package");
             Check(Fragment(native).Contains("<img"), "selection HTML image missing");
+            Check(native.GetDataPresent(DataFormats.Bitmap, false) == !all,
+                all ? "mixed document selection advertised a misleading Bitmap" :
+                "single image selection did not advertise Bitmap through Attach");
         }
     }
 

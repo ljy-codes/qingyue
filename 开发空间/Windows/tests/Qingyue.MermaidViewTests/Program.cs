@@ -123,8 +123,35 @@ internal static class Program
         foreach (bool self in new[] { false, true })
             Test($"{token} {(self ? "自调用" : "普通消息")}：真实Canvas线身及{(token.EndsWith(')') ? "开放箭头" : "无箭头")}几何",
                 () => CheckMessageGeometry(token, self));
+        Test("流程图按方向绘制节点、连线并保留横向滚动", Flowchart);
         Console.WriteLine($"{passed} passed, {failed} failed. 无窗口、无网络、未访问剪贴板。");
         return failed == 0 ? 0 : 1;
+    }
+
+    private static void Flowchart()
+    {
+        const string source = """
+            flowchart LR
+            A[开始] -->|下一步| B(处理)
+            B -.-> C{失败}
+            C ==> D((结束))
+            """;
+        Check(MermaidFlowchart.TryParse(source, out var diagram, out var error), "流程图解析失败：" + error);
+        var view = new MermaidFlowchartView(diagram!);
+        Layout(view, 420);
+        Check(view.DiagramWidth > view.DiagramHeight && view.DiagramWidth > 700, "LR 流程图没有形成横向画布");
+        Check(Descendants<ScrollViewer>(view).Any(scroll => scroll.HorizontalScrollBarVisibility == ScrollBarVisibility.Auto &&
+            scroll.ScrollableWidth > 100), "LR 流程图没有横向滚动范围");
+        Check(Descendants<Polygon>(view).Count() >= 2, "缺少菱形节点或箭头几何");
+        Check(Descendants<Ellipse>(view).Any(), "缺少圆形节点");
+        Check(Descendants<Line>(view).Any(line => line.StrokeDashArray.Count > 0), "缺少虚线连线");
+        Check(AutomationProperties.GetName(view).Contains("流程图"), "缺少流程图可访问名称");
+
+        Check(MermaidFlowchart.TryParse(source.Replace("LR", "TD", StringComparison.Ordinal),
+            out var vertical, out var verticalError), "TD 流程图解析失败：" + verticalError);
+        var verticalView = new MermaidFlowchartView(vertical!);
+        Layout(verticalView, 420);
+        Check(verticalView.DiagramHeight > verticalView.DiagramWidth, "TD 流程图没有形成纵向画布");
     }
 
     private static void CheckMessageGeometry(string token, bool self)

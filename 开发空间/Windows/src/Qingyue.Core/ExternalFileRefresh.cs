@@ -20,16 +20,17 @@ public sealed class ExternalFileRefresh
         version = source.ChangeVersion;
     }
 
-    public Task<ExternalRefreshResult> ReadAsync(CancellationToken cancellationToken = default) =>
+    public Task<ExternalRefreshResult> ReadAsync(CancellationToken cancellationToken = default,
+        bool includeLocalChanges = false) =>
         Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = Read();
+            var result = Read(includeLocalChanges);
             cancellationToken.ThrowIfCancellationRequested();
             return result;
         }, cancellationToken);
 
-    private ExternalRefreshResult Read()
+    private ExternalRefreshResult Read(bool includeLocalChanges)
     {
         if (!Snapshot.WasSaved || Snapshot.Path is null)
             return Result(ExternalRefreshStatus.Skipped);
@@ -37,7 +38,7 @@ public sealed class ExternalFileRefresh
         {
             bool dirty = Snapshot.Text != Snapshot.BaselineText || Snapshot.Codec != Snapshot.BaselineCodec
                 || Snapshot.LineEnding != Snapshot.BaselineLineEnding;
-            if (dirty)
+            if (dirty && !includeLocalChanges)
                 return Result(DocumentFile.Restore(Snapshot).DiskChanged()
                     ? ExternalRefreshStatus.Conflict : ExternalRefreshStatus.Unchanged);
             // Preserve explicitly chosen BOM-less UTF-16/GB18030. UTF-8 BOM is
@@ -56,8 +57,8 @@ public sealed class ExternalFileRefresh
 
     private ExternalRefreshResult Result(ExternalRefreshStatus status) => new(this, status, null, null);
 
-    internal bool TryApply(DocumentFile replacement) =>
-        source.TryAcceptExternalVersion(Snapshot, version, replacement);
+    internal bool TryApply(DocumentFile replacement, bool discardLocalChanges) =>
+        source.TryAcceptExternalVersion(Snapshot, version, replacement, discardLocalChanges);
 }
 
 public sealed class ExternalRefreshResult
@@ -79,6 +80,6 @@ public sealed class ExternalRefreshResult
     }
 
     /// <summary>False for dirty, changed, renamed, saved, or already-applied documents.</summary>
-    public bool TryApply() => Status == ExternalRefreshStatus.Changed && replacement is not null
-        && request.TryApply(replacement);
+    public bool TryApply(bool discardLocalChanges = false) => Status == ExternalRefreshStatus.Changed && replacement is not null
+        && request.TryApply(replacement, discardLocalChanges);
 }

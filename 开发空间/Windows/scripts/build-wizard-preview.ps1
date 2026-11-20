@@ -26,16 +26,11 @@ LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
 Var Dialog
 Var Control
 Var PurgeChoice
-Var PurgeConfirmed
-Var PurgeConfirmCheck
 Var UserDataPath
 Var KeepRadio
 Var PurgeRadio
-Var Result
-Page custom WelcomePage
 Page custom OptionsPage OptionsLeave
-Page custom ConfirmPage ConfirmLeave
-Page custom FinishPage
+Page instfiles RemovePre
 !insertmacro QingyueUninstallPages ""
 Function .onInit
 StrCpy $PurgeChoice ${BST_UNCHECKED}

@@ -27,7 +27,8 @@ internal static partial class Program
                 // Exercise the controller's actual Initialize/SelectTab/TabChanged
                 // hooks; no test-only subscriptions may hide a missing integration.
                 await ReproduceSwitchRefresh(window, root);
-                if (!args.Contains("--repro")) await RunAdditionalTests(window, root);
+                if (args.Contains("--anchor")) await ReadingAnchorFollowsInsertedPrefix(window, root);
+                else if (!args.Contains("--repro")) await RunAdditionalTests(window, root);
             }
             catch (Exception ex)
             {

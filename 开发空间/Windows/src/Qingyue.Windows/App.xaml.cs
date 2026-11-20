@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace Qingyue.Windows;
 
@@ -18,6 +19,7 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         base.OnStartup(e);
         DispatcherUnhandledException += (_, args) =>
         {

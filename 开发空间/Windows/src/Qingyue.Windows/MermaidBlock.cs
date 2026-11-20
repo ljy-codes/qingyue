@@ -16,8 +16,23 @@ internal static class MermaidBlock
     internal static FrameworkElement Create(ReadingBlock block, double fontSize, bool sourceBelow = false,
         Budget? budget = null)
     {
-        bool parsed = MermaidSequence.TryParse(block.Text, out var diagram, out var error);
-        if (parsed && budget is not null && !budget.TakeEvents(diagram!.Events.Count))
+        string input = block.Text.TrimStart('\ufeff', ' ', '\t', '\r', '\n');
+        bool flowchartSource = input.StartsWith("flowchart", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("graph", StringComparison.OrdinalIgnoreCase);
+        SequenceDiagram? sequence = null;
+        MermaidFlowchart? flowchart = null;
+        string? error;
+        bool parsed;
+        if (flowchartSource)
+        {
+            parsed = MermaidFlowchart.TryParse(block.Text, out flowchart, out error);
+        }
+        else
+        {
+            parsed = MermaidSequence.TryParse(block.Text, out sequence, out error);
+        }
+        int geometryCount = sequence?.Events.Count ?? flowchart?.Edges.Count ?? 0;
+        if (parsed && budget is not null && !budget.TakeEvents(geometryCount))
         {
             parsed = false;
             error = "本篇图表事件总量超过 400，保留源码以保证阅读响应。";
@@ -25,7 +40,7 @@ internal static class MermaidBlock
         var content = new StackPanel();
         var title = new TextBlock
         {
-            Text = parsed ? "MERMAID  /  时序图" : "MERMAID  /  源码",
+            Text = parsed ? flowchart is not null ? "MERMAID  /  流程图" : "MERMAID  /  时序图" : "MERMAID  /  源码",
             FontSize = Math.Max(11, fontSize * .75), FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 12)
         };
@@ -41,7 +56,9 @@ internal static class MermaidBlock
             };
             hint.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
             content.Children.Add(hint);
-            content.Children.Add(new MermaidSequenceView(diagram!, Math.Clamp(fontSize * .85, 11, 22)));
+            content.Children.Add(flowchart is not null
+                ? new MermaidFlowchartView(flowchart, Math.Clamp(fontSize * .85, 11, 22))
+                : new MermaidSequenceView(sequence!, Math.Clamp(fontSize * .85, 11, 22)));
         }
         else
         {
@@ -87,7 +104,8 @@ internal static class MermaidBlock
         };
         panel.SetResourceReference(Border.BackgroundProperty, "PanelBrush");
         panel.SetResourceReference(Border.BorderBrushProperty, "BorderBrush");
-        AutomationProperties.SetName(panel, parsed ? "Mermaid 时序图" : "Mermaid 图表提示");
+        AutomationProperties.SetName(panel,
+            parsed ? flowchart is not null ? "Mermaid 流程图" : "Mermaid 时序图" : "Mermaid 图表提示");
         return panel;
     }
 

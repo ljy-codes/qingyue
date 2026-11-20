@@ -13,5 +13,9 @@
     <Page Include="../../src/Qingyue.Windows/Theme.xaml" Link="Theme.xaml" />
     <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" />
     <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.png" Link="Assets/Qingyue.png" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-sky.png" Link="Assets/Qingyue-sky.png" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-sakura.png" Link="Assets/Qingyue-sakura.png" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-mint.png" Link="Assets/Qingyue-mint.png" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-peach.png" Link="Assets/Qingyue-peach.png" />
   </ItemGroup>
 </Project>

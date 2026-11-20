@@ -10,10 +10,16 @@
     <!-- Compile into this project's own obj/bin; never lock the application's outputs. -->
     <Compile Include="../../src/Qingyue.Core/*.cs" Link="Core/%(Filename)%(Extension)" />
     <Compile Remove="WpfTests.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
+    <Compile Remove="MarkdownNavigationChecks.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
+    <Compile Remove="MarkdownProductivityChecks.cs" Condition="'$(EditingCoreOnly)' == 'true'" />
     <Compile Include="../../src/Qingyue.Windows/*.cs" Exclude="../../src/Qingyue.Windows/App.xaml.cs" Link="Windows/%(Filename)%(Extension)" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Page Include="../../src/Qingyue.Windows/MainWindow.xaml" Link="MainWindow.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Page Include="../../src/Qingyue.Windows/Theme.xaml" Link="Theme.xaml" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" Condition="'$(EditingCoreOnly)' != 'true'" />
     <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue.png" Link="Assets/Qingyue.png" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-sky.png" Link="Assets/Qingyue-sky.png" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-sakura.png" Link="Assets/Qingyue-sakura.png" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-mint.png" Link="Assets/Qingyue-mint.png" Condition="'$(EditingCoreOnly)' != 'true'" />
+    <Resource Include="../../src/Qingyue.Windows/Assets/Qingyue-peach.png" Link="Assets/Qingyue-peach.png" Condition="'$(EditingCoreOnly)' != 'true'" />
   </ItemGroup>
 </Project>

@@ -37,7 +37,6 @@ public partial class MainWindow
         Panel.SetZIndex(layer, 1);
         tab.EditorSurface.Children.Add(layer);
         syntaxLayers.Add(tab, layer);
-        layer.Refresh();
     }
 
     private void RefreshSyntax(EditorTab tab)
@@ -48,6 +47,14 @@ public partial class MainWindow
     private void RefreshPresentation(EditorTab tab)
     {
         RefreshSyntax(tab);
+        bool reading = tab.IsReading && tab.Rendered is not null;
+        MainMenu.Visibility = reading || focusMode ? Visibility.Collapsed : Visibility.Visible;
+        BrandHeader.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
+        ReadingToolbar.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
+        EditOnlyTools.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
+        EditorStatusControls.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
+        ReadingCopyButton.Visibility = reading && tab.Kind == TextKind.Markdown
+            ? Visibility.Visible : Visibility.Collapsed;
         if (structureTab == tab && tab.Kind is not TextKind.Json and not TextKind.Jsonc)
         {
             structureTab = null; structureView = null; structureText = null;
@@ -70,11 +77,13 @@ public partial class MainWindow
             _ => LanguageCatalog.Get(tab.Kind).FormattingDescription + " · Ctrl+Alt+F"
         };
         StructureButton.IsEnabled = tab.Kind is TextKind.Json or TextKind.Jsonc;
-        StructureButton.Visibility = StructureButton.IsEnabled ? Visibility.Visible : Visibility.Collapsed;
+        StructureButton.Visibility = !reading && StructureButton.IsEnabled ? Visibility.Visible : Visibility.Collapsed;
         StructureButton.Content = structured ? "返回编辑" : "JSON 结构";
-        MarkdownButton.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
+        FormatButton.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
+        MarkdownButton.Visibility = !reading && tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
         bool markdown = RefreshMarkdownPresentation(tab);
         MarkdownButton.Content = markdown ? "关闭分屏" : "分屏编辑";
+        RefreshMarkdownWriting();
         CopyReadingButton.Visibility = tab.Kind == TextKind.Markdown &&
             (tab.IsReading && tab.Rendered is not null || markdown) ? Visibility.Visible : Visibility.Collapsed;
         CopyOptionsMenu.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
@@ -155,4 +164,16 @@ public sealed class DocumentLabelConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
 
     private static string KindLabel(TextKind kind) => LanguageCatalog.DisplayName(kind);
+}
+
+public sealed class OutlineIndentConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        int level = value is int number ? Math.Clamp(number, 1, 6) : 1;
+        return new Thickness((level - 1) * 14, 0, 0, 0);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        Binding.DoNothing;
 }

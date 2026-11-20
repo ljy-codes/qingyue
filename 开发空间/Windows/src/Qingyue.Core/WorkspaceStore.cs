@@ -200,7 +200,7 @@ public sealed class WorkspaceStore
                     try
                     {
                         if (backup is null) File.Delete(target);
-                        else File.Replace(backup, target, null, ignoreMetadataErrors: false);
+                        else File.Move(backup, target, overwrite: true);
                     }
                     catch (Exception rollback) when (IsDataError(rollback))
                     {
@@ -398,8 +398,12 @@ public sealed class WorkspaceStore
                 stream.Write(bytes);
                 stream.Flush(true);
             }
-            if (File.Exists(target)) File.Replace(temporary, target, backup, ignoreMetadataErrors: false);
-            else File.Move(temporary, target, false);
+            if (File.Exists(target))
+            {
+                if (backup is not null) File.Copy(target, backup, overwrite: false);
+                File.Move(temporary, target, overwrite: true);
+            }
+            else File.Move(temporary, target, overwrite: false);
         }
         finally
         {

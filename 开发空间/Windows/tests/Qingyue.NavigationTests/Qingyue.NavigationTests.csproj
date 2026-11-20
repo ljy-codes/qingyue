@@ -14,5 +14,9 @@
     <Page Include="$(NavigationWindowsSource)/Theme.xaml" Link="Theme.xaml" />
     <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue.ico" Link="Assets/Qingyue.ico" />
     <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue.png" Link="Assets/Qingyue.png" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue-sky.png" Link="Assets/Qingyue-sky.png" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue-sakura.png" Link="Assets/Qingyue-sakura.png" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue-mint.png" Link="Assets/Qingyue-mint.png" />
+    <Resource Include="$(NavigationWindowsSource)/Assets/Qingyue-peach.png" Link="Assets/Qingyue-peach.png" />
   </ItemGroup>
 </Project>

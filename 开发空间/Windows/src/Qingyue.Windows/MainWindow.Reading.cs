@@ -21,6 +21,7 @@ public partial class MainWindow
             tab.SourceAnchor = offset;
             tab.IsReading = false;
             tab.Editor.IsReadOnly = false;
+            tab.ReleaseReadingResources();
             DocumentHost.Content = tab.EditorSurface;
             tab.Editor.CaretIndex = EditorOffset(tab, offset);
             tab.Editor.Focus();
@@ -42,21 +43,36 @@ public partial class MainWindow
             ? tab.Reading.DisplayToSource(tab.Rendered.OffsetAt(tab.Preview.Selection.Start))
             : SourceOffset(tab, tab.Editor.CaretIndex);
 
-    private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true)
+    private void EnterReading(EditorTab tab, int? sourceAnchor = null, bool focus = true, bool snapToBlockStart = true)
     {
         tab.SourceAnchor = Math.Clamp(sourceAnchor ?? CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
         if (CanReuseReading(tab))
         {
+            if (snapToBlockStart) tab.SourceAnchor = SnapToReadingBlockStart(tab.Reading!, tab.SourceAnchor);
             PublishReading(tab, tab.Reading!, tab.Rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
             return;
         }
         var model = ReadingModel.Build(tab.File.Text, tab.Kind);
+        if (snapToBlockStart) tab.SourceAnchor = SnapToReadingBlockStart(model, tab.SourceAnchor);
         var rendered = PreviewLimits.CanRender(tab.File.Text, tab.Kind)
             ? tab.Kind == TextKind.Markdown
-                ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path, settings.FontSize + 1, settings.ReadingWidth)
-                : new RenderedReading(model, sourcePath: tab.File.Path)
+                ? RenderedReading.Markdown(model, tab.File.Text, tab.File.Path,
+                    CurrentReadingPresentation(), settings.ReadingWidth)
+                : new RenderedReading(model, sourcePath: tab.File.Path,
+                    presentation: CurrentReadingPresentation())
             : null;
         PublishReading(tab, model, rendered, tab.File.Text, tab.File.Path, tab.Kind, tab.SourceAnchor, focus);
+    }
+
+    private static int SnapToReadingBlockStart(ReadingModel model, int sourceAnchor)
+    {
+        int anchor = Math.Clamp(sourceAnchor, 0, int.MaxValue);
+        if (model.Blocks.Count == 0) return anchor;
+        var containing = model.Blocks.FirstOrDefault(block =>
+            anchor >= block.SourceStart && anchor <= block.SourceStart + block.SourceLength);
+        if (containing is not null) return containing.SourceStart;
+        var next = model.Blocks.FirstOrDefault(block => block.SourceStart > anchor);
+        return next?.SourceStart ?? model.Blocks[^1].SourceStart;
     }
 
     private static bool CanReuseReading(EditorTab tab) =>
@@ -75,14 +91,15 @@ public partial class MainWindow
         tab.IsReading = true;
         if (rendered is not null)
         {
+            var preview = tab.EnsurePreview(settings.FontSize + 1);
             tab.Editor.IsReadOnly = false;
-            tab.Preview.Document = rendered.Document;
+            preview.Document = rendered.Document;
             UpdateReadingWidth(tab);
             var pointer = rendered.PointerAt(model.SourceToDisplay(tab.SourceAnchor));
-            tab.Preview.Selection.Select(pointer, pointer);
+            preview.Selection.Select(pointer, pointer);
             if (CurrentTab == tab)
             {
-                DocumentHost.Content = tab.Preview;
+                DocumentHost.Content = preview;
                 if (focus) FocusLoadedReading(tab);
                 tab.DispatcherBringIntoView(pointer);
             }
@@ -90,6 +107,7 @@ public partial class MainWindow
         else
         {
             tab.Rendered = null;
+            tab.ReleasePreviewDocument();
             tab.Editor.IsReadOnly = true;
             tab.Editor.CaretIndex = EditorOffset(tab, tab.SourceAnchor);
             ScrollToCaret(tab);
@@ -124,11 +142,12 @@ public partial class MainWindow
     private void OutlineSelected(object sender, SelectionChangedEventArgs e)
     {
         if (followingOutline) return;
-        if (OutlineList.SelectedItem is not ReadingHeading heading || CurrentTab is not { } tab) return;
+        if (!TryGetOutlineLocation(OutlineList.SelectedItem, out int sourceStart, out int displayStart)
+            || CurrentTab is not { } tab) return;
         RememberReadingPosition(tab);
         if (tab.IsReading && tab.Rendered is not null)
         {
-            var pointer = tab.Rendered.PointerAt(heading.DisplayStart);
+            var pointer = tab.Rendered.PointerAt(displayStart);
             tab.Preview.Selection.Select(pointer, pointer);
             tab.DispatcherBringIntoView(pointer);
             tab.Preview.Focus();
@@ -136,17 +155,43 @@ public partial class MainWindow
         else
         {
             ExitStructureForEditing(tab);
-            tab.Editor.CaretIndex = EditorOffset(tab, heading.SourceStart);
+            tab.Editor.CaretIndex = EditorOffset(tab, sourceStart);
             ScrollToCaret(tab);
             tab.Editor.Focus();
+        }
+    }
+
+    private static IReadOnlyList<object> BuildOutlineItems(EditorTab tab, ReadingModel model) =>
+        tab.Kind == TextKind.Markdown
+            ? MarkdownOutline.Build(tab.File.Text, model).Cast<object>().ToArray()
+            : model.Headings.Cast<object>().ToArray();
+
+    private static bool TryGetOutlineLocation(object? item, out int sourceStart, out int displayStart)
+    {
+        switch (item)
+        {
+            case MarkdownOutlineEntry markdown:
+                sourceStart = markdown.SourceStart;
+                displayStart = markdown.DisplayStart;
+                return true;
+            case ReadingHeading heading:
+                sourceStart = heading.SourceStart;
+                displayStart = heading.DisplayStart;
+                return true;
+            default:
+                sourceStart = displayStart = 0;
+                return false;
         }
     }
 
     private void UpdateReadingWidth(EditorTab tab)
     {
         if (tab.Rendered is null) return;
-        tab.Rendered.UpdatePresentation(tab.Preview, settings.FontSize + 1, settings.ReadingWidth);
+        tab.Rendered.UpdatePresentation(tab.Preview, CurrentReadingPresentation(), settings.ReadingWidth);
     }
+
+    private ReadingPresentation CurrentReadingPresentation() =>
+        settings.ToPresentation() with { FontSize = settings.FontSize + 1 };
 
     private void UpdateReadingWidths()
     {
@@ -178,27 +223,44 @@ public partial class MainWindow
         ApplySidebar();
     }
 
-    public void ApplyTheme(bool dark)
+    public void ApplyTheme(bool dark) =>
+        ApplyTheme(dark ? ReaderThemeKind.Dark : ReaderThemeKind.Light);
+
+    public void ApplyTheme(ReaderThemeKind theme)
     {
-        settings.Dark = dark;
-        var names = new[] { "WindowBrush", "PanelBrush", "EditorBrush", "TextBrush", "MutedBrush", "BorderBrush", "AccentBrush", "SelectionBrush", "HoverBrush" };
-        var colors = dark
-            ? new[] { "#2B2B2B", "#333333", "#3F3F3F", "#DCDCCC", "#BDBDB5", "#585858", "#4782FF", "#365579", "#4A4A4A" }
-            : new[] { "#F3F5F8", "#E9EDF3", "#FFFFFF", "#17253B", "#53647A", "#CFD7E3", "#2464DB", "#CFDFFF", "#DFE7F4" };
-        for (int i = 0; i < names.Length; i++)
-            Resources[names[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colors[i]));
-        Resources[SystemColors.MenuBrushKey] = Resources["PanelBrush"];
-        Resources[SystemColors.MenuTextBrushKey] = Resources["TextBrush"];
-        Resources[SystemColors.WindowBrushKey] = Resources["PanelBrush"];
-        Resources[SystemColors.WindowTextBrushKey] = Resources["TextBrush"];
+        settings.Theme = ReaderTheme.NormalizeName(theme.ToString(), theme == ReaderThemeKind.Dark);
+        settings.Dark = theme == ReaderThemeKind.Dark;
+        ReaderTheme.Apply(Resources, theme);
+        ApplyNativeTitleBarTheme(settings.Dark);
         var accents = new[] { "AccentTextBrush", "SyntaxKeyBrush", "SyntaxStringBrush", "SyntaxValueBrush", "SyntaxCommentBrush", "UnsavedBrush", "SavedBrush" };
-        var accentColors = dark
+        var accentColors = settings.Dark
             ? new[] { "#88C8FF", "#88C8FF", "#FFD096", "#74DEC7", "#BAC5BA", "#FFBE72", "#74D6AD" }
             : new[] { "#1F60BD", "#175BB5", "#A64A0A", "#087563", "#5C6D59", "#A95A00", "#19764E" };
         for (int i = 0; i < accents.Length; i++)
             Resources[accents[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(accentColors[i]));
         foreach (var tab in tabs) RefreshSyntax(tab);
         SchedulePersist();
+    }
+
+    public void ApplyAppIconTheme(AppIconThemeKind theme)
+    {
+        settings.IconTheme = AppIconTheme.NormalizeName(theme.ToString());
+        Icon = AppIconTheme.Load(theme);
+    }
+
+    private void ApplyAppIconTheme()
+    {
+        ApplyAppIconTheme(AppIconTheme.Parse(settings.IconTheme));
+    }
+
+    private void ShowReadingAppearance()
+    {
+        var selection = Modal(() => ReadingAppearanceDialog.Show(this, settings));
+        if (selection is null) return;
+        selection.ApplyTo(settings);
+        ApplyAppIconTheme();
+        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
+        ApplyEditorSettings();
     }
 }
 

@@ -13,6 +13,53 @@ public partial class MainWindow
         persistTimer.Stop(); persistTimer.Start();
     }
 
+    private void ScheduleBookmarkSave()
+    {
+        if (!initialized || exitInProgress) return;
+        bookmarkSaveTimer.Stop();
+        bookmarkSaveTimer.Start();
+    }
+
+    private async Task<BookmarkSaveResult> SaveBookmarksAsync()
+    {
+        if (!bookmarksDirty)
+            return new BookmarkSaveResult(DateTimeOffset.UtcNow, []);
+        if (bookmarkSaveTask is not null)
+        {
+            await bookmarkSaveTask;
+            return new BookmarkSaveResult(DateTimeOffset.UtcNow, []);
+        }
+        var save = bookmarks.SaveAsync();
+        bookmarkSaveTask = save;
+        try
+        {
+            var result = await save;
+            if (result.Errors.Count == 0) bookmarksDirty = false;
+            return result;
+        }
+        finally { bookmarkSaveTask = null; }
+    }
+
+    private async Task<ReadingListSaveResult> SaveReadingListAsync()
+    {
+        if (!readingListDirty)
+            return new ReadingListSaveResult(DateTimeOffset.UtcNow, []);
+        if (readingListSaveTask is not null)
+        {
+            await readingListSaveTask;
+            return new ReadingListSaveResult(DateTimeOffset.UtcNow, []);
+        }
+        var save = readingList.SaveAsync();
+        readingListSaveTask = save;
+        try
+        {
+            var result = await save;
+            if (result.Errors.Count == 0) readingListDirty = false;
+            return result;
+        }
+        finally { readingListSaveTask = null; }
+    }
+
     public async Task<WorkspaceSaveResult> PersistWorkspaceAsync()
     {
         try { await PrepareRecoveryAsync(); }
@@ -40,6 +87,12 @@ public partial class MainWindow
             settings.Save(dataDirectory);
         }
         catch (Exception ex) { result.Errors.Add("偏好保存失败：" + ex.Message); }
+        var bookmarkResult = await SaveBookmarksAsync();
+        result.Errors.AddRange(bookmarkResult.Errors);
+        var readingListResult = await SaveReadingListAsync();
+        result.Errors.AddRange(readingListResult.Errors);
+        var annotationResult = await SaveAnnotationsAsync();
+        result.Errors.AddRange(annotationResult.Errors);
         return result;
     }
 
@@ -68,6 +121,7 @@ public partial class MainWindow
                 Notify("会话或草稿未能保存。窗口将保留，请保存重要文档后重试。\n\n" + string.Join("\n", result.Errors.Take(5)));
                 return;
             }
+            await AwaitMarkdownImageCompletionAsync();
             approvedShutdown = true; Close();
             // Another Closing handler may cancel the final close.
             if (IsVisible) approvedShutdown = false;
@@ -89,8 +143,15 @@ public partial class MainWindow
 
     public void CloseForShutdown()
     {
-        approvedShutdown = true; persistTimer.Stop(); searchGeneration++;
+        approvedShutdown = true; persistTimer.Stop(); bookmarkSaveTimer.Stop(); searchGeneration++;
         Close();
+    }
+
+    private async Task AwaitMarkdownImageCompletionAsync()
+    {
+        if (markdownImageTask is not { IsCompleted: false } task) return;
+        try { await task; }
+        catch (Exception) { /* The image task already owns attachment cleanup. */ }
     }
 
     private async Task ShowDraftSettingsAsync()

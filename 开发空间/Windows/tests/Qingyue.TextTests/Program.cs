@@ -332,6 +332,29 @@ var tests = new List<(string Name, Action Run)>
         var found = Find(model.VisibleText, "加粗", "", new()).Single();
         Equal("加粗", model.VisibleText.Substring(found.Start, found.Length));
     }),
+    ("reading/markdown GFM autolinks and reference links", () =>
+    {
+        const string input = """
+            [guide]: https://example.test/guide "指南"
+
+            <https://example.test> <mailto:reader@example.test>
+            [文档][guide]
+            [未解析][missing]
+            """;
+        var model = Build(input, TextKind.Markdown);
+        Check(model.VisibleText.Contains("https://example.test", StringComparison.Ordinal),
+            "HTTP autolink should expose its readable URL");
+        Check(model.VisibleText.Contains("mailto:reader@example.test", StringComparison.Ordinal),
+            "mailto autolink should expose its readable address");
+        Check(model.VisibleText.Contains("文档", StringComparison.Ordinal) &&
+              !model.VisibleText.Contains("[文档][guide]", StringComparison.Ordinal),
+            "reference link should resolve to its label");
+        Check(model.VisibleText.Contains("[未解析][missing]", StringComparison.Ordinal),
+            "unresolved reference link should remain literal");
+        Check(!model.VisibleText.Contains("[guide]:", StringComparison.Ordinal),
+            "reference definition should not become visible paragraph text");
+        VerifyBlocks(model);
+    }),
     ("reading/markdown block kinds and fenced headings", () =>
     {
         var model = Build("Setext\n===\n\n- [x] done\n- [ ] todo\n> quote\n\n```md\n# hidden\n```\n\n---\n\n普通段落\n下一行", TextKind.Markdown);
@@ -489,6 +512,62 @@ var tests = new List<(string Name, Action Run)>
         Equal(8, outline[1].DisplayStart);
         Equal("a|b\t代码", Build("| a\\|b | `代码` |\n| --- | --- |", TextKind.Markdown).Blocks.Single().Text);
         Check(Build("# h\n" + new string('文', 499_996), TextKind.Markdown).Headings.Count == 1, "50 万以内应富文本");
+    }),
+    ("bookmark/path matching and deletion", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-bookmark-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "a.md");
+            var file = new DocumentFile("标题\n正文");
+            file.Save(path);
+            var store = new BookmarkStore(root);
+            var item = store.Add(file, 3, "正文");
+            Check(item.SourceAnchor == 3 && item.Path == file.Path, "书签保存规范化路径和源位置");
+            Check(store.For(file).Count == 1, "书签按当前文件路径查询");
+            Check(store.Remove(item.Id), "书签可以删除");
+            Check(store.For(file).Count == 0, "删除后查询为空");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("bookmark store survives reload", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-bookmark-reload-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "a.txt");
+            File.WriteAllText(path, "第一行\n第二行");
+            var file = DocumentFile.Open(path);
+            var first = new BookmarkStore(root);
+            var item = first.Add(file, 4, "第二行");
+            Check(first.SaveAsync().GetAwaiter().GetResult().Errors.Count == 0, "书签首次写入成功");
+            var second = new BookmarkStore(root);
+            second.LoadAsync().GetAwaiter().GetResult();
+            Check(second.Items.Any(x => x.Id == item.Id && x.Label == "第二行"),
+                "书签重启后可恢复");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("anchor mapping follows unchanged paragraph", () =>
+    {
+        const string oldText = "前言\n\n目标段落\n第二行\n\n结尾";
+        const string newText = "新增说明\n\n前言\n\n目标段落\n第二行\n\n结尾";
+        int oldAnchor = oldText.IndexOf("目标段落", StringComparison.Ordinal);
+        int mapped = TextAnchorMapper.Map(oldText, newText, oldAnchor);
+        Check(newText.IndexOf("目标段落", StringComparison.Ordinal) == mapped,
+            "外部前置插入后锚点跟随原段落");
+        Check(TextAnchorMapper.Map(oldText, "短文", 999) == "短文".Length, "映射结果限制在新文本长度");
+    }),
+    ("anchor mapping keeps repeated line occurrence", () =>
+    {
+        const string line = "正文 **中文** text";
+        string oldText = "# Old title\n\n" + string.Join("\n\n", Enumerable.Repeat(line, 80));
+        string newText = oldText.Replace("Old", "New", StringComparison.Ordinal);
+        int anchor = oldText.IndexOf(line, StringComparison.Ordinal) + line.Length - 1;
+        Check(TextAnchorMapper.Map(oldText, newText, anchor) == anchor,
+            "重复段落行尾映射不能跳到下一处同名段落");
     })
 };
 
