@@ -106,11 +106,15 @@ final class AnnotationStore {
         }
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-            guard (attributes[.size] as? NSNumber)?.intValue ?? 0 <= Self.maximumBytes else {
+            guard attributes[.type] as? FileAttributeType == .typeRegular else { throw AnnotationStoreError.invalid("批注数据不是普通文件。") }
+            guard (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= Self.maximumBytes else {
                 throw AnnotationStoreError.tooLarge
             }
+            let handle = try FileHandle(forReadingFrom: fileURL); defer { try? handle.close() }
+            let data = try handle.read(upToCount: Self.maximumBytes + 1) ?? Data()
+            guard data.count <= Self.maximumBytes else { throw AnnotationStoreError.tooLarge }
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            let decoded = try decoder.decode([DocumentAnnotation].self, from: Data(contentsOf: fileURL))
+            let decoded = try decoder.decode([DocumentAnnotation].self, from: data)
             try Self.validate(decoded)
             items = decoded
             return []
@@ -132,11 +136,13 @@ final class AnnotationStore {
     }
 
     func forDocument(documentID: UUID, path: String? = nil) -> [DocumentAnnotation] {
+        if let path, !Self.validPath(path) { return [] }
         let normalized = path.map(Self.canonicalPath)
         return items.filter { item in
-            guard item.documentID == documentID else { return false }
+            // Saved documents get a new UUID when reopened; their path is the
+            // durable identity. Untitled documents still use their document ID.
             if let normalized { return item.path.map(Self.canonicalPath) == normalized }
-            return true
+            return item.documentID == documentID
         }.sorted { $0.sourceStart == $1.sourceStart ? $0.createdAt < $1.createdAt : $0.sourceStart < $1.sourceStart }
     }
 
@@ -175,16 +181,19 @@ final class AnnotationStore {
 
     @discardableResult
     func migratePath(documentID: UUID, oldPath: String?, newPath: String) -> Int {
+        guard Self.validPath(newPath), oldPath == nil || Self.validPath(oldPath!) else { return 0 }
         let old = oldPath.map(Self.canonicalPath)
         let target = Self.canonicalPath(newPath)
         var count = 0
-        for index in items.indices where items[index].documentID == documentID {
-            guard old == nil || items[index].path.map(Self.canonicalPath) == old else { continue }
-            items[index].path = newPath
+        for index in items.indices {
+            let matches = old.map { items[index].path.map(Self.canonicalPath) == $0 }
+                ?? (items[index].documentID == documentID && items[index].path == nil)
+            guard matches else { continue }
+            items[index].documentID = documentID
+            items[index].path = target
             items[index].updatedAt = Date()
             count += 1
         }
-        _ = target // Keep canonicalization explicit while retaining the user's path spelling.
         return count
     }
 
@@ -211,9 +220,13 @@ final class AnnotationStore {
             guard data.count <= Self.maximumBytes else { throw AnnotationStoreError.tooLarge }
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let temporary = root.appendingPathComponent(".Annotations-\(UUID().uuidString).tmp")
+            defer { try? FileManager.default.removeItem(at: temporary) }
             try data.write(to: temporary, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
             if FileManager.default.fileExists(atPath: fileURL.path) {
-                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary)
+                let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+                guard attributes[.type] as? FileAttributeType == .typeRegular else { throw AnnotationStoreError.invalid("批注数据不是普通文件。") }
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, backupItemName: nil, options: .usingNewMetadataOnly)
             } else {
                 try FileManager.default.moveItem(at: temporary, to: fileURL)
             }
@@ -227,7 +240,9 @@ final class AnnotationStore {
 
     private static func validate(_ values: [DocumentAnnotation]) throws {
         guard values.count <= maximumItems else { throw AnnotationStoreError.tooMany }
+        guard Set(values.map(\.id)).count == values.count else { throw AnnotationStoreError.invalid("批注包含重复标识。") }
         for value in values {
+            guard value.path == nil || validPath(value.path!) else { throw AnnotationStoreError.invalid("批注路径无效。") }
             guard value.sourceStart >= 0, value.sourceEnd >= value.sourceStart else { throw AnnotationStoreError.invalid("批注位置无效。") }
             guard value.quote.utf16.count <= maximumQuoteLength else { throw AnnotationStoreError.invalid("批注引文过长。") }
             guard value.contextBefore.utf16.count <= maximumContextLength, value.contextAfter.utf16.count <= maximumContextLength else { throw AnnotationStoreError.invalid("批注上下文过长。") }
@@ -239,7 +254,9 @@ final class AnnotationStore {
         guard draft.sourceStart >= 0, draft.sourceEnd >= draft.sourceStart else { throw AnnotationStoreError.invalid("批注位置无效。") }
         guard draft.quote.utf16.count <= maximumQuoteLength else { throw AnnotationStoreError.invalid("批注引文过长。") }
         guard draft.contextBefore.utf16.count <= maximumContextLength, draft.contextAfter.utf16.count <= maximumContextLength else { throw AnnotationStoreError.invalid("批注上下文过长。") }
-        var result = draft; result.note = try normalizedNote(draft.note); result.tags = try normalizedTags(draft.tags)
+        guard draft.path == nil || validPath(draft.path!) else { throw AnnotationStoreError.invalid("批注需要有效的本机绝对路径。") }
+        var result = draft; result.path = draft.path.map(canonicalPath)
+        result.note = try normalizedNote(draft.note); result.tags = try normalizedTags(draft.tags)
         return result
     }
 
@@ -261,6 +278,7 @@ final class AnnotationStore {
         return result
     }
 
+    private static func validPath(_ path: String) -> Bool { path.hasPrefix("/") && !path.contains("\0") && path.utf8.count <= 4096 }
     private static func canonicalPath(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
 }
 

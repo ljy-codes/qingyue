@@ -33,16 +33,22 @@ final class ReaderTab {
     func updateKindAfterPathChange() {
         if automaticKind { kind = TextKind.detect(url: file.url ?? file.suggestedName.map { URL(fileURLWithPath: $0) }, text: file.text) }
     }
+    func releasePresentation() {
+        mediaGeneration += 1; mediaTask?.cancel(); mediaTask = nil
+        rendered = nil; renderKey = nil; mediaNotices = []
+    }
 }
 
 final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSSplitViewDelegate {
     var sidebarToggleForTests: NSButton { sidebarToggleButton }
+    var retainedPresentationCountForTests: Int { tabs.filter { $0.rendered != nil }.count }
     private var tabs: [ReaderTab] = []
     private var current = 0
     private var changing = false
     private var lineIndexUpdated = false
     private var dark = UserDefaults.standard.object(forKey: "dark") as? Bool ?? true
-    private var theme: ReaderTheme { ReaderTheme(dark: dark) }
+    private var warmPaper = UserDefaults.standard.string(forKey: "readerTheme") == "WarmPaper"
+    private var theme: ReaderTheme { ReaderTheme(dark: dark, warmPaper: warmPaper && !followSystemAppearance) }
     private var fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize") == 0 ? 14 : UserDefaults.standard.double(forKey: "fontSize"))
     private var wrapping = UserDefaults.standard.object(forKey: "wrapping") as? Bool ?? true
     private var reading = false
@@ -62,6 +68,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let menuRow = ColorView()
     private let windowMenuBar = WindowMenuBar()
     private var menuRowHeight: NSLayoutConstraint!
+    private var menuBarWidth: NSLayoutConstraint!
+    private var headerMenuLeading: NSLayoutConstraint!
+    private var headerFullLeading: NSLayoutConstraint!
     private var sidebarToggleButton: ActionButton!
     private var branding: NSStackView!
     private var focusHiddenActions: [NSView] = []
@@ -106,6 +115,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var markdownEditOptions: WindowsPopupButton!
     private var returnPositionButton: ActionButton!
     private let presentationHint = NSTextField(labelWithString: "")
+    private let markdownStateBadge = NSTextField(labelWithString: "")
+    private let markdownWritingHint = NSTextField(labelWithString: "- + 空格 → 圆点 · Tab / Shift+Tab 调整层级")
     private let searchBar = NSStackView()
     private let replaceBar = NSStackView()
     private var replacementVisible = false
@@ -128,6 +139,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var showLineNumbers = UserDefaults.standard.object(forKey: "lineNumbers") as? Bool ?? true
     private var readingFontName = UserDefaults.standard.string(forKey: "readingFont") ?? "PingFang SC"
     private var readingLineSpacing = CGFloat(UserDefaults.standard.object(forKey: "lineSpacing") as? Double ?? 6)
+    private var readingParagraphSpacing = CGFloat(UserDefaults.standard.object(forKey: "paragraphSpacing") as? Double ?? 13)
     private let searchField = NSSearchField()
     private let replaceField = NSTextField()
     private let statusLeft = NSTextField(labelWithString: "就绪")
@@ -159,6 +171,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var generation = 0
     private var shuttingDown = false
     private lazy var workspace = WorkspaceStore(root: dataDirectory)
+    private var annotationStore: AnnotationStore!
+    private var readingListStore: ReadingListStore!
+    private var bookmarkStore: BookmarkStore!
+    private var readingListSaveTask: DispatchWorkItem?
+    private var workspaceRoot: URL?
+    private var pendingFileOffsets: [String: Int] = [:]
+    private var updateRequest: URLSessionDataTask?
+    private var externalConflictID: UUID?
+    private var keepExternalButton: ActionButton!
+    private var acceptExternalButton: ActionButton!
+    private var recheckExternalButton: ActionButton!
     private var restoringWorkspace = false
     private var deferredOpenURLs: [URL] = []
     private var pendingNewDocument = false
@@ -190,6 +213,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         win.tabbingMode = .disallowed
         super.init(window: win)
         win.delegate = self
+        annotationStore = AnnotationStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: annotationStore.load())
+        readingListStore = ReadingListStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: readingListStore.load())
+        bookmarkStore = BookmarkStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: bookmarkStore.load())
+        if let path = UserDefaults.standard.string(forKey: "workspaceRoot") { workspaceRoot = URL(fileURLWithPath: path) }
         buildInterface()
         applyTheme()
         if !win.setFrameUsingName("QingyueMainWindow") { win.center() }
@@ -212,6 +242,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func button(_ title: String, symbol: String? = nil, primary: Bool = false, _ action: @escaping () -> Void) -> ActionButton {
         let b = ActionButton(title, symbol: symbol, action: action)
+        b.controlHeight = 26; b.horizontalPadding = 10
         b.isEmphasized = primary; buttons.append(b)
         return b
     }
@@ -233,16 +264,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         identify(menuRow, "QingyueMenuRow"); identify(header, "QingyueHeader"); identify(tabRow, "QingyueTabRow")
         identify(searchContainer, "QingyueSearchPanel"); identify(workspaceBody, "QingyueBody"); identify(sidebar, "QingyueSidebar")
         identify(toolsContainer, "QingyueContextToolbar"); identify(footer, "QingyueFooter")
-        [menuRow, header, tabRow, searchContainer, workspaceBody, footer].forEach { add($0, to: root) }
+        [menuRow, tabRow, searchContainer, workspaceBody, footer].forEach { add($0, to: root) }
+        add(header, to: menuRow)
         add(windowMenuBar, to: menuRow)
         windowMenuBar.prepareMenu = { [weak self] _ in self?.refreshRecentMenu() }
         sidebarToggleButton = button("", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
         sidebarToggleButton.setAccessibilityLabel("显示或隐藏侧栏"); sidebarToggleButton.toolTip = "显示 / 隐藏侧栏 · ⌘B"
         sidebarToggleButton.setAccessibilityIdentifier("QingyueSidebarToggle")
-        sidebarToggleButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        sidebarToggleButton.widthAnchor.constraint(equalToConstant: 30).isActive = true
         add(sidebarToggleButton, to: header)
-        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold); subtitle.font = .systemFont(ofSize: 11)
-        branding = NSStackView(views: [titleLabel, subtitle]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3; add(branding, to: header)
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold); subtitle.isHidden = true
+        branding = NSStackView(views: [titleLabel]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3; add(branding, to: header)
         let open = button("打开文件") { [weak self] in self?.openDocument(nil) }
         let save = button("保存") { [weak self] in _ = self?.saveCurrent() }
         readButton = button("阅读模式", primary: true) { [weak self] in self?.toggleReading(nil) }
@@ -302,7 +334,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         markdownEditOptions.menu = markdownMenu
         returnPositionButton = button("返回位置") { [weak self] in self?.returnReadingPosition(nil) }; returnPositionButton.toolTip = "返回目录跳转前的阅读位置 · ⌥←"
         presentationHint.font = .systemFont(ofSize: 11); presentationHint.lineBreakMode = .byTruncatingTail
-        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, markdownEditOptions!, returnPositionButton!, presentationHint].forEach { tools.addArrangedSubview($0) }
+        markdownStateBadge.font = .systemFont(ofSize: 11); markdownStateBadge.setAccessibilityLabel("当前Markdown块状态")
+        markdownStateBadge.isBezeled = false; markdownStateBadge.drawsBackground = true; markdownStateBadge.wantsLayer = true; markdownStateBadge.layer?.cornerRadius = 9
+        markdownWritingHint.font = .systemFont(ofSize: 11); markdownWritingHint.setAccessibilityLabel("Markdown编辑提示"); markdownWritingHint.lineBreakMode = .byTruncatingTail
+        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, markdownEditOptions!, returnPositionButton!, presentationHint, markdownStateBadge, markdownWritingHint].forEach { tools.addArrangedSubview($0) }
+        keepExternalButton = button("保留当前编辑") { [weak self] in self?.keepExternalEdits(nil) }
+        acceptExternalButton = button("接纳磁盘版本") { [weak self] in self?.acceptExternalVersion(nil) }
+        recheckExternalButton = button("重新检查") { [weak self] in self?.recheckExternalVersion(nil) }
+        for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true; tools.addArrangedSubview(control) }
         // Retain legacy actions only through menus, rather than scattering controls.
         wrapButton = button("自动折行") { [weak self] in self?.toggleWrap(nil) }
         kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged); kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文档语言")
@@ -320,6 +359,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
             return MarkdownTableEditing.edit(text: self.editor.string, selection: selection, action: .tab(backward: backward))
         }
+        editor.tableNewlineHandler = { [weak self] selection in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownTableEditing.edit(text: self.editor.string, selection: selection, action: .insertRow)
+        }
+        editor.listEditHandler = { [weak self] selection, action in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownListEditing.edit(text: self.editor.string, selection: selection, action: action)
+        }
         editor.imagesDropped = { [weak self] urls in self?.insertMarkdownImages(urls) ?? false }
         editor.imagePasteHandler = { [weak self] in self?.pasteMarkdownImage() ?? false }
         editor.registerForDraggedTypes([.fileURL, .png, .tiff])
@@ -330,19 +377,22 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         preview.copyReading = { [weak self] in self?.copyReadingRange($0) }; preview.menuBuilder = { [weak self] in self?.readingContextMenu(offset: $0) ?? NSMenu() }; preview.openAttachment = { [weak self] in self?.showAttachment($0) }
         preview.isEditable = false; preview.isSelectable = true; preview.isRichText = true; preview.textContainerInset = NSSize(width: 32, height: 26); preview.autoresizingMask = [.width]; preview.isVerticallyResizable = true; preview.setAccessibilityLabel("阅读区"); preview.delegate = self; preview.textContainer?.widthTracksTextView = true
         sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 218); rulerWidth = ruler.widthAnchor.constraint(equalToConstant: showLineNumbers ? 48 : 0)
-        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0); tabsHeight = tabRow.heightAnchor.constraint(equalToConstant: 44); toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 49); headerHeight = header.heightAnchor.constraint(equalToConstant: 78); menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 30)
+        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0); tabsHeight = tabRow.heightAnchor.constraint(equalToConstant: 34); toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 42); headerHeight = header.heightAnchor.constraint(equalToConstant: 40); menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 40)
+        menuBarWidth = windowMenuBar.widthAnchor.constraint(equalToConstant: 310)
+        headerMenuLeading = header.leadingAnchor.constraint(equalTo: windowMenuBar.trailingAnchor, constant: 8)
+        headerFullLeading = header.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor)
         canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor); canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: workspaceBody.leadingAnchor)
         // Legacy footer trailing constraints remain inactive; footer has one shared layout.
         statusNormalTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
         statusReadingTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
         NSLayoutConstraint.activate([
             menuRow.topAnchor.constraint(equalTo: root.topAnchor), menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), menuRowHeight,
-            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor, constant: 10), windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 28), windowMenuBar.trailingAnchor.constraint(lessThanOrEqualTo: menuRow.trailingAnchor, constant: -10),
-            header.topAnchor.constraint(equalTo: menuRow.bottomAnchor), header.leadingAnchor.constraint(equalTo: root.leadingAnchor), header.trailingAnchor.constraint(equalTo: root.trailingAnchor), headerHeight,
-            sidebarToggleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 20), sidebarToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            branding.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: 14), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -20), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor), headerActions.leadingAnchor.constraint(greaterThanOrEqualTo: branding.trailingAnchor, constant: 12),
-            tabRow.topAnchor.constraint(equalTo: header.bottomAnchor), tabRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), tabRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), tabsHeight,
+            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor, constant: 10), windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 28), menuBarWidth,
+            header.topAnchor.constraint(equalTo: menuRow.topAnchor), headerMenuLeading, header.trailingAnchor.constraint(equalTo: menuRow.trailingAnchor), headerHeight,
+            sidebarToggleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 12), sidebarToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            branding.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: 8), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -12), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor), headerActions.leadingAnchor.constraint(greaterThanOrEqualTo: branding.trailingAnchor, constant: 12),
+            tabRow.topAnchor.constraint(equalTo: menuRow.bottomAnchor), tabRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), tabRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), tabsHeight,
             tabScroll.leadingAnchor.constraint(equalTo: tabRow.leadingAnchor), tabScroll.topAnchor.constraint(equalTo: tabRow.topAnchor), tabScroll.bottomAnchor.constraint(equalTo: tabRow.bottomAnchor), tabScroll.trailingAnchor.constraint(equalTo: plus.leadingAnchor, constant: -5),
             plus.trailingAnchor.constraint(equalTo: tabRow.trailingAnchor, constant: -5), plus.centerYAnchor.constraint(equalTo: tabRow.centerYAnchor), plus.widthAnchor.constraint(equalToConstant: 40),
             tabsStack.leadingAnchor.constraint(equalTo: tabScroll.contentView.leadingAnchor), tabsStack.topAnchor.constraint(equalTo: tabScroll.contentView.topAnchor), tabsStack.heightAnchor.constraint(equalTo: tabScroll.contentView.heightAnchor),
@@ -377,14 +427,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func applyTheme() {
         if followSystemAppearance { dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
-        window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window?.appearance = NSAppearance(named: dark && !warmPaper ? .darkAqua : .aqua)
+        AppIconTheme.apply(AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme")))
         root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.editor
-        menuRow.color = theme.panel; tabRow.color = theme.window; footer.color = theme.panel; toolsContainer.color = theme.panel
+        menuRow.color = theme.panel; tabRow.color = theme.main; footer.color = theme.panel; toolsContainer.color = theme.main
         for view in [menuRow, header, tabRow, sidebar, toolsContainer, footer] { view.wantsLayer = true; view.layer?.borderColor = theme.border.cgColor; view.layer?.borderWidth = 0.5 }
         windowMenuBar.applyAppearance(foreground: theme.text, background: theme.panel, highlight: theme.hover)
         for popup in [kindPopup, codecPopup, endingPopup, toolbarOptions!, markdownEditOptions!] { popup.applyTheme(theme) }
         for field in [searchField, replaceField] { field.backgroundColor = theme.editor; field.textColor = theme.text }
         presentationHint.textColor = theme.muted
+        markdownStateBadge.textColor = theme.text; markdownStateBadge.backgroundColor = theme.selection
+        markdownWritingHint.textColor = theme.accentText
         titleLabel.textColor = theme.text; subtitle.textColor = theme.muted; sideTitle.textColor = theme.muted; sideNote.textColor = theme.muted
         statusLeft.textColor = theme.muted; statusRight.textColor = theme.muted
         findCounter.textColor = theme.muted
@@ -506,6 +559,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         do {
             try file.rename(toName: input.stringValue)
+            migrateReadingMetadata(tab, oldPath: oldPath)
             tab.automaticallyNamed = false
             if let before = oldPath, let after = file.url?.path, before != after {
                 recent = recent.map { $0 == before ? after : $0 }
@@ -629,6 +683,107 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         p.message = "打开本机文本文件 · TXT / JSON / YAML / MD / 配置文件"
         if runDocumentModal({ p.runModal() }) == .OK { openURLs(p.urls) }
     }
+    @objc func openWorkspace(_ sender: Any?) {
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false; panel.prompt = "打开工作区"
+        guard runDocumentModal({ panel.runModal() }) == .OK, let root = panel.url else { return }
+        workspaceRoot = root.standardizedFileURL; UserDefaults.standard.set(workspaceRoot?.path, forKey: "workspaceRoot")
+        let controller = WorkspaceBrowserWindow(rootURL: root)
+        controller.openFile = { [weak self] url in self?.openURLs([url]) }
+        controller.rootChanged = { [weak self] root in self?.workspaceRoot = root; UserDefaults.standard.set(root.path, forKey: "workspaceRoot") }
+        retainResource(controller); controller.showWindow(nil)
+    }
+    @objc private func openWorkspacePath(_ item: NSMenuItem) {
+        if let target = item.representedObject as? [String: Any], let path = target["path"] as? String, let offset = target["offset"] as? Int {
+            pendingFileOffsets[URL(fileURLWithPath: path).standardizedFileURL.path] = offset
+            openURLs([URL(fileURLWithPath: path)]); return
+        }
+        if let url = item.representedObject as? URL { openURLs([url]) }
+    }
+    @objc func globalSearch(_ sender: Any?) {
+        let root: URL
+        if let workspaceRoot { root = workspaceRoot }
+        else {
+            let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.prompt = "选择工作区"
+            guard runDocumentModal({ panel.runModal() }) == .OK, let selected = panel.url else { return }
+            root = selected.standardizedFileURL; workspaceRoot = root; UserDefaults.standard.set(root.path, forKey: "workspaceRoot")
+        }
+        let controller = GlobalSearchWindow(rootURL: root)
+        controller.openResult = { [weak self] url, offset in
+            guard let self else { return }
+            self.pendingFileOffsets[url.standardizedFileURL.path] = offset; self.openURLs([url])
+        }
+        controller.canReplaceFile = { [weak self] url in
+            guard let self else { return false }
+            return !self.tabs.contains { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == url.resolvingSymlinksInPath().standardizedFileURL }
+        }
+        retainResource(controller); controller.showWindow(nil)
+    }
+    @objc func showReadingList(_ sender: Any?) {
+        let controller = ReadingListWindow(store: readingListStore)
+        controller.openItem = { [weak self] item in
+            guard let self else { return }
+            self.pendingFileOffsets[URL(fileURLWithPath: item.path).standardizedFileURL.path] = item.sourceAnchor
+            self.openURLs([URL(fileURLWithPath: item.path)])
+        }
+        retainResource(controller); controller.present(relativeTo: window)
+    }
+    @objc func addCurrentToReadingList(_ sender: Any?) {
+        guard let path = active?.file.url?.path else { updateStatus("未保存文档不能加入阅读清单"); return }
+        do { _ = try readingListStore.upsert(path: path, pinned: true, sourceAnchor: currentSourceOffset()); try readingListStore.save(); updateStatus("已加入阅读清单") }
+        catch { updateStatus("阅读清单保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func markCurrentRead(_ sender: Any?) {
+        guard let path = active?.file.url?.path else { return }
+        do { _ = try readingListStore.upsert(path: path, completed: true, progress: 1, sourceAnchor: currentSourceOffset()); try readingListStore.save(); updateStatus("已标记为已读") }
+        catch { updateStatus("阅读清单保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func toggleBookmark(_ sender: Any?) {
+        guard let tab = active else { return }
+        let offset = currentSourceOffset(), source = tab.file.text as NSString
+        let line = source.lineRange(for: NSRange(location: min(offset, source.length), length: 0))
+        let existing = bookmarkStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+            .first { $0.sourceAnchor >= line.location && $0.sourceAnchor <= NSMaxRange(line) }
+        do {
+            if let existing { _ = bookmarkStore.remove(id: existing.id) }
+            else { _ = try bookmarkStore.add(documentID: tab.file.id, path: tab.file.url?.path, sourceAnchor: offset, text: tab.file.text) }
+            try bookmarkStore.save(); updateStatus(existing == nil ? "已添加当前位置书签" : "已移除当前位置书签")
+        } catch { showError(error) }
+    }
+    @objc func showBookmarks(_ sender: Any?) {
+        guard let tab = active else { return }
+        let menu = NSMenu(title: "当前文档书签")
+        for bookmark in bookmarkStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path) {
+            let item = NSMenuItem(title: bookmark.label, action: #selector(jumpBookmark(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = bookmark.sourceAnchor; menu.addItem(item)
+        }
+        if menu.items.isEmpty { menu.addItem(NSMenuItem(title: "暂无书签 · ⌘D 添加", action: nil, keyEquivalent: "")) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 20, y: 0), in: tools)
+    }
+    @objc private func jumpBookmark(_ item: NSMenuItem) {
+        if let offset = item.representedObject as? Int { pushNavigation(); scrollToSource(offset) }
+    }
+    private func migrateReadingMetadata(_ tab: ReaderTab, oldPath: String?) {
+        guard let path = tab.file.url?.path, path != oldPath else { return }
+        let changedAnnotations = annotationStore.migratePath(documentID: tab.file.id, oldPath: oldPath, newPath: path)
+        let changedBookmarks = bookmarkStore.migratePath(documentID: tab.file.id, oldPath: oldPath, newPath: path)
+        do {
+            if changedBookmarks > 0 { try bookmarkStore.save() }
+            if changedAnnotations > 0 { let result = annotationStore.save(); if !result.errors.isEmpty { updateStatus(result.errors.joined(separator: "；")) } }
+            if let oldPath, let entry = readingListStore.item(for: oldPath) {
+                _ = try readingListStore.upsert(path: path, pinned: entry.pinned, completed: entry.completed, progress: entry.progress, sourceAnchor: entry.sourceAnchor)
+                _ = readingListStore.remove(path: oldPath); try readingListStore.save()
+            }
+        } catch { updateStatus("文件已保存，阅读记录迁移失败 · \(error.localizedDescription)") }
+    }
+    private func repairAnnotations(_ tab: ReaderTab) {
+        let items = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+        guard !items.isEmpty else { return }
+        let repairs = items.map { AnnotationAnchorResolver.repair($0, in: tab.file.text) }
+        if annotationStore.applyAnchorRepairs(repairs) > 0 {
+            let result = annotationStore.save()
+            if !result.errors.isEmpty { updateStatus(result.errors.joined(separator: "；")) }
+        }
+    }
     func openURLs(_ urls: [URL]) {
         if modalDepth > 0 { deferredDocumentMutations.append { [weak self] in self?.openURLs(urls) }; return }
         if restoringWorkspace { deferredOpenURLs += urls; return }
@@ -688,6 +843,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard modalDepth == 0 else { return }
         guard tabs.indices.contains(index) else { return }
         if stash { stashCurrent() }
+        for button in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { button.isHidden = true }
+        for (i, tab) in tabs.enumerated() where i != index { tab.releasePresentation() }
+        installedPresentation = nil
+        preview.textStorage?.setAttributedString(NSAttributedString(string: ""))
         pendingFind = nil
         changing = true; current = index
         guard let tab = active else { changing = false; return }
@@ -711,6 +870,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             restoringLocation = false
         }
         scheduleSearch(); updateChangeMarks()
+        if let path = tab.file.url?.standardizedFileURL.path, let offset = pendingFileOffsets.removeValue(forKey: path) {
+            scrollToSource(offset)
+            if !reading { editor.setSelectedRange(NSRange(location: min(max(0, offset), editor.string.utf16.count), length: 0)) }
+        }
         window?.makeFirstResponder(reading ? preview : editor)
         scheduleRecovery(); checkExternalFile(tab)
     }
@@ -739,7 +902,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             destination = url
         }
         do {
+            let oldPath = tab.file.url?.path
             try tab.file.save(to: destination, allowOverwrite: overwrite)
+            migrateReadingMetadata(tab, oldPath: oldPath)
             refreshAutomaticKind(tab)
             if !tab.recoverDraft, let path = tab.file.url?.path { var excluded = excludedDraftPaths; excluded.insert(path); excludedDraftPaths = excluded }
             if let url = tab.file.url { remember(url) }
@@ -810,7 +975,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             if result == .alertSecondButtonReturn { return false }
             if result == .alertFirstButtonReturn && !saveCurrent() { return false }
         }
+        tabs[index].releasePresentation()
         changing = true; tabs.remove(at: index); changing = false
+        installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: ""))
         if tabs.isEmpty { current = 0; if !closeBatch { window?.performClose(nil) } }
         else { selectTab(min(index, tabs.count - 1), stash: false) }
         writeRecovery()
@@ -896,10 +1063,25 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         do { let file = try TextFile.open(url); tabs[current] = ReaderTab(file); selectTab(current, stash: false); writeRecovery() }
         catch { showError(error) }
     }
+    @objc func keepExternalEdits(_ sender: Any?) {
+        externalConflictID = nil
+        for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true }
+        updateContextToolbar(); updateStatus("当前修改已保留，保存时仍会检查磁盘冲突")
+    }
+    @objc func acceptExternalVersion(_ sender: Any?) {
+        reloadDocument(sender)
+        if active?.file.id != externalConflictID {
+            externalConflictID = nil
+            for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true }
+            updateContextToolbar(); updateStatus("已接纳磁盘版本")
+        }
+    }
+    @objc func recheckExternalVersion(_ sender: Any?) { if let tab = active { checkExternalFile(tab) } }
     func textDidChange(_ notification: Notification) {
         guard !changing, !reading, let tab = active else { return }
         tab.file.text = editor.string
-        tab.rendered = nil; tab.renderKey = nil
+        tab.releasePresentation()
+        if !tab.splitPreview { installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: "")) }
         scheduleSplitRender()
         updateChangeMarks()
         if !lineIndexUpdated { ruler.updateLines(editor.string) }
@@ -918,8 +1100,19 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc private func scrolled() {
         ruler.needsDisplay = true
         if !restoringLocation && liveResizeAnchor == nil { active?.sourceAnchor = currentSourceOffset() }
-        if reading { updateStatus(); highlightOutline() }
+        if reading { updateStatus(); highlightOutline(); updateReadingListProgress() }
         if !restoringLocation && liveResizeAnchor == nil { scheduleRecovery() }
+    }
+    private func updateReadingListProgress() {
+        guard let path = active?.file.url?.path, readingListStore.item(for: path) != nil else { return }
+        let length = max(1, active?.file.text.utf16.count ?? 1)
+        let progress = min(1, max(0, Double(currentSourceOffset()) / Double(length)))
+        do { _ = try readingListStore.upsert(path: path, progress: progress, sourceAnchor: currentSourceOffset()) } catch { return }
+        readingListSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            do { try self?.readingListStore.save() } catch { self?.updateStatus("阅读清单写入失败 · \(error.localizedDescription)") }
+        }
+        readingListSaveTask = task; DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: task)
     }
     private func cancelFind() { if searchVisible { hideFind() } else if focused { toggleFocus(nil) } }
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -931,6 +1124,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         return false
     }
     private func updateStatus(_ message: String? = nil) {
+        updateMarkdownWritingState()
         guard let file = active?.file else { return }
         let text = editor.string as NSString
         let location = min(editor.selectedRange().location, text.length)
@@ -970,7 +1164,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func systemAppearanceChanged() { if followSystemAppearance { applyTheme() } }
     @objc func toggleTheme(_ sender: Any?) {
-        followSystemAppearance = false; dark.toggle()
+        followSystemAppearance = false; warmPaper = false; UserDefaults.standard.set("", forKey: "readerTheme"); dark.toggle()
         UserDefaults.standard.set(false, forKey: "followSystemAppearance"); UserDefaults.standard.set(dark, forKey: "dark"); applyTheme()
     }
     @objc func toggleSidebar(_ sender: Any?) {
@@ -986,10 +1180,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         sidebar.isHidden = hideSidebar
         sidebarToggleButton.title = ""; sidebarToggleButton.setAccessibilityLabel(showingSidebar ? "收起侧栏" : "展开侧栏")
         sidebarToggleButton.toolTip = (showingSidebar ? "收起侧栏" : "展开侧栏") + " · ⌘B"
-        menuRow.isHidden = focused; menuRowHeight.constant = focused ? 0 : 30
+        menuRow.isHidden = false; windowMenuBar.isHidden = focused; menuRowHeight.constant = 40
+        headerMenuLeading.isActive = !focused; headerFullLeading.isActive = focused
         canvasInsetLeading.isActive = !hideSidebar; canvasFullLeading.isActive = hideSidebar
-        tabsHeight.constant = focused ? 0 : 44; tabRow.isHidden = focused
-        headerHeight.constant = 78; branding.isHidden = false
+        tabsHeight.constant = focused ? 0 : 34; tabRow.isHidden = focused
+        headerHeight.constant = 40; branding.isHidden = false
         focusButton.title = focused ? "退出专注" : "专注"
         readButton.title = reading ? "编辑原文" : "返回预览"
         let kind = active?.kind
@@ -999,6 +1194,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         toolbarCopyButton.isHidden = !md || (!reading && active?.splitPreview != true)
         toolbarOptions.isHidden = !md
         markdownEditOptions.isHidden = !md || reading
+        markdownStateBadge.isHidden = !md || reading; markdownWritingHint.isHidden = !md || reading
+        updateMarkdownWritingState()
         returnPositionButton.isEnabled = active?.navigation.isEmpty == false
         formatButton.title = kind == .plain ? "整理 TXT" : "格式化"
         presentationHint.stringValue = md ? (reading ? "Markdown 预览 · 需要修改时点击编辑原文" : active?.splitPreview == true ? "左侧编辑 · 右侧预览" : "Markdown 原文 · 可开启分屏编辑") : ""
@@ -1008,6 +1205,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
         window?.contentView?.layoutSubtreeIfNeeded(); updateContextToolbar()
         layoutDocumentPanes(); updateSidebarTabs()
+    }
+    private func updateMarkdownWritingState() {
+        guard active?.kind == .markdown, !reading else { return }
+        let selected = editor.selectedRange()
+        if let item = MarkdownListEditing.item(in: editor.string, at: selected.location) {
+            markdownStateBadge.stringValue = "  \(item.task ? "任务列表" : item.ordered ? "有序列表" : "无序列表") · 第 \(item.level + 1) 层 · 选区 \(selected.length)  "
+        } else {
+            markdownStateBadge.stringValue = "  Markdown 正文 · 选区 \(selected.length)  "
+        }
     }
     private func updateContextToolbar() {
         let width = max(100, canvas.bounds.width - 24)
@@ -1056,21 +1262,111 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let id = active?.file.id else { return }; let item = NSMenuItem(); item.representedObject = id; closeOtherTabs(item)
     }
     @objc func showDiagnostics(_ sender: Any?) {
-        let details = ["Mac 0.1.0 · 构建 7", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
+        let details = ["Mac 0.1.0 · 构建 8", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
         _ = alert("打开与阅读诊断", details.joined(separator: "\n"), buttons: ["关闭"])
     }
+    @objc func checkForUpdates(_ sender: Any?) {
+        updateRequest?.cancel(); updateStatus("正在检查 Mac 更新…")
+        let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "8") ?? 8
+        updateRequest = QingyueUpdateService.checkMac(currentBuild: build) { [weak self] result in
+            guard let self else { return }; self.updateRequest = nil
+            switch result {
+            case .success(let release?):
+                if self.alert("发现 Mac 构建 \(release.build)", "打开 GitHub 发布页下载 Mac 更新。", buttons: ["打开发布页", "稍后"]) == .alertFirstButtonReturn { NSWorkspace.shared.open(release.url) }
+            case .success(nil): self.updateStatus("没有比当前构建更新的 Mac 发布包")
+            case .failure(let error): self.updateStatus("更新检查未完成 · \(error.localizedDescription)")
+            }
+        }
+    }
+    private func selectedSourceRangeForAnnotation() -> NSRange? {
+        guard let tab = active else { return nil }
+        if !reading { return editor.selectedRange().length > 0 ? editor.selectedRange() : nil }
+        guard let rendered = tab.rendered else { return nil }
+        let selected = preview.selectedRange()
+        guard selected.length > 0 else { return nil }
+        let start = rendered.sourceRange(forDisplayOffset: selected.location)
+        let end = rendered.sourceRange(forDisplayOffset: NSMaxRange(selected))
+        let location = min(start.location, end.location)
+        let finish = max(NSMaxRange(start), NSMaxRange(end))
+        return finish > location ? NSRange(location: location, length: finish - location) : nil
+    }
+    @objc func addAnnotation(_ sender: Any?) {
+        guard let tab = active, let range = selectedSourceRangeForAnnotation() else { updateStatus("先选择一段正文，再添加批注"); return }
+        let source = tab.file.text as NSString
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= source.length else { return }
+        let quote = source.substring(with: range)
+        let beforeStart = max(0, range.location - 160)
+        let before = source.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+        let afterLength = min(160, source.length - NSMaxRange(range))
+        let after = source.substring(with: NSRange(location: NSMaxRange(range), length: afterLength))
+        let note = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26)); note.placeholderString = "备注（可选）"
+        let tags = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26)); tags.placeholderString = "标签，用逗号分隔（可选）"
+        let content = NSStackView(views: [note, tags]); content.orientation = .vertical; content.spacing = 8; content.frame = NSRect(x: 0, y: 0, width: 360, height: 62)
+        let alert = NSAlert(); alert.messageText = "添加批注"; alert.informativeText = String(quote.prefix(400)); alert.accessoryView = content
+        alert.addButton(withTitle: "保存批注"); alert.addButton(withTitle: "取消")
+        guard runDocumentModal({ alert.runModal() }) == .alertFirstButtonReturn else { return }
+        let draft = AnnotationDraft(documentID: tab.file.id, path: tab.file.url?.path, sourceStart: range.location, sourceEnd: NSMaxRange(range), quote: quote, contextBefore: before, contextAfter: after, note: note.stringValue, tags: tags.stringValue.split(separator: ",").map { String($0) })
+        do { _ = try annotationStore.add(draft); let result = annotationStore.save(); updateStatus(result.errors.isEmpty ? "批注已保存到本机" : result.errors.joined(separator: "；")) }
+        catch { updateStatus("批注保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func showAnnotations(_ sender: Any?) {
+        guard let tab = active else { return }
+        repairAnnotations(tab)
+        let controller = AnnotationPanelWindow(store: annotationStore, documentID: tab.file.id, path: tab.file.url?.path)
+        controller.jump = { [weak self, weak tab] annotation in
+            guard let self, let tab, let index = self.tabs.firstIndex(where: { $0 === tab }) else { return }
+            if self.active !== tab { self.selectTab(index) }
+            self.pushNavigation(); self.scrollToSource(annotation.sourceStart)
+            self.updateStatus("已跳转到批注 · " + annotation.anchorState.label)
+        }
+        controller.onChange = { [weak self] in self?.paintAnnotationMatches(); self?.updateStatus("批注已更新") }
+        retainResource(controller); controller.present(relativeTo: window)
+    }
+    @objc private func jumpAnnotation(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID, let tab = active,
+              let annotation = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path).first(where: { $0.id == id }) else { return }
+        pushNavigation(); scrollToSource(annotation.sourceStart); updateStatus("已跳转到批注 · \(annotation.anchorState.label)")
+    }
+    @objc func exportReadingBriefMarkdown(_ sender: Any?) { exportReadingBrief(asHTML: false) }
+    @objc func exportReadingBriefHTML(_ sender: Any?) { exportReadingBrief(asHTML: true) }
+    private func exportReadingBrief(asHTML: Bool) {
+        guard let tab = active else { return }
+        repairAnnotations(tab)
+        let rendered = tab.rendered ?? ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing)
+        let headings = rendered.headings.map { ReadingBriefHeading(title: $0.title, sourceStart: $0.sourceRange.location) }
+        let annotations = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+        let length = max(1, tab.file.text.utf16.count)
+        let input = ReadingBriefInput(title: tab.file.title, sourcePath: tab.file.url?.path, sourceText: tab.file.text, progressPercent: min(100, max(0, Int((Double(currentSourceOffset()) / Double(length) * 100).rounded()))), generatedAt: Date(), headings: headings, annotations: annotations)
+        do {
+            let output = try asHTML ? ReadingBriefExporter.buildHTML(input) : ReadingBriefExporter.buildMarkdown(input)
+            let panel = NSSavePanel(); panel.allowedContentTypes = asHTML ? [.html] : [.plainText]
+            panel.nameFieldStringValue = (tab.file.title as NSString).deletingPathExtension + (asHTML ? "-阅读简报.html" : "-阅读简报.md")
+            panel.canCreateDirectories = true; panel.prompt = "导出"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard !tabs.contains(where: { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == url.resolvingSymlinksInPath().standardizedFileURL }) else { updateStatus("简报不能覆盖已打开的源文件"); return }
+            try Data(output.utf8).write(to: url, options: .atomic); updateStatus("已导出阅读简报 · \(url.lastPathComponent)")
+        } catch { updateStatus("阅读简报导出失败 · \(error.localizedDescription)") }
+    }
+    private func lineNumber(in text: String, offset: Int) -> Int {
+        let source = text as NSString; let end = min(source.length, max(0, offset)); var line = 1
+        for index in 0..<end where source.character(at: index) == 10 { line += 1 }
+        return line
+    }
     @objc func showPreferences(_ sender: Any?) {
-        let a = NSAlert(); a.messageText = "阅读与编辑设置"; a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
+        let a = NSAlert(); a.messageText = "阅读外观与编辑设置"; a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
         let numbers = NSButton(checkboxWithTitle: "编辑时显示行号", target: nil, action: nil); numbers.state = showLineNumbers ? .on : .off
         let wrap = NSButton(checkboxWithTitle: "自动换行", target: nil, action: nil); wrap.state = wrapping ? .on : .off
         let size = NSPopUpButton(); size.addItems(withTitles: (10...30).map(String.init)); size.selectItem(withTitle: String(Int(fontSize)))
         let face = NSPopUpButton(); face.addItems(withTitles: ["苹方", "宋体", "系统字体"]); face.selectItem(at: readingFontName == "Songti SC" ? 1 : (readingFontName == "system" ? 2 : 0))
         let spacing = NSPopUpButton(); spacing.addItems(withTitles: ["紧凑", "舒适", "宽松"]); spacing.selectItem(at: readingLineSpacing < 4 ? 0 : (readingLineSpacing > 8 ? 2 : 1))
+        let paragraph = NSPopUpButton(); paragraph.addItems(withTitles: ["无段距", "紧凑", "标准", "宽松"]); paragraph.selectItem(at: readingParagraphSpacing < 1 ? 0 : readingParagraphSpacing < 10 ? 1 : readingParagraphSpacing > 18 ? 3 : 2)
         let systemTheme = NSButton(checkboxWithTitle: "外观跟随系统", target: nil, action: nil); systemTheme.state = followSystemAppearance ? .on : .off
+        let colors = NSPopUpButton(); colors.addItems(withTitles: ["深色", "浅色", "暖纸"]); colors.selectItem(at: warmPaper ? 2 : dark ? 0 : 1); colors.setAccessibilityLabel("阅读主题")
+        let icon = NSPopUpButton(); icon.addItems(withTitles: AppIconTheme.allCases.map(\.label)); icon.selectItem(at: AppIconTheme.allCases.firstIndex(of: AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme"))) ?? 0); icon.setAccessibilityLabel("应用图标")
         let width = NSPopUpButton(); width.addItems(withTitles: ["紧凑", "标准", "宽", "全宽"])
         width.selectItem(at: readingWidth > 1000 ? 3 : (readingWidth < 600 ? 0 : (readingWidth > 750 ? 2 : 1)))
-        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("阅读版心"), width])])
-        content.orientation = .vertical; content.alignment = .leading; content.spacing = 12; content.frame = NSRect(x: 0, y: 0, width: 320, height: 260)
+        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("主题"), colors]), stack([label("应用图标"), icon]), stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("段间距"), paragraph]), stack([label("阅读版心"), width])])
+        content.orientation = .vertical; content.alignment = .leading; content.spacing = 10; content.frame = NSRect(x: 0, y: 0, width: 330, height: 350)
         a.accessoryView = content
         guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         active?.sourceAnchor = currentSourceOffset()
@@ -1078,12 +1374,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         fontSize = CGFloat(Int(size.titleOfSelectedItem ?? "14") ?? 14)
         readingFontName = ["PingFang SC", "Songti SC", "system"][face.indexOfSelectedItem]
         readingLineSpacing = [2, 6, 11][spacing.indexOfSelectedItem]
+        readingParagraphSpacing = [0, 6, 13, 24][paragraph.indexOfSelectedItem]
         readingWidth = [520, 680, 840, 1_000_000][width.indexOfSelectedItem]
-        followSystemAppearance = systemTheme.state == .on
+        followSystemAppearance = systemTheme.state == .on; warmPaper = colors.indexOfSelectedItem == 2; dark = colors.indexOfSelectedItem == 0
         let d = UserDefaults.standard
         d.set(showLineNumbers, forKey: "lineNumbers"); d.set(wrapping, forKey: "wrapping"); d.set(Double(fontSize), forKey: "fontSize")
-        d.set(readingFontName, forKey: "readingFont"); d.set(Double(readingLineSpacing), forKey: "lineSpacing")
+        d.set(readingFontName, forKey: "readingFont"); d.set(Double(readingLineSpacing), forKey: "lineSpacing"); d.set(Double(readingParagraphSpacing), forKey: "paragraphSpacing")
         d.set(Double(readingWidth), forKey: "readingWidth"); d.set(followSystemAppearance, forKey: "followSystemAppearance")
+        d.set(warmPaper ? "WarmPaper" : dark ? "Dark" : "Light", forKey: "readerTheme"); d.set(dark, forKey: "dark")
+        AppIconTheme.apply(AppIconTheme.allCases[icon.indexOfSelectedItem])
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
         wrapButton.title = wrapping ? "自动换行 ✓" : "自动换行"; window?.contentView?.layoutSubtreeIfNeeded()
         editor.font = editorFont(); updateWrap(); applyTheme()
@@ -1094,7 +1393,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         pendingFind = nil
         stashCurrent(); reading.toggle(); tab.isReading = reading; tab.sourceAnchor = anchor
         updateModeControls()
-        if reading || active?.splitPreview == true { renderReading() } else { editor.font = editorFont(); updateWrap(); scheduleHighlight() }
+        if reading || active?.splitPreview == true { renderReading() }
+        else { tab.releasePresentation(); installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: "")); editor.font = editorFont(); updateWrap(); scheduleHighlight() }
         scrollToSource(anchor); scheduleSearch()
         window?.makeFirstResponder(reading ? preview : editor); updateStatus()
     }
@@ -1172,10 +1472,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let tab = active else { return }
         presentationGeneration += 1
         let anchor = tab.sourceAnchor
-        let key = "\(tab.kind.rawValue)|\(fontSize)|\(readingFontName)|\(readingLineSpacing)|\(dark)|\(tab.file.url?.path ?? "")"
+        let key = "\(tab.kind.rawValue)|\(fontSize)|\(readingFontName)|\(readingLineSpacing)|\(readingParagraphSpacing)|\(warmPaper)|\(dark)|\(tab.file.url?.path ?? "")"
         if tab.renderKey != key || tab.rendered == nil {
             tab.mediaGeneration += 1; tab.mediaTask?.cancel(); tab.mediaTask = nil; tab.mediaNotices = []
-            tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing)
+            tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing)
             tab.renderKey = key
             if tab.kind == .markdown, let document = tab.rendered {
                 let diagrams = addSequenceDiagrams(document.attributedText, source: tab.file.text)
@@ -1262,6 +1562,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc func alignMarkdownTableLeft(_ sender: Any?) { applyMarkdownTableAction(.align(.left)) }
     @objc func alignMarkdownTableCenter(_ sender: Any?) { applyMarkdownTableAction(.align(.center)) }
     @objc func alignMarkdownTableRight(_ sender: Any?) { applyMarkdownTableAction(.align(.right)) }
+    @objc func toggleMarkdownTask(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard let edit = MarkdownListEditing.edit(text: editor.string, selection: editor.selectedRange(), action: .toggleTask) else { updateStatus("当前光标不在任务列表内"); return }
+        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已切换任务状态 · ⌘Z 撤销")
+    }
     @objc func pasteMarkdownTable(_ sender: Any?) {
         guard !reading, active?.kind == .markdown, let value = NSPasteboard.general.string(forType: .string), let rendered = MarkdownTableEditing.markdownTable(fromTSV: value) else { updateStatus("剪贴板没有可转换的 TSV 表格"); return }
         let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: rendered, selection: NSRange(location: range.location + rendered.utf16.count, length: 0)); editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴 Markdown 表格 · ⌘Z 撤销")
@@ -1270,7 +1575,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
         guard active?.file.url != nil else { updateStatus("请先保存 Markdown 文档，再插入图片"); return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .tiff, .gif, .bmp, .heic]; panel.allowsMultipleSelection = true; panel.canChooseDirectories = false; panel.prompt = "插入图片"
-        guard panel.runModal() == .OK else { return }
+        guard runDocumentModal({ panel.runModal() }) == .OK else { return }
         _ = insertMarkdownImages(panel.urls)
     }
     private func insertMarkdownImages(_ urls: [URL]) -> Bool {
@@ -1287,16 +1592,20 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         }
         let insertion = links.joined(separator: "\n")
         let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: insertion, selection: NSRange(location: range.location + insertion.utf16.count, length: 0))
-        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已插入 \(links.count) 张图片 · 图片写入文档旁 .assets")
+        guard editor.applyExternalEdit(edit) else { for file in created { try? FileManager.default.removeItem(at: file) }; return true }
+        scheduleSplitRender(); scheduleHighlight(); updateStatus("已插入 \(links.count) 张图片 · 图片写入文档旁 .assets")
         return true
     }
     private func pasteMarkdownImage() -> Bool {
         guard !reading, active?.kind == .markdown, let documentURL = active?.file.url else { return false }
-        guard let image = NSImage(pasteboard: NSPasteboard.general) else { return false }
+        guard NSPasteboard.general.string(forType: .string) == nil,
+              NSPasteboard.general.availableType(from: [.png, .tiff]) != nil,
+              let image = NSImage(pasteboard: NSPasteboard.general) else { return false }
         do {
             let result = try MarkdownAssetWriter.write(image: image, suggestedName: "pasted-image", documentURL: documentURL)
             let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: result.markdownLink, selection: NSRange(location: range.location + result.markdownLink.utf16.count, length: 0))
-            editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴图片 · 图片写入文档旁 .assets"); return true
+            guard editor.applyExternalEdit(edit) else { try? FileManager.default.removeItem(at: result.fileURL); return true }
+            scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴图片 · 图片写入文档旁 .assets"); return true
         } catch {
             updateStatus("图片粘贴失败 · \(error.localizedDescription)"); return true
         }
@@ -1353,6 +1662,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         searchTask = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: task)
     }
     private func paintSearchMatches() {
+        paintAnnotationMatches()
         for view in [editor, preview] {
             view.layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: NSRange(location: 0, length: view.string.utf16.count))
         }
@@ -1360,6 +1670,31 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let length = displayedTextView.string.utf16.count
         for match in searchMatches.prefix(3000) where match.range.length > 0 && NSMaxRange(match.range) <= length {
             lm.addTemporaryAttribute(.backgroundColor, value: theme.accent.withAlphaComponent(0.18), forCharacterRange: match.range)
+        }
+    }
+    private func paintAnnotationMatches() {
+        for view in [editor, preview] {
+            let all = NSRange(location: 0, length: view.string.utf16.count)
+            view.layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: all)
+            view.layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: all)
+        }
+        guard let tab = active, tab.file.text.utf16.count <= 500_000 else { return }
+        for annotation in annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path).prefix(500) {
+            let anchor = AnnotationAnchorResolver.repair(annotation, in: tab.file.text)
+            guard anchor.anchorState != .missing else { continue }
+            let sourceRange = NSRange(location: anchor.sourceStart, length: max(0, anchor.sourceEnd - anchor.sourceStart))
+            let color: NSColor
+            switch annotation.color { case .amber: color = .systemOrange; case .blue: color = .systemBlue; case .green: color = .systemGreen; case .rose: color = .systemPink; case .violet: color = .systemPurple }
+            if NSMaxRange(sourceRange) <= editor.string.utf16.count {
+                editor.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: color], forCharacterRange: sourceRange)
+            }
+            if let rendered = tab.rendered {
+                let block = rendered.displayRange(forSourceOffset: anchor.sourceStart)
+                guard NSMaxRange(block) <= preview.string.utf16.count else { continue }
+                let quote = (preview.string as NSString).range(of: annotation.quote, range: block)
+                let target = quote.location == NSNotFound ? block : quote
+                preview.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: color], forCharacterRange: target)
+            }
         }
     }
     @objc func findNext(_ sender: Any?) { find(backward: false) }
@@ -1420,7 +1755,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func showOutline(_ sender: Any?) {
         guard let tab = active else { return }
-        if tab.rendered == nil { tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing) }
+        if tab.rendered == nil { tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing) }
         let headings = tab.rendered?.headings ?? []
         guard !headings.isEmpty else { updateStatus("当前文档没有可识别的目录标题"); return }
         let menu = NSMenu()
@@ -1644,7 +1979,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                     switch result {
                     case .success(nil): break
                     case .success(let updated?):
-                        if wasDirty || tab.file.isDirty { self.updateStatus("磁盘文件已变化 · 当前修改已保留，保存时需处理冲突"); return }
+                        if wasDirty || tab.file.isDirty {
+                            self.externalConflictID = tab.file.id
+                            for control in [self.keepExternalButton!, self.acceptExternalButton!, self.recheckExternalButton!] { control.isHidden = false }
+                            self.updateContextToolbar(); self.updateStatus("磁盘文件已变化 · 当前修改已保留，保存时需处理冲突"); return
+                        }
                         self.stashCurrent()
                         let replacement = ReaderTab(updated); replacement.isReading = tab.isReading; replacement.splitPreview = tab.splitPreview
                         replacement.sourceAnchor = TextAnchorMapper.map(oldText: oldText, newText: updated.text, oldAnchor: tab.sourceAnchor)
@@ -1672,9 +2011,16 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let body = ns.substring(with: match.range(at: 2)); total += body.utf16.count
             if total > 64_000 { break }
             do {
-                let diagram = try MermaidSequence.parse(body); events += diagram.events.count
-                if events > 400 { break }
-                let image = try MermaidSequence.render(body, fontSize: fontSize + 1, dark: dark)
+                let image: NSImage
+                if body.trimmingCharacters(in: .whitespacesAndNewlines).range(of: #"^(flowchart|graph)\b"#, options: .regularExpression) != nil {
+                    let diagram = try MermaidFlowchart.parse(body); events += diagram.edges.count
+                    if events > 400 { break }
+                    image = try MermaidFlowchart.render(body, fontSize: fontSize + 1, dark: dark)
+                } else {
+                    let diagram = try MermaidSequence.parse(body); events += diagram.events.count
+                    if events > 400 { break }
+                    image = try MermaidSequence.render(body, fontSize: fontSize + 1, dark: dark)
+                }
                 let attachment = NSTextAttachment(); attachment.image = image
                 let width = min(680, image.size.width); attachment.bounds = NSRect(x: 0, y: 0, width: width, height: image.size.height * width / max(1, image.size.width))
                 let label = NSMutableAttributedString(attachment: attachment)

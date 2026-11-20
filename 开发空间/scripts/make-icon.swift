@@ -26,7 +26,7 @@ func paintIcon(pixels: Int) throws -> Data {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = context
     let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Windows/src/Qingyue.Windows/Assets/Qingyue-512.png")
+        .appendingPathComponent("Resources/IconThemes/Qingyue-sky.png")
     guard let image = NSImage(contentsOf: source) else { throw NSError(domain: "QingyueSharedIcon", code: 1) }
     context.imageInterpolation = .high
     image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels), from: .zero, operation: .copy, fraction: 1)

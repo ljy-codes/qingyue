@@ -4,22 +4,24 @@
 
 A lightweight local text reader and editor for macOS and Windows.
 
-macOS 当前为 **0.1.0 · Mac 构建 7**，界面与功能继续参照 Windows 0.14.0；本轮加入 Markdown 表格编辑、TSV 转表格、图片插入 `.assets`，并补齐批注与阅读简报的本机数据核心。下载：[Mac 构建 7 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)；[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.1.0 · Mac 构建 8**，继续对齐 Windows 0.18.0：本轮补齐工作区/搜索/阅读清单/批注窗口，并同步四款图标、暖纸主题、紧凑顶栏和非活动标签阅读资源释放。下载：[Mac 构建 8 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)；[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
-Windows 当前为 **0.14.0 · 构建 1**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
+Windows 当前为 **0.18.0 · 构建 1**，使用 .NET 10 + WPF，提供 x64 安装 EXE、自包含便携目录与 ZIP，
 已加入工作区搜索、阅读清单、本机批注与阅读简报、Markdown 列表写作、嵌套层次预览、表格单元格编辑、TSV 粘贴以及截图/本地图片插入；
 Markdown 图片保存在文档旁 `.assets`，继续提供异步预览、富文本复制、有限 Mermaid 流程图和安全保存链路。
 Windows 的安装、更新检查和功能验收见 [Windows 使用说明](操作指导/Windows使用说明.md) 与 [Windows 验收](开发空间/Windows/docs/test.md)。
 本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)，操作差异见 [Windows 使用说明](操作指导/Windows使用说明.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
 
-## Mac 构建 7 的 Markdown 写作与界面对齐
+## Mac 构建 8 的 Windows 功能对齐
 
 Mac 主窗口改为与 Windows 0.3.0 相同的信息层级：窗口菜单、品牌操作栏、全宽标签、跨窗口搜索、左侧最近文件/目录、右侧上下文工具栏与正文、底部状态及类型/编码/换行选项。深浅主题使用同一组色值，常用按钮的位置、名称和显隐规则对齐。系统标题栏、Mac 快捷键和文件面板保留平台行为。
 
-构建 7 在构建 6 的 Windows 风格界面基础上，增加 Markdown 表格行列编辑、Tab/Shift+Tab 单元格移动、列对齐、TSV 粘贴转表格，以及本地图片选择、拖入和剪贴板图片写入文档旁 `.assets`。批注存储和阅读简报导出核心已加入本机工程，界面入口将在后续迭代接入。验收见 [Mac 构建 7](docs/Mac构建7验收.md)。
+构建 8 在构建 7 的 Markdown 表格和图片能力基础上，加入工作区扫描、全局搜索、阅读清单、批注与阅读简报菜单、Markdown 列表快捷写作和 Mermaid 流程图。完整版本对照见 [Mac / Windows 功能对照](docs/Mac-Windows功能对照-v0.18.md)，验收见 [Mac 构建 8](docs/Mac构建8验收.md)。
+
+Windows 0.1–0.18 的完整功能点、Mac 对齐状态和后续验收顺序见 [Mac / Windows 功能对照](docs/Mac-Windows功能对照-v0.18.md)。
 
 ## Mac 构建 5 的功能对齐
 
@@ -84,7 +86,7 @@ bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
 ```
 
-应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `7`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
+应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `8`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
 
 当前脚本编译 Intel macOS 13 目标，执行 ad-hoc 本机签名；正式 Developer ID 签名、公证及自动更新仍待后续处理。构建不会自动替换 `/Applications` 中已安装的副本。
 

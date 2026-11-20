@@ -7,6 +7,8 @@ struct TextEditResult {
     let selection: NSRange
 }
 
+enum MarkdownListAction: Equatable { case newline, indent, outdent, toggleTask }
+
 enum TextEditing {
     private struct PrefixEdit {
         let location: Int

@@ -20,6 +20,18 @@ struct MarkdownAssetWriterTests {
         expect(second.fileURL != first.fileURL, "重复图片不覆盖旧附件")
         let encoded = first.relativePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? first.relativePath
         expect(first.markdownLink.contains(encoded), "生成可直接插入的 Markdown 图片链接")
+        let original = try Data(contentsOf: first.fileURL)
+        _ = try MarkdownAssetWriter.write(sourceURL: first.fileURL, documentURL: document)
+        expect(try! Data(contentsOf: first.fileURL) == original, "本地图片导入不覆盖已有附件")
+        let linkedAssets = root.appendingPathComponent("linked.assets")
+        try FileManager.default.createSymbolicLink(at: linkedAssets, withDestinationURL: root)
+        do { _ = try MarkdownAssetWriter.write(image: image, documentURL: root.appendingPathComponent("linked.md")); fatalError("必须拒绝附件目录符号链接") } catch { checks += 1 }
+        let oversized = root.appendingPathComponent("oversized.png")
+        FileManager.default.createFile(atPath: oversized.path, contents: Data())
+        let largeFile = try FileHandle(forWritingTo: oversized); try largeFile.truncate(atOffset: UInt64(MarkdownAssetWriter.maxInputBytes + 1)); try largeFile.close()
+        do { _ = try MarkdownAssetWriter.write(sourceURL: oversized, documentURL: document); fatalError("必须读前拒绝大图片") } catch { checks += 1 }
+        let special = try MarkdownAssetWriter.write(image: image, suggestedName: "a]b", documentURL: root.appendingPathComponent("notes(1).md"))
+        expect(special.markdownLink.contains("notes%281%29.assets") && special.markdownLink.contains("a\\]b"), "文件名括号和说明方括号不会破坏Markdown")
         print("MarkdownAssetWriterTests: \(checks) checks passed")
     }
     private static func expect(_ value: @autoclosure () -> Bool, _ message: String) { guard value() else { fatalError(message) }; checks += 1 }

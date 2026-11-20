@@ -231,6 +231,9 @@ enum TextFeatures {
         let base: [NSAttributedString.Key: Any] = [.font: baseFont, .foregroundColor: palette.foreground, .paragraphStyle: paragraph]
         let codeFont = NSFont.monospacedSystemFont(ofSize: max(11, fontSize - 1), weight: .regular)
         let sourceLines = lines(text)
+        let linkDefinitions = MarkdownLinks.referenceDefinitions(in: text)
+        let linkReferences = MarkdownLinks.references(in: text)
+        let definitionStarts = Set(linkDefinitions.map { $0.range.location })
         var fence: Character?
         var fenceLength = 0
         let metadataEnd = frontmatterEnd(sourceLines)
@@ -278,9 +281,18 @@ enum TextFeatures {
                 output.append(NSAttributedString(string: line.text + "\n", attributes: attrs))
                 index += 1; continue
             }
+            let lineRange = NSRange(location: 0, length: (line.text as NSString).length)
+            if (line.text.hasPrefix("    ") || line.text.hasPrefix("\t")),
+               bulletPattern?.firstMatch(in: line.text, range: lineRange) == nil,
+               orderedListPattern?.firstMatch(in: line.text, range: lineRange) == nil {
+                blockKind = "code"
+                var attrs = base; attrs[.font] = codeFont; attrs[.foregroundColor] = palette.string
+                output.append(NSAttributedString(string: line.text + "\n", attributes: attrs)); index += 1; continue
+            }
+            if definitionStarts.contains(line.range.location) { index += 1; continue }
             if let table = table(at: index, in: sourceLines) {
                 blockKind = "table"
-                appendTable(table.rows, alignments: table.alignments, to: output, base: base, palette: palette, codeFont: codeFont, fontSize: fontSize)
+                appendTable(table.rows, alignments: table.alignments, to: output, base: base, palette: palette, codeFont: codeFont, fontSize: fontSize, references: linkReferences)
                 output.append(NSAttributedString(string: "\n", attributes: base))
                 index = table.end; continue
             } else if let heading = headingTitle(line.text) {
@@ -288,13 +300,13 @@ enum TextFeatures {
                 var attrs = base
                 attrs[.font] = NSFont.systemFont(ofSize: fontSize + CGFloat(max(1, 5 - heading.level)) * 2, weight: .semibold)
                 attrs[.foregroundColor] = palette.accent
-                output.append(inline(heading.title, attributes: attrs, palette: palette, codeFont: codeFont))
+                output.append(inline(heading.title, attributes: attrs, palette: palette, codeFont: codeFont, references: linkReferences))
             } else if let level = setextLevel(at: index, in: sourceLines) {
                 blockKind = "heading"
                 var attrs = base
                 attrs[.font] = NSFont.systemFont(ofSize: fontSize + (level == 1 ? 8 : 6), weight: .semibold)
                 attrs[.foregroundColor] = palette.accent
-                output.append(inline(trimmed, attributes: attrs, palette: palette, codeFont: codeFont))
+                output.append(inline(trimmed, attributes: attrs, palette: palette, codeFont: codeFont, references: linkReferences))
                 index += 1
             } else if isThematicBreak(line.text) {
                 let block = NSTextBlock()
@@ -312,7 +324,7 @@ enum TextFeatures {
                 let style = paragraph.mutableCopy() as! NSMutableParagraphStyle
                 style.headIndent = 15; style.firstLineHeadIndent = 15
                 attrs[.paragraphStyle] = style
-                output.append(inline("▎ " + trimmed.dropFirst().trimmingCharacters(in: .whitespaces), attributes: attrs, palette: palette, codeFont: codeFont))
+                output.append(inline("▎ " + trimmed.dropFirst().trimmingCharacters(in: .whitespaces), attributes: attrs, palette: palette, codeFont: codeFont, references: linkReferences))
             } else {
                 var content = line.text
                 if let re = taskPattern,
@@ -326,7 +338,7 @@ enum TextFeatures {
                     let indent = (content as NSString).substring(with: match.range(at: 1))
                     content = indent + "• " + (content as NSString).substring(from: NSMaxRange(match.range))
                 }
-                output.append(inline(content, attributes: base, palette: palette, codeFont: codeFont))
+                output.append(inline(content, attributes: base, palette: palette, codeFont: codeFont, references: linkReferences))
             }
             output.append(NSAttributedString(string: "\n", attributes: base))
             index += 1
@@ -415,7 +427,7 @@ enum TextFeatures {
             && bulletPattern?.firstMatch(in: line, range: range) == nil && orderedListPattern?.firstMatch(in: line, range: range) == nil
     }
 
-    private static func appendTable(_ rows: [[String]], alignments: [NSTextAlignment], to output: NSMutableAttributedString, base: [NSAttributedString.Key: Any], palette: EditorPalette, codeFont: NSFont, fontSize: CGFloat) {
+    private static func appendTable(_ rows: [[String]], alignments: [NSTextAlignment], to output: NSMutableAttributedString, base: [NSAttributedString.Key: Any], palette: EditorPalette, codeFont: NSFont, fontSize: CGFloat, references: [String: MarkdownLinkReference]) {
         let table = NSTextTable(); table.numberOfColumns = alignments.count
         table.layoutAlgorithm = .fixedLayoutAlgorithm; table.collapsesBorders = true
         table.setContentWidth(100, type: .percentageValueType)
@@ -440,7 +452,7 @@ enum TextFeatures {
                 style.textBlocks = [block]; style.alignment = alignments[column]
                 var attrs = base; attrs[.paragraphStyle] = style
                 if rowIndex == 0 { attrs[.font] = NSFont.systemFont(ofSize: fontSize, weight: .semibold) }
-                let rendered = NSMutableAttributedString(attributedString: inline(cell, attributes: attrs, palette: palette, codeFont: codeFont))
+                let rendered = NSMutableAttributedString(attributedString: inline(cell, attributes: attrs, palette: palette, codeFont: codeFont, references: references))
                 rendered.append(NSAttributedString(string: "\n", attributes: attrs)); output.append(rendered)
             }
         }
@@ -482,19 +494,42 @@ enum TextFeatures {
     private static let inlinePattern = ##"!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\(([^)\s]+)(?:[ \t]+\"[^\"]*\")?\)|`([^`]+)`|\*\*([^*]+)\*\*|(?<![\p{L}\p{N}])__([^_]+)__(?![\p{L}\p{N}])|~~([^~]+)~~|\*([^*\n]+)\*|(?<![\p{L}\p{N}])_([^_\n]+)_(?![\p{L}\p{N}])|\\([!\"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])"##
     private static let inlineRegex = try? NSRegularExpression(pattern: inlinePattern)
 
-    private static func inline(_ source: String, attributes: [NSAttributedString.Key: Any], palette: EditorPalette, codeFont: NSFont) -> NSAttributedString {
+    private static func inline(_ source: String, attributes: [NSAttributedString.Key: Any], palette: EditorPalette, codeFont: NSFont, references: [String: MarkdownLinkReference], depth: Int = 0, allowLinks: Bool = true) -> NSAttributedString {
         let output = NSMutableAttributedString()
-        guard let regex = inlineRegex else { return NSAttributedString(string: source, attributes: attributes) }
+        guard let regex = inlineRegex, depth < 8 else { return NSAttributedString(string: source, attributes: attributes) }
         let ns = source as NSString
+        let occurrences = allowLinks ? MarkdownLinks.occurrences(in: source, references: references) : []
+        var tokens: [(range: NSRange, match: NSTextCheckingResult?, link: MarkdownLinkOccurrence?)] = regex.matches(in: source, range: NSRange(location: 0, length: ns.length)).map { ($0.range, $0, nil) }
+        tokens.append(contentsOf: occurrences.map { ($0.range, nil, $0) })
+        tokens.sort { $0.range.location == $1.range.location ? ($0.link != nil && $1.link == nil) : $0.range.location < $1.range.location }
         var position = 0
-        for match in regex.matches(in: source, range: NSRange(location: 0, length: ns.length)) {
-            if match.range.location > position { output.append(NSAttributedString(string: ns.substring(with: NSRange(location: position, length: match.range.location - position)), attributes: attributes)) }
+        for token in tokens {
+            guard token.range.location >= position else { continue }
+            if token.range.location > position { output.append(NSAttributedString(string: ns.substring(with: NSRange(location: position, length: token.range.location - position)), attributes: attributes)) }
+            if let link = token.link {
+                var attrs = attributes
+                if link.isImage {
+                    attrs[.foregroundColor] = palette.muted
+                    attrs[NSAttributedString.Key("qingyue.imageReference")] = link.destination
+                    attrs[NSAttributedString.Key("qingyue.imageAlt")] = link.label
+                    attrs[NSAttributedString.Key("qingyue.imageID")] = link.range.location
+                    output.append(NSAttributedString(string: link.label.isEmpty ? "〔图片〕" : "〔图片：\(link.label)〕", attributes: attrs))
+                } else {
+                    attrs[.foregroundColor] = palette.accent
+                    if let url = URL(string: link.destination), let scheme = url.scheme?.lowercased(), MarkdownLinks.allowedSchemes.contains(scheme) { attrs[.link] = url }
+                    if let title = link.title { attrs[.toolTip] = title }
+                    output.append(inline(link.label, attributes: attrs, palette: palette, codeFont: codeFont, references: [:], depth: depth + 1, allowLinks: false))
+                }
+                position = NSMaxRange(token.range); continue
+            }
+            guard let match = token.match else { continue }
             func value(_ index: Int) -> String? {
                 let range = match.range(at: index)
                 return range.location == NSNotFound ? nil : ns.substring(with: range)
             }
             var attrs = attributes
             var content = ns.substring(with: match.range)
+            var nested = false
             if let escaped = value(10) {
                 content = escaped
             } else if let alt = value(1) {
@@ -519,16 +554,17 @@ enum TextFeatures {
                 attrs[.foregroundColor] = palette.string
                 attrs[.backgroundColor] = palette.muted.withAlphaComponent(0.09)
             } else if let bold = value(5) ?? value(6) {
-                content = bold
+                content = bold; nested = true
                 if let font = attrs[.font] as? NSFont { attrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
             } else if let strike = value(7) {
-                content = strike
+                content = strike; nested = true
                 attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             } else if let italic = value(8) ?? value(9) {
-                content = italic
+                content = italic; nested = true
                 if let font = attrs[.font] as? NSFont { attrs[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
             }
-            output.append(NSAttributedString(string: content, attributes: attrs))
+            if nested { output.append(inline(content, attributes: attrs, palette: palette, codeFont: codeFont, references: references, depth: depth + 1, allowLinks: allowLinks)) }
+            else { output.append(NSAttributedString(string: content, attributes: attrs)) }
             position = NSMaxRange(match.range)
         }
         if position < ns.length { output.append(NSAttributedString(string: ns.substring(from: position), attributes: attributes)) }

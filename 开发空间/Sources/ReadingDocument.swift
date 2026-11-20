@@ -59,7 +59,7 @@ struct ReadingDocument {
     }
 
     static func build(text: String, kind: TextKind, palette: EditorPalette, fontSize: CGFloat,
-                      readingFontName: String, lineSpacing: CGFloat) -> ReadingDocument {
+                      readingFontName: String, lineSpacing: CGFloat, paragraphSpacing: CGFloat = 13) -> ReadingDocument {
         let source = text as NSString
         let size = fontSize.isFinite ? min(48, max(10, fontSize)) : 16
         let spacing = lineSpacing.isFinite ? min(40, max(0, lineSpacing)) : 6
@@ -67,7 +67,7 @@ struct ReadingDocument {
 
         if kind == .markdown && rich {
             let rendered = NSMutableAttributedString(attributedString: TextFeatures.markdownPreview(text, palette: palette, fontSize: size))
-            applyReadingStyle(rendered, fontName: readingFontName, lineSpacing: spacing)
+            applyReadingStyle(rendered, fontName: readingFontName, lineSpacing: spacing, paragraphSpacing: paragraphSpacing)
             var mapped: [ReadingSegment] = []
             rendered.enumerateAttribute(sourceRangeAttribute, in: NSRange(location: 0, length: rendered.length)) { value, display, _ in
                 guard let value = value as? NSValue else { return }
@@ -92,7 +92,7 @@ struct ReadingDocument {
             : bodyFont(readingFontName, size: size)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = structured ? min(spacing, 4) : spacing
-        paragraph.paragraphSpacing = structured ? 0 : 4
+        paragraph.paragraphSpacing = structured ? 0 : min(48, max(0, paragraphSpacing.isFinite ? paragraphSpacing : 13))
         let rendered = NSTextStorage(string: text, attributes: [.font: font, .foregroundColor: palette.foreground, .paragraphStyle: paragraph])
         if rich && structured { TextFeatures.highlight(rendered, kind: kind, palette: palette, font: font) }
         let all = NSRange(location: 0, length: source.length)
@@ -134,7 +134,7 @@ struct ReadingDocument {
         NSFont(name: name, size: size) ?? NSFont.systemFont(ofSize: size)
     }
 
-    private static func applyReadingStyle(_ text: NSMutableAttributedString, fontName: String, lineSpacing: CGFloat) {
+    private static func applyReadingStyle(_ text: NSMutableAttributedString, fontName: String, lineSpacing: CGFloat, paragraphSpacing: CGFloat) {
         let all = NSRange(location: 0, length: text.length)
         // Inspect one attribute at a time so the source-map attribute does not
         // force an identical font/paragraph conversion for every short line.
@@ -150,6 +150,7 @@ struct ReadingDocument {
             if let style = value as? NSParagraphStyle,
                let changed = style.mutableCopy() as? NSMutableParagraphStyle {
                 changed.lineSpacing = lineSpacing
+                changed.paragraphSpacing = min(48, max(0, paragraphSpacing.isFinite ? paragraphSpacing : 13))
                 text.addAttribute(.paragraphStyle, value: changed, range: range)
             }
         }

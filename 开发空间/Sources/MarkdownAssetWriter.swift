@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import ImageIO
+import Darwin
 
 struct MarkdownAssetWriteResult {
     let fileURL: URL
@@ -20,31 +22,51 @@ enum MarkdownAssetWriter {
     static let maxPixels = 16_000_000
 
     static func write(sourceURL: URL, documentURL: URL) throws -> MarkdownAssetWriteResult {
-        let values = try Data(contentsOf: sourceURL, options: [.mappedIfSafe])
+        let info = try sourceURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .volumeIsLocalKey])
+        guard sourceURL.isFileURL, info.isRegularFile == true, info.volumeIsLocal == true,
+              let size = info.fileSize, size <= maxInputBytes else { throw MarkdownAssetWriterError.tooLarge }
+        let handle = try FileHandle(forReadingFrom: sourceURL); defer { try? handle.close() }
+        let values = try handle.read(upToCount: maxInputBytes + 1) ?? Data()
         guard values.count <= maxInputBytes else { throw MarkdownAssetWriterError.tooLarge }
-        guard let image = NSImage(data: values) else { throw CocoaError(.fileReadCorruptFile) }
-        return try write(image: image, suggestedName: sourceURL.deletingPathExtension().lastPathComponent, documentURL: documentURL)
+        guard let source = CGImageSourceCreateWithData(values as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0, width <= maxPixels / height else { throw MarkdownAssetWriterError.tooLarge }
+        guard let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw CocoaError(.fileReadCorruptFile) }
+        return try write(cg: cg, suggestedName: sourceURL.deletingPathExtension().lastPathComponent, documentURL: documentURL)
     }
 
     static func write(image: NSImage, suggestedName: String = "image", documentURL: URL) throws -> MarkdownAssetWriteResult {
         guard image.isValid, image.size.width > 0, image.size.height > 0,
               image.size.width * image.size.height <= CGFloat(maxPixels) else { throw MarkdownAssetWriterError.tooLarge }
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]), png.count <= maxInputBytes else { throw MarkdownAssetWriterError.tooLarge }
-        let directory = documentURL.deletingLastPathComponent()
+        for rep in image.representations where rep.pixelsWide > 0 && rep.pixelsHigh > 0 {
+            guard rep.pixelsWide <= maxPixels / rep.pixelsHigh else { throw MarkdownAssetWriterError.tooLarge }
+        }
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { throw CocoaError(.fileReadCorruptFile) }
+        return try write(cg: cg, suggestedName: suggestedName, documentURL: documentURL)
+    }
+
+    private static func write(cg: CGImage, suggestedName: String, documentURL: URL) throws -> MarkdownAssetWriteResult {
+        guard cg.height > 0, cg.width <= maxPixels / cg.height else { throw MarkdownAssetWriterError.tooLarge }
+        let bitmap = NSBitmapImageRep(cgImage: cg)
+        guard let png = bitmap.representation(using: .png, properties: [:]), png.count <= maxInputBytes else { throw MarkdownAssetWriterError.tooLarge }
+        let directory = documentURL.deletingLastPathComponent().standardizedFileURL
         let assets = directory.appendingPathComponent(documentURL.deletingPathExtension().lastPathComponent + ".assets", isDirectory: true)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: assets.path), attrs[.type] as? FileAttributeType != .typeDirectory { throw CocoaError(.fileWriteInvalidFileName) }
         try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
         let safe = sanitize(suggestedName)
-        var index = 1
-        var target = assets.appendingPathComponent(safe + ".png")
-        while FileManager.default.fileExists(atPath: target.path) {
-            index += 1; target = assets.appendingPathComponent("\(safe)-\(index).png")
-        }
-        try png.write(to: target, options: .atomic)
-        let relative = target.path.replacingOccurrences(of: directory.path.hasSuffix("/") ? directory.path : directory.path + "/", with: "")
-        let encoded = relative.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relative
-        return MarkdownAssetWriteResult(fileURL: target, relativePath: relative, markdownLink: "![\(suggestedName.isEmpty ? "图片" : suggestedName)](\(encoded))")
+        let target = assets.appendingPathComponent(safe + "-" + UUID().uuidString + ".png")
+        let fd = Darwin.open(target.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw CocoaError(.fileWriteFileExists) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do { try handle.write(contentsOf: png); try handle.close() }
+        catch { try? handle.close(); try? FileManager.default.removeItem(at: target); throw error }
+        let relative = assets.lastPathComponent + "/" + target.lastPathComponent
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "()#?[]")
+        let encoded = relative.addingPercentEncoding(withAllowedCharacters: allowed) ?? relative
+        let alt = suggestedName.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "]", with: "\\]").replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "\n", with: " ")
+        return MarkdownAssetWriteResult(fileURL: target, relativePath: relative, markdownLink: "![\(alt.isEmpty ? "图片" : alt)](\(encoded))")
     }
 
     private static func sanitize(_ value: String) -> String {

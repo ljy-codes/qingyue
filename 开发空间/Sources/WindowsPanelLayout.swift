@@ -8,16 +8,36 @@ final class WindowsFlowToolbar: NSView {
         addSubview(view); arrangedSubviews.append(view)
     }
     @discardableResult func arrange(width: CGFloat) -> CGFloat {
-        var x: CGFloat = 0, y: CGFloat = 0
-        let height: CGFloat = 32, gap: CGFloat = 8
-        for view in arrangedSubviews where !view.isHidden {
+        let height: CGFloat = 26, gap: CGFloat = 8
+        var rows: [[(NSView, CGFloat)]] = [[]]
+        var used: CGFloat = 0
+        let hints = arrangedSubviews.filter { $0 is NSTextField && !$0.isHidden }
+        for view in arrangedSubviews where !view.isHidden && !(view is NSTextField) {
             let intrinsic = view.intrinsicContentSize.width
             let desired = min(max(48, intrinsic > 0 ? intrinsic : view.fittingSize.width), max(48, width))
-            if x > 0 && x + desired > width { x = 0; y += height + gap }
-            view.frame = NSRect(x: x, y: y, width: desired, height: height)
-            x += desired + gap
+            if used > 0 && used + gap + desired > width { rows.append([]); used = 0 }
+            rows[rows.count - 1].append((view, desired)); used += (used > 0 ? gap : 0) + desired
         }
-        return max(height, y + height)
+        var y: CGFloat = 0
+        for row in rows {
+            let total = row.reduce(CGFloat(0)) { $0 + $1.1 } + CGFloat(max(0, row.count - 1)) * gap
+            var x = max(0, width - total)
+            for (view, desired) in row { view.frame = NSRect(x: x, y: y, width: desired, height: height); x += desired + gap }
+            y += height + gap
+        }
+        if let first = hints.first {
+            let row = rows.first ?? []
+            let total = row.reduce(CGFloat(0)) { $0 + $1.1 } + CGFloat(max(0, row.count - 1)) * gap
+            let available = width - total - 12
+            if hints.count == 1 && available >= 100 {
+                first.frame = NSRect(x: 0, y: 5, width: available, height: 18)
+            } else {
+                for hint in hints {
+                    hint.frame = NSRect(x: 0, y: y, width: width, height: 18); y += 22
+                }
+            }
+        }
+        return max(height, y - gap)
     }
     override var isFlipped: Bool { true }
     override func layout() { super.layout(); arrange(width: bounds.width) }

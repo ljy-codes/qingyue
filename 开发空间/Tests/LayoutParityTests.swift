@@ -54,11 +54,13 @@ struct LayoutParityTests {
         let sidebar = try region("QingyueSidebar", root)
         let tools = try region("QingyueContextToolbar", root)
         let footer = try region("QingyueFooter", root)
-        for pair in [(menu, header), (header, tabs), (tabs, body)] {
+        try expect(header.superview === menu && abs(frame(menu, root).midY - frame(header, root).midY) < 1, "Windows 0.18 menus and branding share one compact top row")
+        try expect(frame(menu, root).height + frame(tabs, root).height + frame(tools, root).height <= 120, "normal editor chrome leaves continuous space for the document")
+        for pair in [(menu, tabs), (tabs, body)] {
             try expect(frame(pair.0, root).minY >= frame(pair.1, root).maxY - 1, "full-width rows are in the Windows top-to-bottom order")
         }
         try expect(frame(body, root).minY >= frame(footer, root).maxY - 1, "footer is below the document workspace")
-        for row in [menu, header, tabs, body, footer] {
+        for row in [menu, tabs, body, footer] {
             try expect(abs(frame(row, root).minX) <= 1 && abs(frame(row, root).maxX - root.bounds.width) <= 1, "structural rows span the complete application width")
         }
         try expect(abs(sidebar.frame.width - 218) <= 1, "normal sidebar uses the Windows 218-point width")
@@ -68,10 +70,10 @@ struct LayoutParityTests {
         let mainActions = headerButtons.filter { !$0.title.isEmpty }.map { $0.title }
         try expect(mainActions.count == 4 && mainActions[0] == "打开文件" && mainActions[1] == "保存" && mainActions[3] == "专注", "header contains only the Windows four primary actions")
         let sidebarToggle = try required(headerButtons.first { $0.accessibilityLabel() == "显示或隐藏侧栏" || $0.title.isEmpty }, "sidebar icon remains in the brand header")
-        try expect(abs(sidebarToggle.frame.width - 36) <= 1, "sidebar control uses the compact 36-point icon layout")
+        try expect(abs(sidebarToggle.frame.width - 30) <= 1, "sidebar control uses the compact 30-point icon layout")
         let branding = descendants(header).compactMap { $0 as? NSTextField }
-        try expect(branding.contains { $0.stringValue == "轻阅" && abs(($0.font?.pointSize ?? 0) - 22) < 0.1 }, "brand title uses 22-point type")
-        try expect(branding.contains { $0.stringValue == "本机文本 · 阅读与编辑" && abs(($0.font?.pointSize ?? 0) - 11) < 0.1 }, "brand subtitle uses the corresponding 11-point type")
+        try expect(branding.contains { $0.stringValue == "轻阅" && abs(($0.font?.pointSize ?? 0) - 18) < 0.1 }, "brand title uses 18-point type")
+        try expect(!branding.contains { $0.stringValue == "本机文本 · 阅读与编辑" && !$0.isHiddenOrHasHiddenAncestor }, "compact branding removes the legacy subtitle")
         let readingAction = try required(headerButtons.first { ["阅读模式", "编辑原文", "返回预览"].contains($0.title) } as? ActionButton, "reading action exists")
         try expect(readingAction.isEmphasized, "reading action is the accented primary action")
         let plus = try required(visibleButtons(tabs).first { $0.title == "+" }, "tab-row plus is directly clickable")
@@ -130,7 +132,7 @@ struct LayoutParityTests {
         try expect(!sidebar.isHiddenOrHasHiddenAncestor && abs(sidebar.frame.width - 218) < 1, "sidebar reopening restores its reserved width")
         reader.toggleFocus(nil)
         root.layoutSubtreeIfNeeded()
-        try expect(menu.isHiddenOrHasHiddenAncestor && tabs.isHiddenOrHasHiddenAncestor && sidebar.isHiddenOrHasHiddenAncestor, "Windows-style focus hides menus, tabs and sidebar")
+        try expect(!menu.isHiddenOrHasHiddenAncestor && tabs.isHiddenOrHasHiddenAncestor && sidebar.isHiddenOrHasHiddenAncestor, "focus keeps the shared top row while hiding tabs and sidebar")
         try expect(!header.isHiddenOrHasHiddenAncestor && !tools.isHiddenOrHasHiddenAncestor, "focus retains brand operations and context toolbar")
         let exitFocus = try required(visibleButtons(header).first { $0.title == "退出专注" }, "focus exit stays in the header")
         try checkFooter(footer, root: root)
@@ -155,12 +157,12 @@ struct LayoutParityTests {
             try expect(abs(frame(tabs, root).width - width) < 1, "tab row remains full width after resizing")
         }
         let darkTheme = ReaderTheme(dark: true)
-        try expect(rgb((sidebar as! ColorView).color) == "333333", "dark sidebar matches the Windows graphite panel")
-        try expect(rgb(darkTheme.editor) == "3F3F3F" && rgb(darkTheme.text) == "DCDCCC", "dark text and editor tokens match Windows")
+        try expect(rgb((sidebar as! ColorView).color) == "23262B", "dark sidebar matches the Windows graphite panel")
+        try expect(rgb(darkTheme.editor) == "30343A" && rgb(darkTheme.text) == "E8E2D8", "dark text and editor tokens match Windows")
         reader.toggleTheme(nil)
         root.layoutSubtreeIfNeeded()
-        try expect(rgb((sidebar as! ColorView).color) == "E9EDF3", "light sidebar matches the Windows light panel")
-        try expect(rgb(ReaderTheme(dark: false).editor) == "FFFFFF", "light editor uses the common white canvas")
+        try expect(rgb((sidebar as! ColorView).color) == "EFEAE2", "light sidebar matches the Windows light panel")
+        try expect(rgb(ReaderTheme(dark: false).editor) == "F8FAFC", "light editor uses the shared neutral canvas")
 
         try expect(try Data(contentsOf: markdownURL) == Data(markdown.utf8), "layout and navigation never rewrite Markdown")
         try expect(try Data(contentsOf: jsonURL) == Data(json.utf8), "layout and mode changes never rewrite JSON")

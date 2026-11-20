@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import ImageIO
+import CryptoKit
 
 final class ReadingMediaTask {
     private let lock = NSLock()
@@ -35,6 +36,15 @@ final class ReadingImageAttachment: NSTextAttachment {
 }
 
 enum ReadingMediaLoader {
+    private final class DecodedImage {
+        let png: Data
+        let width: Int, height: Int, sourcePixels: Int
+        init(png: Data, width: Int, height: Int, sourcePixels: Int) { self.png = png; self.width = width; self.height = height; self.sourcePixels = sourcePixels }
+    }
+    private static let decodedCache: NSCache<NSString, DecodedImage> = {
+        let cache = NSCache<NSString, DecodedImage>(); cache.countLimit = 32; cache.totalCostLimit = 24 * 1024 * 1024; return cache
+    }()
+    static func clearCache() { decodedCache.removeAllObjects() }
     static let referenceAttribute = NSAttributedString.Key("qingyue.imageReference")
     static let altAttribute = NSAttributedString.Key("qingyue.imageAlt")
     static let maximumImages = 32
@@ -69,6 +79,13 @@ enum ReadingMediaLoader {
                     let data = try readImage(request.reference, baseURL: baseURL)
                     guard data.count <= maximumFileBytes, totalBytes <= maximumTotalBytes - data.count else { throw error("图片数据量超过限制。") }
                     totalBytes += data.count
+                    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() as NSString
+                    if let cached = decodedCache.object(forKey: digest) {
+                        guard totalPixels <= maximumTotalPixels - cached.sourcePixels else { throw error("本篇图片总像素超过限制。") }
+                        totalPixels += cached.sourcePixels
+                        results.append(Loaded(request: request, original: data, png: cached.png, size: NSSize(width: cached.width, height: cached.height)))
+                        continue
+                    }
                     guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
                           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                           let w = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
@@ -85,6 +102,7 @@ enum ReadingMediaLoader {
                     CGImageDestinationAddImage(destination, cg, nil)
                     guard CGImageDestinationFinalize(destination), out.length <= maximumTotalBytes else { throw error("解码图片过大。") }
                     totalPixels += pixels
+                    decodedCache.setObject(DecodedImage(png: out as Data, width: cg.width, height: cg.height, sourcePixels: pixels), forKey: digest, cost: out.length + cg.width * cg.height * 4)
                     results.append(Loaded(request: request, original: data, png: out as Data, size: NSSize(width: cg.width, height: cg.height)))
                 } catch { warnings.append("图片“\(request.alt.isEmpty ? String(request.reference.prefix(80)) : request.alt)”：\(error.localizedDescription)") }
             }

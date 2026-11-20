@@ -10,28 +10,31 @@ extension NSColor {
 
 struct ReaderTheme {
     let dark: Bool
-    // Tokens mirror Windows MainWindow.ApplyTheme and Theme.xaml. Keeping the
-    // values here avoids a second visual identity on the native Mac client.
-    var window: NSColor { NSColor(hex: dark ? 0x2B2B2B : 0xF3F5F8) }
-    var panel: NSColor { NSColor(hex: dark ? 0x333333 : 0xE9EDF3) }
-    var editor: NSColor { NSColor(hex: dark ? 0x3F3F3F : 0xFFFFFF) }
-    var text: NSColor { NSColor(hex: dark ? 0xDCDCCC : 0x17253B) }
-    var muted: NSColor { NSColor(hex: dark ? 0xBDBDB5 : 0x53647A) }
-    var border: NSColor { NSColor(hex: dark ? 0x585858 : 0xCFD7E3) }
-    var accent: NSColor { NSColor(hex: dark ? 0x4782FF : 0x2464DB) }
-    var selection: NSColor { NSColor(hex: dark ? 0x365579 : 0xCFDFFF) }
-    var hover: NSColor { NSColor(hex: dark ? 0x4A4A4A : 0xDFE7F4) }
+    var warmPaper = false
+    private func color(_ darkValue: UInt32, _ lightValue: UInt32, _ warmValue: UInt32) -> NSColor {
+        NSColor(hex: warmPaper ? warmValue : dark ? darkValue : lightValue)
+    }
+    // Shared Windows 0.18 palette: window, side panel, main surface, editor.
+    var window: NSColor { color(0x191B1F, 0xF6F4EF, 0xEDE3D1) }
+    var panel: NSColor { color(0x23262B, 0xEFEAE2, 0xE5D6C0) }
+    var main: NSColor { color(0x24354A, 0xE6F0FA, 0xE7EEF0) }
+    var editor: NSColor { color(0x30343A, 0xF8FAFC, 0xFFF8E9) }
+    var text: NSColor { color(0xE8E2D8, 0x262A2F, 0x3C3026) }
+    var muted: NSColor { color(0xBEB8AE, 0x6B6A66, 0x786A5A) }
+    var border: NSColor { color(0x4B4D52, 0xD8D1C5, 0xCDB99C) }
+    var accent: NSColor { color(0x2F6FDB, 0x2F6FDB, 0xA75832) }
+    var selection: NSColor { color(0x355A91, 0xD7E5FA, 0xE8D2B6) }
+    var hover: NSColor { color(0x34383F, 0xF3EDE4, 0xF1E4D1) }
     var button: NSColor { panel }
     var tabSelected: NSColor { panel }
-    var accentText: NSColor { NSColor(hex: dark ? 0x88C8FF : 0x1F60BD) }
-    var unsaved: NSColor { NSColor(hex: dark ? 0xFFBE72 : 0xA95A00) }
-    var saved: NSColor { NSColor(hex: dark ? 0x74D6AD : 0x19764E) }
+    var accentText: NSColor { color(0x8DC5FF, 0x175BB5, 0xA75832) }
+    var unsaved: NSColor { color(0xFFC078, 0xA95A00, 0xA95A00) }
+    var saved: NSColor { color(0x7BDEB3, 0x19764E, 0x19764E) }
     var palette: EditorPalette {
         EditorPalette(background: editor, foreground: text, muted: muted, accent: accentText,
-                      string: NSColor(hex: dark ? 0xFFD096 : 0xA64A0A),
-                      number: NSColor(hex: dark ? 0x74DEC7 : 0x087563),
-                      comment: NSColor(hex: dark ? 0xBAC5BA : 0x5C6D59),
-                      key: NSColor(hex: dark ? 0x88C8FF : 0x175BB5))
+                      string: color(0xFFD39A, 0xA64A0A, 0xA64A0A),
+                      number: color(0x82DFC9, 0x087563, 0x087563),
+                      comment: color(0xC3C9BF, 0x5C6D59, 0x5C6D59), key: accentText)
     }
 }
 
@@ -202,6 +205,7 @@ final class EditorTextView: NSTextView {
     var filesDropped: (([URL]) -> Void)?
     var imagesDropped: (([URL]) -> Bool)?
     var imagePasteHandler: (() -> Bool)?
+    var listEditHandler: ((NSRange, MarkdownListAction) -> TextEditResult?)?
     var cancelHandler: (() -> Void)?
     override func cancelOperation(_ sender: Any?) {
         if hasMarkedText() { super.cancelOperation(sender); return }
@@ -211,26 +215,36 @@ final class EditorTextView: NSTextView {
     override func insertTab(_ sender: Any?) {
         if hasMarkedText() { super.insertTab(sender); return }
         if let edit = tableEditHandler?(selectedRange(), false) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .indent) { applyEdit(edit); return }
         applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: false))
     }
     override func insertBacktab(_ sender: Any?) {
+        if hasMarkedText() { super.insertBacktab(sender); return }
         if let edit = tableEditHandler?(selectedRange(), true) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .outdent) { applyEdit(edit); return }
         applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: true))
     }
     override func insertNewline(_ sender: Any?) {
         if hasMarkedText() { super.insertNewline(sender); return }
+        if let edit = tableNewlineHandler?(selectedRange()) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .newline) { applyEdit(edit); return }
         applyEdit(TextEditing.newline(text: string, selection: selectedRange()))
     }
-    private func applyEdit(_ edit: TextEditResult?) {
-        guard let edit = edit, isEditable else { return }
+    @discardableResult private func applyEdit(_ edit: TextEditResult?) -> Bool {
+        guard let edit = edit, isEditable, !hasMarkedText() else { return false }
+        if edit.range.length == 0 && edit.replacement.isEmpty {
+            setSelectedRange(edit.selection); scrollRangeToVisible(edit.selection); return true
+        }
         breakUndoCoalescing()
         if shouldChangeText(in: edit.range, replacementString: edit.replacement) {
             replaceCharacters(in: edit.range, with: edit.replacement); didChangeText(); setSelectedRange(edit.selection)
+            breakUndoCoalescing(); return true
         }
-        breakUndoCoalescing()
+        breakUndoCoalescing(); return false
     }
     var tableEditHandler: ((NSRange, Bool) -> TextEditResult?)?
-    func applyExternalEdit(_ edit: TextEditResult) { applyEdit(edit) }
+    var tableNewlineHandler: ((NSRange) -> TextEditResult?)?
+    @discardableResult func applyExternalEdit(_ edit: TextEditResult) -> Bool { applyEdit(edit) }
     override func paste(_ sender: Any?) {
         if imagePasteHandler?() == true { return }
         super.paste(sender)

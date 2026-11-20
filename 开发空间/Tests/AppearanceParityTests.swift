@@ -10,18 +10,18 @@ struct AppearanceParityTests {
         NSApp.setActivationPolicy(.prohibited)
         let dark = ReaderTheme(dark: true), light = ReaderTheme(dark: false)
         let expectedDark: [(NSColor, UInt32)] = [
-            (dark.window, 0x2B2B2B), (dark.panel, 0x333333), (dark.editor, 0x3F3F3F),
-            (dark.text, 0xDCDCCC), (dark.muted, 0xBDBDB5), (dark.border, 0x585858),
-            (dark.accent, 0x4782FF), (dark.selection, 0x365579), (dark.hover, 0x4A4A4A),
-            (dark.accentText, 0x88C8FF), (dark.palette.key, 0x88C8FF),
-            (dark.palette.string, 0xFFD096), (dark.palette.number, 0x74DEC7),
-            (dark.palette.comment, 0xBAC5BA), (dark.unsaved, 0xFFBE72), (dark.saved, 0x74D6AD)
+            (dark.window, 0x191B1F), (dark.panel, 0x23262B), (dark.main, 0x24354A), (dark.editor, 0x30343A),
+            (dark.text, 0xE8E2D8), (dark.muted, 0xBEB8AE), (dark.border, 0x4B4D52),
+            (dark.accent, 0x2F6FDB), (dark.selection, 0x355A91), (dark.hover, 0x34383F),
+            (dark.accentText, 0x8DC5FF), (dark.palette.key, 0x8DC5FF),
+            (dark.palette.string, 0xFFD39A), (dark.palette.number, 0x82DFC9),
+            (dark.palette.comment, 0xC3C9BF), (dark.unsaved, 0xFFC078), (dark.saved, 0x7BDEB3)
         ]
         let expectedLight: [(NSColor, UInt32)] = [
-            (light.window, 0xF3F5F8), (light.panel, 0xE9EDF3), (light.editor, 0xFFFFFF),
-            (light.text, 0x17253B), (light.muted, 0x53647A), (light.border, 0xCFD7E3),
-            (light.accent, 0x2464DB), (light.selection, 0xCFDFFF), (light.hover, 0xDFE7F4),
-            (light.accentText, 0x1F60BD), (light.palette.key, 0x175BB5),
+            (light.window, 0xF6F4EF), (light.panel, 0xEFEAE2), (light.main, 0xE6F0FA), (light.editor, 0xF8FAFC),
+            (light.text, 0x262A2F), (light.muted, 0x6B6A66), (light.border, 0xD8D1C5),
+            (light.accent, 0x2F6FDB), (light.selection, 0xD7E5FA), (light.hover, 0xF3EDE4),
+            (light.accentText, 0x175BB5), (light.palette.key, 0x175BB5),
             (light.palette.string, 0xA64A0A), (light.palette.number, 0x087563),
             (light.palette.comment, 0x5C6D59), (light.unsaved, 0xA95A00), (light.saved, 0x19764E)
         ]
@@ -30,6 +30,22 @@ struct AppearanceParityTests {
         expect(contrast(dark.text, dark.editor) >= 4.5, "Dark document foreground remains legible")
         expect(contrast(light.text, light.editor) >= 4.5, "Light document foreground remains legible")
         expect(contrast(dark.muted, dark.panel) >= 4.5 && contrast(light.muted, light.panel) >= 4.5, "Auxiliary labels have sufficient contrast in both themes")
+
+        let warm = ReaderTheme(dark: false, warmPaper: true)
+        expect(rgb(warm.main) == 0xE7EEF0 && rgb(warm.editor) == 0xFFF8E9 && rgb(warm.text) == 0x3C3026, "Warm paper uses the shared Windows palette")
+        expect(contrast(warm.text, warm.editor) >= 4.5, "Warm paper foreground remains legible")
+        expect(AppIconTheme.allCases.map(\.label) == ["天空蓝", "樱花紫", "薄荷珊瑚", "蜜桃紫"], "Four Windows icon themes are available")
+        expect(AppIconTheme.parse(nil) == .sky && AppIconTheme.parse("unknown") == .sky, "Old and invalid icon settings default to sky")
+        expect(AppIconTheme.parse("sakura") == .sakura && AppIconTheme.parse("薄荷珊瑚") == .mint, "Icon names and labels normalize correctly")
+        let iconSuite = "qingyue-icon-tests-" + UUID().uuidString
+        let iconDefaults = UserDefaults(suiteName: iconSuite)!
+        defer { iconDefaults.removePersistentDomain(forName: iconSuite) }
+        for option in AppIconTheme.allCases {
+            expect(AppIconTheme.load(option)?.isValid == true, "Bundled \(option.label) PNG is readable")
+            AppIconTheme.apply(option, defaults: iconDefaults)
+            expect(AppIconTheme.parse(iconDefaults.string(forKey: "iconTheme")) == option, "Icon choice survives local setting serialization")
+        }
+        AppIconTheme.apply(.sky, defaults: iconDefaults)
 
         var actions = 0
         let button = ActionButton("打开文件") { actions += 1 }

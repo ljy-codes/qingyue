@@ -26,22 +26,24 @@ enum ReadingBriefExporter {
     static let maximumBytes = 8 * 1024 * 1024
 
     static func buildMarkdown(_ input: ReadingBriefInput) throws -> String {
+        let lineNumbers = sourceLineNumbers(input)
         var output = "# 阅读简报：\(escapeInline(input.title.trimmingCharacters(in: .whitespacesAndNewlines)))\n\n"
-        output += "- 来源：\(input.sourcePath.map { "`\(escapeCode($0))`" } ?? "未保存文档")\n"
+        output += "- 来源：\(input.sourcePath.map(codeSpan) ?? "未保存文档")\n"
         output += "- 生成时间：\(formatDate(input.generatedAt))\n"
         output += "- 阅读进度：\(min(100, max(0, input.progressPercent)))%\n"
         output += "- 批注数量：\(input.annotations.count)\n"
         for group in grouped(input) {
             output += "\n## \(escapeInline(group.title))\n"
             for annotation in group.items {
-                output += "\n### 引文 · 第 \(lineNumber(input.sourceText, annotation.sourceStart)) 行 · \(annotation.anchorState.label)\n"
+                output += "\n### 引文 · 第 \(lineNumbers[annotation.id] ?? 1) 行 · \(annotation.anchorState.label)\n"
                 output += quote(annotation.quote)
                 if let note = annotation.note, !note.isEmpty {
                     output += "\n**备注**\n\n\(quote(note))"
                 }
                 if !annotation.tags.isEmpty {
-                    output += "**标签** " + annotation.tags.map { "`\(escapeCode($0))`" }.joined(separator: " ") + "\n"
+                    output += "**标签** " + annotation.tags.map(codeSpan).joined(separator: " ") + "\n"
                 }
+                try ensureSize(output)
             }
         }
         try ensureSize(output)
@@ -49,6 +51,7 @@ enum ReadingBriefExporter {
     }
 
     static func buildHTML(_ input: ReadingBriefInput) throws -> String {
+        let lineNumbers = sourceLineNumbers(input)
         let title = html(input.title)
         var output = """
         <!DOCTYPE html>
@@ -63,7 +66,7 @@ enum ReadingBriefExporter {
         for group in grouped(input) {
             output += "<h2>\(html(group.title))</h2>\n"
             for annotation in group.items {
-                output += "<article><p class=\"state\">第 \(lineNumber(input.sourceText, annotation.sourceStart)) 行 · \(html(annotation.anchorState.label))</p><blockquote>\(html(annotation.quote).replacingOccurrences(of: "\n", with: "<br>"))</blockquote>"
+                output += "<article><p class=\"state\">第 \(lineNumbers[annotation.id] ?? 1) 行 · \(html(annotation.anchorState.label))</p><blockquote>\(html(annotation.quote).replacingOccurrences(of: "\n", with: "<br>"))</blockquote>"
                 if let note = annotation.note, !note.isEmpty {
                     output += "<p><strong>备注</strong><br>\(html(note).replacingOccurrences(of: "\n", with: "<br>"))</p>"
                 }
@@ -71,6 +74,7 @@ enum ReadingBriefExporter {
                     output += "<p><strong>标签</strong> " + annotation.tags.map { "<code>\(html($0))</code>" }.joined(separator: " ") + "</p>"
                 }
                 output += "</article>\n"
+                try ensureSize(output)
             }
         }
         output += "</body></html>\n"
@@ -82,10 +86,13 @@ enum ReadingBriefExporter {
         let headings = input.headings.sorted { $0.sourceStart < $1.sourceStart }
         let annotations = input.annotations.sorted { $0.sourceStart == $1.sourceStart ? $0.createdAt < $1.createdAt : $0.sourceStart < $1.sourceStart }
         var groups: [(String, [DocumentAnnotation])] = []
+        var previousHeading = -2
+        var headingIndex = -1
         for annotation in annotations {
-            let title = headings.last(where: { $0.sourceStart <= annotation.sourceStart })?.title ?? "开篇"
-            if let index = groups.firstIndex(where: { $0.0 == title }) { groups[index].1.append(annotation) }
-            else { groups.append((title, [annotation])) }
+            while headingIndex + 1 < headings.count, headings[headingIndex + 1].sourceStart <= annotation.sourceStart { headingIndex += 1 }
+            let title = headingIndex >= 0 ? headings[headingIndex].title : "开篇"
+            if headingIndex == previousHeading { groups[groups.count - 1].1.append(annotation) }
+            else { groups.append((title, [annotation])); previousHeading = headingIndex }
         }
         return groups
     }
@@ -95,10 +102,17 @@ enum ReadingBriefExporter {
             .split(separator: "\n", omittingEmptySubsequences: false).map { "> \(escapeMarkdownUserText(String($0)))\n" }.joined()
     }
 
-    private static func lineNumber(_ text: String, _ offset: Int) -> Int {
-        let source = text as NSString, end = min(source.length, max(0, offset)); var line = 1
-        for index in 0..<end where source.character(at: index) == 10 { line += 1 }
-        return line
+    private static func sourceLineNumbers(_ input: ReadingBriefInput) -> [UUID: Int] {
+        let length = input.sourceText.utf16.count
+        let annotations = input.annotations.sorted { $0.sourceStart < $1.sourceStart }
+        var iterator = input.sourceText.utf16.makeIterator()
+        var cursor = 0, line = 1, result: [UUID: Int] = [:]
+        for annotation in annotations {
+            let target = min(length, max(0, annotation.sourceStart))
+            while cursor < target, let unit = iterator.next() { if unit == 10 { line += 1 }; cursor += 1 }
+            result[annotation.id] = line
+        }
+        return result
     }
 
     private static func escapeInline(_ value: String) -> String {
@@ -109,7 +123,13 @@ enum ReadingBriefExporter {
     }
 
     private static func escapeMarkdownUserText(_ value: String) -> String { escapeInline(value).replacingOccurrences(of: "`", with: "\\`") }
-    private static func escapeCode(_ value: String) -> String { value.replacingOccurrences(of: "`", with: "\\`") }
+    private static func codeSpan(_ value: String) -> String {
+        let text = value.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        var longest = 0, run = 0
+        for character in text { run = character == "`" ? run + 1 : 0; longest = max(longest, run) }
+        let delimiter = String(repeating: "`", count: longest + 1)
+        return delimiter + " " + text + " " + delimiter
+    }
     private static func html(_ value: String) -> String {
         value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
@@ -119,5 +139,5 @@ enum ReadingBriefExporter {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
         return formatter.string(from: date)
     }
-    private static func ensureSize(_ value: String) throws { if value.lengthOfBytes(using: .utf8) > maximumBytes { throw ReadingBriefError.tooLarge } }
+    private static func ensureSize(_ value: String) throws { if value.utf8.count > maximumBytes { throw ReadingBriefError.tooLarge } }
 }
