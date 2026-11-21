@@ -17,7 +17,7 @@ struct ReadingHeading {
 /// offsets. Pixel scroll positions can therefore be replaced by source anchors.
 struct ReadingDocument {
     static let sourceRangeAttribute = NSAttributedString.Key("qingyue.sourceRange")
-    static let richTextLimit = 200_000
+    static let richTextLimit = 500_000
     private static let headingLimit = 500
 
     let attributedText: NSAttributedString
@@ -59,7 +59,7 @@ struct ReadingDocument {
     }
 
     static func build(text: String, kind: TextKind, palette: EditorPalette, fontSize: CGFloat,
-                      readingFontName: String, lineSpacing: CGFloat) -> ReadingDocument {
+                      readingFontName: String, lineSpacing: CGFloat, paragraphSpacing: CGFloat = 13) -> ReadingDocument {
         let source = text as NSString
         let size = fontSize.isFinite ? min(48, max(10, fontSize)) : 16
         let spacing = lineSpacing.isFinite ? min(40, max(0, lineSpacing)) : 6
@@ -67,7 +67,7 @@ struct ReadingDocument {
 
         if kind == .markdown && rich {
             let rendered = NSMutableAttributedString(attributedString: TextFeatures.markdownPreview(text, palette: palette, fontSize: size))
-            applyReadingStyle(rendered, fontName: readingFontName, lineSpacing: spacing)
+            applyReadingStyle(rendered, fontName: readingFontName, lineSpacing: spacing, paragraphSpacing: paragraphSpacing)
             var mapped: [ReadingSegment] = []
             rendered.enumerateAttribute(sourceRangeAttribute, in: NSRange(location: 0, length: rendered.length)) { value, display, _ in
                 guard let value = value as? NSValue else { return }
@@ -92,7 +92,7 @@ struct ReadingDocument {
             : bodyFont(readingFontName, size: size)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = structured ? min(spacing, 4) : spacing
-        paragraph.paragraphSpacing = structured ? 0 : 4
+        paragraph.paragraphSpacing = structured ? 0 : min(48, max(0, paragraphSpacing.isFinite ? paragraphSpacing : 13))
         let rendered = NSTextStorage(string: text, attributes: [.font: font, .foregroundColor: palette.foreground, .paragraphStyle: paragraph])
         if rich && structured { TextFeatures.highlight(rendered, kind: kind, palette: palette, font: font) }
         let all = NSRange(location: 0, length: source.length)
@@ -102,6 +102,25 @@ struct ReadingDocument {
         return ReadingDocument(attributedText: NSAttributedString(attributedString: rendered), segments: mapped,
                                headings: nodes.map { ReadingHeading(title: $0.title, sourceRange: $0.range, displayRange: $0.range) },
                                sourceText: source, identityMapping: true)
+    }
+
+    /// Rebuild block positions after attachments or native diagrams replace
+    /// placeholders. Source ranges remain authoritative; source text never changes.
+    func replacingPresentation(_ attributed: NSAttributedString) -> ReadingDocument {
+        if identityMapping {
+            return ReadingDocument(attributedText: attributed, segments: segments, headings: headings, sourceText: sourceText, identityMapping: true)
+        }
+        var mapped: [ReadingSegment] = []
+        attributed.enumerateAttribute(Self.sourceRangeAttribute, in: NSRange(location: 0, length: attributed.length)) { value, display, _ in
+            guard let raw = (value as? NSValue)?.rangeValue, raw.location != NSNotFound,
+                  raw.location >= 0, raw.location <= sourceText.length, raw.length >= 0,
+                  raw.length <= sourceText.length - raw.location else { return }
+            mapped.append(ReadingSegment(sourceRange: raw, displayRange: display))
+        }
+        let base = ReadingDocument(attributedText: attributed, segments: mapped, headings: [], sourceText: sourceText, identityMapping: false)
+        let nodes = headings.map { ReadingHeading(title: $0.title, sourceRange: $0.sourceRange,
+                                                 displayRange: base.displayRange(forSourceOffset: $0.sourceRange.location)) }
+        return ReadingDocument(attributedText: attributed, segments: mapped, headings: nodes, sourceText: sourceText, identityMapping: false)
     }
 
     private static func safeOffset(_ offset: Int, in text: NSString) -> Int {
@@ -115,7 +134,7 @@ struct ReadingDocument {
         NSFont(name: name, size: size) ?? NSFont.systemFont(ofSize: size)
     }
 
-    private static func applyReadingStyle(_ text: NSMutableAttributedString, fontName: String, lineSpacing: CGFloat) {
+    private static func applyReadingStyle(_ text: NSMutableAttributedString, fontName: String, lineSpacing: CGFloat, paragraphSpacing: CGFloat) {
         let all = NSRange(location: 0, length: text.length)
         // Inspect one attribute at a time so the source-map attribute does not
         // force an identical font/paragraph conversion for every short line.
@@ -131,6 +150,7 @@ struct ReadingDocument {
             if let style = value as? NSParagraphStyle,
                let changed = style.mutableCopy() as? NSMutableParagraphStyle {
                 changed.lineSpacing = lineSpacing
+                changed.paragraphSpacing = min(48, max(0, paragraphSpacing.isFinite ? paragraphSpacing : 13))
                 text.addAttribute(.paragraphStyle, value: changed, range: range)
             }
         }

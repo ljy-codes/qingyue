@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class ReaderTab {
     let file: TextFile
@@ -7,7 +8,16 @@ final class ReaderTab {
     var scroll = NSPoint.zero
     var readingScroll = NSPoint.zero
     var isReading = false
+    var splitPreview = false
+    var renderKey: String?
+    var mediaTask: ReadingMediaTask?
+    var mediaGeneration = 0
+    var mediaNotices: [String] = []
+    var navigation: [Int] = []
+    var openedText: String
+    var savedText: String
     var sourceAnchor = 0
+    var automaticallyNamed = false
     var automaticKind = true
     var recoverDraft = true
     var hasWorkspacePosition = false
@@ -15,21 +25,30 @@ final class ReaderTab {
     var kind: TextKind
     init(_ file: TextFile) {
         self.file = file
+        openedText = file.text; savedText = file.text
         kind = TextKind.detect(url: file.url, text: file.text)
+        isReading = kind == .markdown
         undo.levelsOfUndo = 100
     }
     func updateKindAfterPathChange() {
         if automaticKind { kind = TextKind.detect(url: file.url ?? file.suggestedName.map { URL(fileURLWithPath: $0) }, text: file.text) }
     }
+    func releasePresentation() {
+        mediaGeneration += 1; mediaTask?.cancel(); mediaTask = nil
+        rendered = nil; renderKey = nil; mediaNotices = []
+    }
 }
 
-final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSMenuItemValidation {
+final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSMenuItemValidation, NSSplitViewDelegate {
+    var sidebarToggleForTests: NSButton { sidebarToggleButton }
+    var retainedPresentationCountForTests: Int { tabs.filter { $0.rendered != nil }.count }
     private var tabs: [ReaderTab] = []
     private var current = 0
     private var changing = false
     private var lineIndexUpdated = false
     private var dark = UserDefaults.standard.object(forKey: "dark") as? Bool ?? true
-    private var theme: ReaderTheme { ReaderTheme(dark: dark) }
+    private var warmPaper = UserDefaults.standard.string(forKey: "readerTheme") == "WarmPaper"
+    private var theme: ReaderTheme { ReaderTheme(dark: dark, warmPaper: warmPaper && !followSystemAppearance) }
     private var fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize") == 0 ? 14 : UserDefaults.standard.double(forKey: "fontSize"))
     private var wrapping = UserDefaults.standard.object(forKey: "wrapping") as? Bool ?? true
     private var reading = false
@@ -37,7 +56,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var restoringLocation = false
     private var liveResizeAnchor: Int?
     private var followSystemAppearance = UserDefaults.standard.object(forKey: "followSystemAppearance") as? Bool ?? true
-    private var readingWidth = CGFloat(UserDefaults.standard.object(forKey: "readingWidth") as? Double ?? 680)
+    private var readingWidth = CGFloat(UserDefaults.standard.object(forKey: "readingWidth") as? Double ?? 1_000_000)
     private var showingSidebar = true
     private var searchVisible = false
     private var recent: [String] { get { UserDefaults.standard.stringArray(forKey: "recent") ?? [] } set { UserDefaults.standard.set(newValue, forKey: "recent") } }
@@ -49,6 +68,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let menuRow = ColorView()
     private let windowMenuBar = WindowMenuBar()
     private var menuRowHeight: NSLayoutConstraint!
+    private var menuBarWidth: NSLayoutConstraint!
+    private var headerMenuLeading: NSLayoutConstraint!
+    private var headerFullLeading: NSLayoutConstraint!
     private var sidebarToggleButton: ActionButton!
     private var branding: NSStackView!
     private var focusHiddenActions: [NSView] = []
@@ -63,11 +85,41 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let tabScroll = NSScrollView()
     private let editorScroll = NSScrollView()
     private let editor = EditorTextView(frame: .zero)
-    private let preview = NSTextView(frame: .zero)
+    private let preview = ReadingTextView(frame: .zero)
+    private let previewScroll = NSScrollView()
+    private let documentSplit = NSSplitView()
+    private var layingOutPanes = false
+    private var splitFraction: CGFloat = 0.5
+    private var presentationGeneration = 0
+    private var splitTask: DispatchWorkItem?
+    private var searchReturnOffset: Int?
+    private var contextualOffset = 0
+    private var resourceWindows: [NSWindowController] = []
+    private var externalCheckRunning = false
+    private var operation: ReaderOperation?
+    private var installedPresentation: NSAttributedString?
+    private var outlineMode = false
+    private let sidebarMode = NSSegmentedControl(labels: ["目录", "最近"], trackingMode: .selectOne, target: nil, action: nil)
+    private var outlineButtons: [(Int, ActionButton)] = []
     private var ruler: LineNumberRuler!
-    private let tools = NSStackView()
-    private let toolsContainer = NSView()
+    private let tools = WindowsFlowToolbar()
+    private let toolsContainer = ColorView()
+    private let tabRow = ColorView()
+    private let workspaceBody = NSView()
+    private let footer = ColorView()
+    private var clearRecentButton: ActionButton!
+    private var sidebarRecentButton: ActionButton!
+    private var sidebarOutlineButton: ActionButton!
+    private var toolbarCopyButton: ActionButton!
+    private var toolbarOptions: WindowsPopupButton!
+    private var markdownEditOptions: WindowsPopupButton!
+    private var returnPositionButton: ActionButton!
+    private let presentationHint = NSTextField(labelWithString: "")
+    private let markdownStateBadge = NSTextField(labelWithString: "")
+    private let markdownWritingHint = NSTextField(labelWithString: "- + 空格 → 圆点 · Tab / Shift+Tab 调整层级")
     private let searchBar = NSStackView()
+    private let replaceBar = NSStackView()
+    private var replacementVisible = false
     private let searchContainer = NSView()
     private let searchOptionsRow = NSStackView()
     private let caseCheck = NSButton(checkboxWithTitle: "区分大小写", target: nil, action: nil)
@@ -82,17 +134,19 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var searchIndex = -1
     private var pendingFind: Bool?
     private var openingPaths = Set<String>()
+    private var openingGeneration = 0
     private let fileOpenQueue = DispatchQueue(label: "qingyue.file-open", qos: .userInitiated)
     private var showLineNumbers = UserDefaults.standard.object(forKey: "lineNumbers") as? Bool ?? true
     private var readingFontName = UserDefaults.standard.string(forKey: "readingFont") ?? "PingFang SC"
     private var readingLineSpacing = CGFloat(UserDefaults.standard.object(forKey: "lineSpacing") as? Double ?? 6)
+    private var readingParagraphSpacing = CGFloat(UserDefaults.standard.object(forKey: "paragraphSpacing") as? Double ?? 13)
     private let searchField = NSSearchField()
     private let replaceField = NSTextField()
     private let statusLeft = NSTextField(labelWithString: "就绪")
     private let statusRight = NSTextField(labelWithString: "行 1，列 1")
-    private let kindPopup = NSPopUpButton()
-    private let codecPopup = NSPopUpButton()
-    private let endingPopup = NSPopUpButton()
+    private let kindPopup = WindowsPopupButton()
+    private let codecPopup = WindowsPopupButton()
+    private let endingPopup = WindowsPopupButton()
     private var sidebarWidth: NSLayoutConstraint!
     private var rulerWidth: NSLayoutConstraint!
     private var searchHeight: NSLayoutConstraint!
@@ -101,6 +155,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var readButton: ActionButton!
     private var wrapButton: ActionButton!
     private var formatButton: ActionButton!
+    private var splitButton: ActionButton!
+    private var structureButton: ActionButton!
     private var focusButton: ActionButton!
     private var replacementButtons: [ActionButton] = []
     private var tabsHeight: NSLayoutConstraint!
@@ -115,6 +171,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var generation = 0
     private var shuttingDown = false
     private lazy var workspace = WorkspaceStore(root: dataDirectory)
+    private var annotationStore: AnnotationStore!
+    private var readingListStore: ReadingListStore!
+    private var bookmarkStore: BookmarkStore!
+    private var readingListSaveTask: DispatchWorkItem?
+    private var workspaceRoot: URL?
+    private var pendingFileOffsets: [String: Int] = [:]
+    private var updateRequest: URLSessionDataTask?
+    private var externalConflictID: UUID?
+    private var keepExternalButton: ActionButton!
+    private var acceptExternalButton: ActionButton!
+    private var recheckExternalButton: ActionButton!
     private var restoringWorkspace = false
     private var deferredOpenURLs: [URL] = []
     private var pendingNewDocument = false
@@ -139,13 +206,20 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
 
     init(supportDirectory: URL? = nil) {
         supportOverride = supportDirectory
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 762), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         win.title = "轻阅"
-        win.minSize = NSSize(width: 820, height: 500)
+        win.minSize = NSSize(width: 820, height: 492)
         win.isReleasedWhenClosed = false
         win.tabbingMode = .disallowed
         super.init(window: win)
         win.delegate = self
+        annotationStore = AnnotationStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: annotationStore.load())
+        readingListStore = ReadingListStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: readingListStore.load())
+        bookmarkStore = BookmarkStore(root: dataDirectory)
+        restoreNotices.append(contentsOf: bookmarkStore.load())
+        if let path = UserDefaults.standard.string(forKey: "workspaceRoot") { workspaceRoot = URL(fileURLWithPath: path) }
         buildInterface()
         applyTheme()
         if !win.setFrameUsingName("QingyueMainWindow") { win.center() }
@@ -154,6 +228,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         restoreWorkspace()
         refreshRecent()
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: editorScroll.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: previewScroll.contentView)
         NotificationCenter.default.addObserver(self, selector: #selector(becameActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(systemAppearanceChanged), name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
     }
@@ -167,6 +242,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func button(_ title: String, symbol: String? = nil, primary: Bool = false, _ action: @escaping () -> Void) -> ActionButton {
         let b = ActionButton(title, symbol: symbol, action: action)
+        b.controlHeight = 26; b.horizontalPadding = 10
         b.isEmphasized = primary; buttons.append(b)
         return b
     }
@@ -184,167 +260,164 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func buildInterface() {
         guard let window = window else { return }
         window.contentView = root
-        add(menuRow, to: root); add(windowMenuBar, to: menuRow)
+        func identify(_ view: NSView, _ name: String) { view.identifier = NSUserInterfaceItemIdentifier(name) }
+        identify(menuRow, "QingyueMenuRow"); identify(header, "QingyueHeader"); identify(tabRow, "QingyueTabRow")
+        identify(searchContainer, "QingyueSearchPanel"); identify(workspaceBody, "QingyueBody"); identify(sidebar, "QingyueSidebar")
+        identify(toolsContainer, "QingyueContextToolbar"); identify(footer, "QingyueFooter")
+        [menuRow, tabRow, searchContainer, workspaceBody, footer].forEach { add($0, to: root) }
+        add(header, to: menuRow)
+        add(windowMenuBar, to: menuRow)
         windowMenuBar.prepareMenu = { [weak self] _ in self?.refreshRecentMenu() }
-        sidebarToggleButton = button("收起侧栏", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
-        add(sidebarToggleButton, to: menuRow)
-        add(header, to: root)
-        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
-        subtitle.font = .systemFont(ofSize: 11)
-        branding = NSStackView(views: [titleLabel, subtitle]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3
-        add(branding, to: header)
-        let open = button("打开", symbol: "folder", primary: true) { [weak self] in self?.openDocument(nil) }
-        let new = button("新建", symbol: "plus") { [weak self] in self?.newDocument(nil) }
-        let save = button("保存", symbol: "square.and.arrow.down") { [weak self] in _ = self?.saveCurrent() }
-        themeButton = button("明亮", symbol: "sun.max") { [weak self] in self?.toggleTheme(nil) }
-        readButton = button("阅读模式", symbol: "book") { [weak self] in self?.toggleReading(nil) }
-        let settings = button("设置") { [weak self] in self?.showPreferences(nil) }
+        sidebarToggleButton = button("", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
+        sidebarToggleButton.setAccessibilityLabel("显示或隐藏侧栏"); sidebarToggleButton.toolTip = "显示 / 隐藏侧栏 · ⌘B"
+        sidebarToggleButton.setAccessibilityIdentifier("QingyueSidebarToggle")
+        sidebarToggleButton.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        add(sidebarToggleButton, to: header)
+        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold); subtitle.isHidden = true
+        branding = NSStackView(views: [titleLabel]); branding.orientation = .vertical; branding.alignment = .leading; branding.spacing = 3; add(branding, to: header)
+        let open = button("打开文件") { [weak self] in self?.openDocument(nil) }
+        let save = button("保存") { [weak self] in _ = self?.saveCurrent() }
+        readButton = button("阅读模式", primary: true) { [weak self] in self?.toggleReading(nil) }
         focusButton = button("专注") { [weak self] in self?.toggleFocus(nil) }
-        focusHiddenActions = [new, open, save, themeButton, settings]
-        let headerActions = stack([new, open, save, readButton, focusButton, themeButton, settings], spacing: 7)
-        add(headerActions, to: header)
-
-        sidebar.radius = 10; add(sidebar, to: root)
-        sideTitle.font = .systemFont(ofSize: 12, weight: .semibold)
-        add(sideTitle, to: sidebar)
-        let recentScroll = NSScrollView(); recentScroll.contentView = FlippedClipView(); recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true; recentScroll.autohidesScrollers = true
-        recentStack.orientation = .vertical; recentStack.alignment = .leading; recentStack.spacing = 7; recentStack.translatesAutoresizingMaskIntoConstraints = false
-        recentScroll.documentView = recentStack; add(recentScroll, to: sidebar)
-        sideNote.font = .systemFont(ofSize: 11); add(sideNote, to: sidebar)
-        let sideBottom = button("收起侧栏", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar(nil) }
-        add(sideBottom, to: sidebar)
-
-        canvas.radius = 10; add(canvas, to: root)
-        tabsStack.orientation = .horizontal; tabsStack.alignment = .centerY; tabsStack.spacing = 4
-        tabsStack.translatesAutoresizingMaskIntoConstraints = false
+        let headerActions = stack([open, save, readButton, focusButton], spacing: 8); add(headerActions, to: header)
+        // Theme/settings remain in their menu locations, as in Windows.
+        themeButton = button("切换明暗主题") { [weak self] in self?.toggleTheme(nil) }
+        tabsStack.orientation = .horizontal; tabsStack.alignment = .centerY; tabsStack.spacing = 3; tabsStack.translatesAutoresizingMaskIntoConstraints = false
         tabsStack.reorder = { [weak self] id, insertion in self?.reorderTab(id: id, insertion: insertion) }
-        tabScroll.drawsBackground = false; tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.scrollerStyle = .overlay
-        tabScroll.documentView = tabsStack; add(tabScroll, to: canvas)
+        tabScroll.drawsBackground = false; tabScroll.hasHorizontalScroller = true; tabScroll.autohidesScrollers = true; tabScroll.scrollerStyle = .overlay; tabScroll.documentView = tabsStack; add(tabScroll, to: tabRow)
+        let plus = button("+") { [weak self] in self?.newDocument(nil) }; plus.font = .systemFont(ofSize: 20); plus.setAccessibilityLabel("新建文档"); add(plus, to: tabRow)
+        let tabGesture = NSClickGestureRecognizer(target: self, action: #selector(tabBlankDoubleClick(_:))); tabGesture.numberOfClicksRequired = 2; tabScroll.addGestureRecognizer(tabGesture)
 
-        kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged)
-        kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文件类型")
-        formatButton = button("整理 JSON") { [weak self] in self?.formatJSON(nil) }
-        wrapButton = button("自动换行 ✓") { [weak self] in self?.toggleWrap(nil) }
-        let less = button("A−") { [weak self] in self?.changeFont(-1) }
-        let more = button("A+") { [weak self] in self?.changeFont(1) }
-        let find = button("查找", symbol: "magnifyingglass") { [weak self] in self?.showFind(nil) }
-        let outline = button("目录") { [weak self] in self?.showOutline(nil) }
-        tools.orientation = .horizontal; tools.alignment = .centerY; tools.spacing = 7
-        let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        [kindPopup, formatButton, spacer, less, more, wrapButton, outline, find].forEach { tools.addArrangedSubview($0) }
-        add(toolsContainer, to: canvas); add(tools, to: toolsContainer)
-
-        searchField.placeholderString = "查找文本"; searchField.font = .systemFont(ofSize: 12); searchField.setAccessibilityLabel("查找文本")
-        searchField.target = self; searchField.action = #selector(findNext); searchField.delegate = self
-        replaceField.placeholderString = "替换为"; replaceField.font = .systemFont(ofSize: 12); replaceField.setAccessibilityLabel("替换为")
-        replaceField.delegate = self
-        searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
-        replaceField.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
-        searchBar.orientation = .horizontal; searchBar.alignment = .centerY; searchBar.spacing = 6
-        replacementButtons = [button("替换") { [weak self] in self?.replaceOne(nil) }, button("全部") { [weak self] in self?.replaceAll(nil) }]
-        [searchField, replaceField,
-         button("上一个") { [weak self] in self?.find(backward: true) },
-         button("下一个") { [weak self] in self?.find(backward: false) },
-         replacementButtons[0], replacementButtons[1],
-         button("×") { [weak self] in self?.hideFind() }].forEach { searchBar.addArrangedSubview($0) }
-        add(searchContainer, to: canvas); add(searchBar, to: searchContainer); searchBar.isHidden = true
-        searchOptionsRow.orientation = .horizontal; searchOptionsRow.alignment = .centerY; searchOptionsRow.spacing = 12
-        for c in [caseCheck, regexCheck, wordCheck] { c.font = .systemFont(ofSize: 11); c.target = self; c.action = #selector(searchOptionsChanged) }
+        searchField.placeholderString = "输入查找内容"; searchField.font = .systemFont(ofSize: 13); searchField.setAccessibilityLabel("查找文本"); searchField.target = self; searchField.action = #selector(findNext); searchField.delegate = self
+        replaceField.placeholderString = "替换内容；正则捕获组使用 $1"; replaceField.font = .systemFont(ofSize: 13); replaceField.setAccessibilityLabel("替换为"); replaceField.delegate = self
+        for row in [searchBar, replaceBar, searchOptionsRow] { row.orientation = .horizontal; row.alignment = .centerY; row.spacing = 8; add(row, to: searchContainer) }
+        let previous = button("上一个") { [weak self] in self?.find(backward: true) }
+        let next = button("下一个") { [weak self] in self?.find(backward: false) }
+        let close = button("关闭") { [weak self] in self?.hideFind() }; close.toolTip = "Esc"
+        [searchField, previous, next, close].forEach { searchBar.addArrangedSubview($0) }
+        searchField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        replacementButtons = [button("替换") { [weak self] in self?.replaceOne(nil) }, button("全部替换") { [weak self] in self?.replaceAll(nil) }]
+        [replaceField, replacementButtons[0], replacementButtons[1]].forEach { replaceBar.addArrangedSubview($0) }; replaceField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for c in [caseCheck, regexCheck, wordCheck] { c.font = .systemFont(ofSize: 12); c.target = self; c.action = #selector(searchOptionsChanged) }
         findCounter.font = .systemFont(ofSize: 11); findCounter.lineBreakMode = .byTruncatingTail
         [caseCheck, regexCheck, wordCheck, findCounter].forEach { searchOptionsRow.addArrangedSubview($0) }
-        add(searchOptionsRow, to: searchContainer); searchOptionsRow.isHidden = true
+        searchContainer.isHidden = true; replaceBar.isHidden = true
+
+        add(sidebar, to: workspaceBody); add(canvas, to: workspaceBody)
+        let sideTabs = NSStackView(); sideTabs.orientation = .horizontal; sideTabs.spacing = 0
+        sidebarRecentButton = button("最近打开") { [weak self] in self?.setSidebarOutline(false) }
+        sidebarOutlineButton = button("文档目录") { [weak self] in self?.setSidebarOutline(true) }
+        [sidebarRecentButton!, sidebarOutlineButton!].forEach { b in b.controlHeight = 34; b.cornerRadius = 0; b.horizontalPadding = 10; sideTabs.addArrangedSubview(b) }; add(sideTabs, to: sidebar)
+        let recentScroll = NSScrollView(); recentScroll.contentView = FlippedClipView(); recentScroll.drawsBackground = false; recentScroll.hasVerticalScroller = true; recentScroll.autohidesScrollers = true
+        recentStack.orientation = .vertical; recentStack.alignment = .leading; recentStack.spacing = 4; recentStack.translatesAutoresizingMaskIntoConstraints = false
+        recentScroll.documentView = recentStack; add(recentScroll, to: sidebar)
+        clearRecentButton = button("清除最近记录") { [weak self] in self?.clearRecent(nil) }; clearRecentButton.font = .systemFont(ofSize: 11); add(clearRecentButton, to: sidebar)
+        sideNote.stringValue = "留一点空间给阅读。\n⌘O 打开 · ⌘R 阅读"; sideNote.font = .systemFont(ofSize: 11); add(sideNote, to: sidebar)
+
+        add(toolsContainer, to: canvas); add(tools, to: toolsContainer)
+        formatButton = button("格式化", primary: true) { [weak self] in self?.formatDocument(nil) }
+        structureButton = button("JSON 结构") { [weak self] in self?.showJSONStructure(nil) }
+        splitButton = button("分屏编辑") { [weak self] in self?.toggleSplitPreview(nil) }
+        toolbarCopyButton = button("复制全文（含图片）") { [weak self] in self?.copyReadingFull(nil) }
+        toolbarOptions = WindowsPopupButton(frame: .zero, pullsDown: true); toolbarOptions.font = .systemFont(ofSize: 12); toolbarOptions.setAccessibilityLabel("复制 / 导出")
+        let options = NSMenu(); options.autoenablesItems = true
+        options.addItem(NSMenuItem(title: "复制 / 导出 ▾", action: nil, keyEquivalent: ""))
+        for (title, action) in [("复制全文纯文本", #selector(copyReadingPlain(_:))), ("复制 Markdown 源文", #selector(copyMarkdownSource(_:))), ("复制当前代码块", #selector(copyCodeBlock(_:))), ("复制当前表格", #selector(copyTableBlock(_:))), ("导出 HTML（含图片）…", #selector(exportReadingHTML(_:)))] { let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; options.addItem(i) }
+        toolbarOptions.menu = options
+        markdownEditOptions = WindowsPopupButton(frame: .zero, pullsDown: true)
+        markdownEditOptions.font = .systemFont(ofSize: 12); markdownEditOptions.setAccessibilityLabel("Markdown 编辑")
+        let markdownMenu = NSMenu()
+        markdownMenu.addItem(NSMenuItem(title: "Markdown 编辑 ▾", action: nil, keyEquivalent: ""))
+        for (title, action) in [("插入表格行", #selector(insertMarkdownTableRow(_:))), ("删除表格行", #selector(deleteMarkdownTableRow(_:))), ("插入表格列", #selector(insertMarkdownTableColumn(_:))), ("删除表格列", #selector(deleteMarkdownTableColumn(_:))), ("左对齐当前列", #selector(alignMarkdownTableLeft(_:))), ("居中当前列", #selector(alignMarkdownTableCenter(_:))), ("右对齐当前列", #selector(alignMarkdownTableRight(_:))), ("粘贴 TSV 为表格", #selector(pasteMarkdownTable(_:))), ("插入图片…", #selector(insertMarkdownImage(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; markdownMenu.addItem(item)
+        }
+        markdownEditOptions.menu = markdownMenu
+        returnPositionButton = button("返回位置") { [weak self] in self?.returnReadingPosition(nil) }; returnPositionButton.toolTip = "返回目录跳转前的阅读位置 · ⌥←"
+        presentationHint.font = .systemFont(ofSize: 11); presentationHint.lineBreakMode = .byTruncatingTail
+        markdownStateBadge.font = .systemFont(ofSize: 11); markdownStateBadge.setAccessibilityLabel("当前Markdown块状态")
+        markdownStateBadge.isBezeled = false; markdownStateBadge.drawsBackground = true; markdownStateBadge.wantsLayer = true; markdownStateBadge.layer?.cornerRadius = 9
+        markdownWritingHint.font = .systemFont(ofSize: 11); markdownWritingHint.setAccessibilityLabel("Markdown编辑提示"); markdownWritingHint.lineBreakMode = .byTruncatingTail
+        [formatButton!, structureButton!, splitButton!, toolbarCopyButton!, toolbarOptions!, markdownEditOptions!, returnPositionButton!, presentationHint, markdownStateBadge, markdownWritingHint].forEach { tools.addArrangedSubview($0) }
+        keepExternalButton = button("保留当前编辑") { [weak self] in self?.keepExternalEdits(nil) }
+        acceptExternalButton = button("接纳磁盘版本") { [weak self] in self?.acceptExternalVersion(nil) }
+        recheckExternalButton = button("重新检查") { [weak self] in self?.recheckExternalVersion(nil) }
+        for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true; tools.addArrangedSubview(control) }
+        // Retain legacy actions only through menus, rather than scattering controls.
+        wrapButton = button("自动折行") { [weak self] in self?.toggleWrap(nil) }
+        kindPopup.addItems(withTitles: ["自动识别"] + TextKind.allCases.map { $0.label }); kindPopup.target = self; kindPopup.action = #selector(kindChanged); kindPopup.font = .systemFont(ofSize: 11); kindPopup.setAccessibilityLabel("文档语言")
+        codecPopup.addItems(withTitles: TextCodec.allCases.map { $0.label }); codecPopup.target = self; codecPopup.action = #selector(codecChanged); codecPopup.font = .systemFont(ofSize: 11); codecPopup.setAccessibilityLabel("保存编码")
+        endingPopup.addItems(withTitles: ["LF · Unix / macOS", "CRLF · Windows", "CR · 旧版 Mac", "混合换行"]); endingPopup.target = self; endingPopup.action = #selector(endingChanged); endingPopup.font = .systemFont(ofSize: 11); endingPopup.setAccessibilityLabel("文件换行方式")
+        [statusLeft, statusRight, kindPopup, codecPopup, endingPopup].forEach { add($0, to: footer) }
+        statusLeft.font = .systemFont(ofSize: 11); statusLeft.lineBreakMode = .byTruncatingMiddle; statusLeft.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusRight.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
 
         editor.isRichText = false; editor.importsGraphics = false; editor.allowsUndo = true
-        editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false
-        editor.isAutomaticTextReplacementEnabled = false; editor.isAutomaticSpellingCorrectionEnabled = false
-        editor.isAutomaticLinkDetectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false
-        editor.isAutomaticDataDetectionEnabled = false
-        editor.isGrammarCheckingEnabled = false; editor.usesFindBar = false
-        editor.textContainerInset = NSSize(width: 18, height: 20)
-        editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false
-        editor.autoresizingMask = [.width]
-        editor.minSize = .zero; editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区")
-        editor.cancelHandler = { [weak self] in self?.cancelFind() }
-        editor.filesDropped = { [weak self] urls in self?.openURLs(urls) }
-        editor.registerForDraggedTypes([.fileURL])
-        editorScroll.hasVerticalScroller = true; editorScroll.hasHorizontalScroller = false; editorScroll.autohidesScrollers = true
-        editorScroll.borderType = .noBorder; editorScroll.documentView = editor
-        editorScroll.contentView.postsBoundsChangedNotifications = true
-        ruler = LineNumberRuler(editor: editor, scroll: editorScroll)
-        // Keep the gutter outside the scroll view; native overlay rulers use a
-        // negative clip origin that conflicts with restoring text scroll positions.
-        add(ruler, to: canvas)
-        add(editorScroll, to: canvas)
-        preview.isEditable = false; preview.isSelectable = true; preview.isRichText = true
-        preview.textContainerInset = NSSize(width: 32, height: 26); preview.autoresizingMask = [.width]
-        preview.isVerticallyResizable = true; preview.setAccessibilityLabel("阅读区")
-        preview.delegate = self
-        preview.textContainer?.widthTracksTextView = true
-        add(statusLeft, to: root); add(statusRight, to: root)
-        statusLeft.font = .systemFont(ofSize: 11); statusLeft.lineBreakMode = .byTruncatingMiddle
-        statusLeft.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        statusRight.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
-        codecPopup.addItems(withTitles: TextCodec.allCases.map { $0.label }); codecPopup.font = .systemFont(ofSize: 10)
-        codecPopup.target = self; codecPopup.action = #selector(codecChanged); codecPopup.setAccessibilityLabel("保存编码")
-        endingPopup.addItems(withTitles: ["LF", "CRLF", "CR", "混合"]); endingPopup.font = .systemFont(ofSize: 10)
-        endingPopup.target = self; endingPopup.action = #selector(endingChanged); endingPopup.setAccessibilityLabel("换行符")
-        add(codecPopup, to: root); add(endingPopup, to: root)
-        sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 170)
-        rulerWidth = ruler.widthAnchor.constraint(equalToConstant: showLineNumbers ? 48 : 0)
-        ruler.isHidden = !showLineNumbers
-        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0)
-        tabsHeight = tabScroll.heightAnchor.constraint(equalToConstant: 39)
-        toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 36)
-        headerHeight = header.heightAnchor.constraint(equalToConstant: 54)
-        menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 34)
-        canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 12)
-        canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16)
-        statusNormalTrailing = statusRight.trailingAnchor.constraint(equalTo: codecPopup.leadingAnchor, constant: -12)
-        statusReadingTrailing = statusRight.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20)
+        editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false; editor.isAutomaticTextReplacementEnabled = false; editor.isAutomaticSpellingCorrectionEnabled = false; editor.isAutomaticLinkDetectionEnabled = false; editor.isContinuousSpellCheckingEnabled = false; editor.isAutomaticDataDetectionEnabled = false; editor.isGrammarCheckingEnabled = false; editor.usesFindBar = false
+        editor.textContainerInset = NSSize(width: 18, height: 20); editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.minSize = .zero; editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        editor.delegate = self; editor.setAccessibilityLabel("文本编辑区"); editor.cancelHandler = { [weak self] in self?.cancelFind() }; editor.filesDropped = { [weak self] in self?.openURLs($0) }
+        editor.tableEditHandler = { [weak self] selection, backward in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownTableEditing.edit(text: self.editor.string, selection: selection, action: .tab(backward: backward))
+        }
+        editor.tableNewlineHandler = { [weak self] selection in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownTableEditing.edit(text: self.editor.string, selection: selection, action: .insertRow)
+        }
+        editor.listEditHandler = { [weak self] selection, action in
+            guard let self, !self.reading, self.active?.kind == .markdown else { return nil }
+            return MarkdownListEditing.edit(text: self.editor.string, selection: selection, action: action)
+        }
+        editor.imagesDropped = { [weak self] urls in self?.insertMarkdownImages(urls) ?? false }
+        editor.imagePasteHandler = { [weak self] in self?.pasteMarkdownImage() ?? false }
+        editor.registerForDraggedTypes([.fileURL, .png, .tiff])
+        editorScroll.hasVerticalScroller = true; editorScroll.hasHorizontalScroller = false; editorScroll.autohidesScrollers = true; editorScroll.borderType = .noBorder; editorScroll.documentView = editor; editorScroll.contentView.postsBoundsChangedNotifications = true
+        ruler = LineNumberRuler(editor: editor, scroll: editorScroll); add(ruler, to: canvas)
+        documentSplit.isVertical = true; documentSplit.dividerStyle = .thin; documentSplit.delegate = self; documentSplit.addSubview(editorScroll); documentSplit.addSubview(previewScroll); editorScroll.translatesAutoresizingMaskIntoConstraints = true; previewScroll.translatesAutoresizingMaskIntoConstraints = true; add(documentSplit, to: canvas)
+        previewScroll.hasVerticalScroller = true; previewScroll.autohidesScrollers = true; previewScroll.documentView = preview; previewScroll.contentView.postsBoundsChangedNotifications = true
+        preview.copyReading = { [weak self] in self?.copyReadingRange($0) }; preview.menuBuilder = { [weak self] in self?.readingContextMenu(offset: $0) ?? NSMenu() }; preview.openAttachment = { [weak self] in self?.showAttachment($0) }
+        preview.isEditable = false; preview.isSelectable = true; preview.isRichText = true; preview.textContainerInset = NSSize(width: 32, height: 26); preview.autoresizingMask = [.width]; preview.isVerticallyResizable = true; preview.setAccessibilityLabel("阅读区"); preview.delegate = self; preview.textContainer?.widthTracksTextView = true
+        sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 218); rulerWidth = ruler.widthAnchor.constraint(equalToConstant: showLineNumbers ? 48 : 0)
+        searchHeight = searchContainer.heightAnchor.constraint(equalToConstant: 0); tabsHeight = tabRow.heightAnchor.constraint(equalToConstant: 34); toolsHeight = toolsContainer.heightAnchor.constraint(equalToConstant: 42); headerHeight = header.heightAnchor.constraint(equalToConstant: 40); menuRowHeight = menuRow.heightAnchor.constraint(equalToConstant: 40)
+        menuBarWidth = windowMenuBar.widthAnchor.constraint(equalToConstant: 310)
+        headerMenuLeading = header.leadingAnchor.constraint(equalTo: windowMenuBar.trailingAnchor, constant: 8)
+        headerFullLeading = header.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor)
+        canvasInsetLeading = canvas.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor); canvasFullLeading = canvas.leadingAnchor.constraint(equalTo: workspaceBody.leadingAnchor)
+        // Legacy footer trailing constraints remain inactive; footer has one shared layout.
+        statusNormalTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
+        statusReadingTrailing = statusRight.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -10)
         NSLayoutConstraint.activate([
-            menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            menuRow.topAnchor.constraint(equalTo: root.topAnchor, constant: 5), menuRowHeight,
-            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor), windowMenuBar.trailingAnchor.constraint(lessThanOrEqualTo: sidebarToggleButton.leadingAnchor, constant: -12),
-            windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 30),
-            sidebarToggleButton.trailingAnchor.constraint(equalTo: menuRow.trailingAnchor), sidebarToggleButton.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), sidebarToggleButton.widthAnchor.constraint(equalToConstant: 104),
-            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22), header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            header.topAnchor.constraint(equalTo: menuRow.bottomAnchor, constant: 10), headerHeight,
-            branding.leadingAnchor.constraint(equalTo: header.leadingAnchor), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16), sidebar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14), sidebarWidth,
-            sidebar.bottomAnchor.constraint(equalTo: statusLeft.topAnchor, constant: -14),
-            sideTitle.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideTitle.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 16),
-            recentScroll.topAnchor.constraint(equalTo: sideTitle.bottomAnchor, constant: 14), recentScroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8),
-            recentScroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8), recentScroll.bottomAnchor.constraint(equalTo: sideNote.topAnchor, constant: -16),
-            recentStack.leadingAnchor.constraint(equalTo: recentScroll.contentView.leadingAnchor), recentStack.topAnchor.constraint(equalTo: recentScroll.contentView.topAnchor),
-            recentStack.widthAnchor.constraint(equalTo: recentScroll.contentView.widthAnchor),
-            sideNote.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideNote.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8),
-            sideNote.bottomAnchor.constraint(equalTo: sideBottom.topAnchor, constant: -14), sideBottom.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8), sideBottom.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8),
-            sideBottom.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -10),
-            canvasInsetLeading, canvas.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            canvas.topAnchor.constraint(equalTo: sidebar.topAnchor), canvas.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-            tabScroll.topAnchor.constraint(equalTo: canvas.topAnchor, constant: 8), tabScroll.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 10),
-            tabScroll.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -10), tabsHeight,
-            tabsStack.leadingAnchor.constraint(equalTo: tabScroll.contentView.leadingAnchor), tabsStack.topAnchor.constraint(equalTo: tabScroll.contentView.topAnchor), tabsStack.heightAnchor.constraint(equalToConstant: 32),
-            toolsContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 12), toolsContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -12),
-            toolsContainer.topAnchor.constraint(equalTo: tabScroll.bottomAnchor, constant: 4), toolsHeight,
-            tools.leadingAnchor.constraint(equalTo: toolsContainer.leadingAnchor), tools.trailingAnchor.constraint(equalTo: toolsContainer.trailingAnchor),
-            tools.centerYAnchor.constraint(equalTo: toolsContainer.centerYAnchor), tools.heightAnchor.constraint(equalToConstant: 36),
-            searchContainer.topAnchor.constraint(equalTo: toolsContainer.bottomAnchor, constant: 5), searchContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 12),
-            searchContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -12), searchHeight,
-            searchBar.topAnchor.constraint(equalTo: searchContainer.topAnchor, constant: 2), searchBar.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor),
-            searchBar.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor), searchBar.heightAnchor.constraint(equalToConstant: 32),
-            searchOptionsRow.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor), searchOptionsRow.trailingAnchor.constraint(lessThanOrEqualTo: searchContainer.trailingAnchor),
-            searchOptionsRow.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 3), searchOptionsRow.heightAnchor.constraint(equalToConstant: 24),
-            ruler.leadingAnchor.constraint(equalTo: canvas.leadingAnchor, constant: 1), ruler.topAnchor.constraint(equalTo: editorScroll.topAnchor), ruler.bottomAnchor.constraint(equalTo: editorScroll.bottomAnchor), rulerWidth,
-            editorScroll.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 6), editorScroll.leadingAnchor.constraint(equalTo: ruler.trailingAnchor),
-            editorScroll.trailingAnchor.constraint(equalTo: canvas.trailingAnchor, constant: -1), editorScroll.bottomAnchor.constraint(equalTo: canvas.bottomAnchor, constant: -1),
-            statusLeft.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22), statusLeft.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10), statusLeft.heightAnchor.constraint(equalToConstant: 18),
-            statusLeft.trailingAnchor.constraint(lessThanOrEqualTo: statusRight.leadingAnchor, constant: -12),
-            statusNormalTrailing, statusRight.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor),
-            codecPopup.trailingAnchor.constraint(equalTo: endingPopup.leadingAnchor, constant: -8), codecPopup.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor), codecPopup.widthAnchor.constraint(equalToConstant: 124),
-            endingPopup.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16), endingPopup.centerYAnchor.constraint(equalTo: statusLeft.centerYAnchor), endingPopup.widthAnchor.constraint(equalToConstant: 74)
+            menuRow.topAnchor.constraint(equalTo: root.topAnchor), menuRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), menuRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), menuRowHeight,
+            windowMenuBar.leadingAnchor.constraint(equalTo: menuRow.leadingAnchor, constant: 10), windowMenuBar.centerYAnchor.constraint(equalTo: menuRow.centerYAnchor), windowMenuBar.heightAnchor.constraint(equalToConstant: 28), menuBarWidth,
+            header.topAnchor.constraint(equalTo: menuRow.topAnchor), headerMenuLeading, header.trailingAnchor.constraint(equalTo: menuRow.trailingAnchor), headerHeight,
+            sidebarToggleButton.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 12), sidebarToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            branding.leadingAnchor.constraint(equalTo: sidebarToggleButton.trailingAnchor, constant: 8), branding.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            headerActions.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -12), headerActions.centerYAnchor.constraint(equalTo: header.centerYAnchor), headerActions.leadingAnchor.constraint(greaterThanOrEqualTo: branding.trailingAnchor, constant: 12),
+            tabRow.topAnchor.constraint(equalTo: menuRow.bottomAnchor), tabRow.leadingAnchor.constraint(equalTo: root.leadingAnchor), tabRow.trailingAnchor.constraint(equalTo: root.trailingAnchor), tabsHeight,
+            tabScroll.leadingAnchor.constraint(equalTo: tabRow.leadingAnchor), tabScroll.topAnchor.constraint(equalTo: tabRow.topAnchor), tabScroll.bottomAnchor.constraint(equalTo: tabRow.bottomAnchor), tabScroll.trailingAnchor.constraint(equalTo: plus.leadingAnchor, constant: -5),
+            plus.trailingAnchor.constraint(equalTo: tabRow.trailingAnchor, constant: -5), plus.centerYAnchor.constraint(equalTo: tabRow.centerYAnchor), plus.widthAnchor.constraint(equalToConstant: 40),
+            tabsStack.leadingAnchor.constraint(equalTo: tabScroll.contentView.leadingAnchor), tabsStack.topAnchor.constraint(equalTo: tabScroll.contentView.topAnchor), tabsStack.heightAnchor.constraint(equalTo: tabScroll.contentView.heightAnchor),
+            searchContainer.topAnchor.constraint(equalTo: tabRow.bottomAnchor), searchContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor), searchContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor), searchHeight,
+            searchBar.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 18), searchBar.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -18), searchBar.topAnchor.constraint(equalTo: searchContainer.topAnchor, constant: 10), searchBar.heightAnchor.constraint(equalToConstant: 32),
+            searchOptionsRow.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 5), searchOptionsRow.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor), searchOptionsRow.heightAnchor.constraint(equalToConstant: 23), searchOptionsRow.trailingAnchor.constraint(lessThanOrEqualTo: searchBar.trailingAnchor),
+            replaceBar.topAnchor.constraint(equalTo: searchOptionsRow.bottomAnchor, constant: 6), replaceBar.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor), replaceBar.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor), replaceBar.heightAnchor.constraint(equalToConstant: 32),
+            workspaceBody.topAnchor.constraint(equalTo: searchContainer.bottomAnchor), workspaceBody.leadingAnchor.constraint(equalTo: root.leadingAnchor), workspaceBody.trailingAnchor.constraint(equalTo: root.trailingAnchor), workspaceBody.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            sidebar.topAnchor.constraint(equalTo: workspaceBody.topAnchor), sidebar.bottomAnchor.constraint(equalTo: workspaceBody.bottomAnchor), sidebar.leadingAnchor.constraint(equalTo: workspaceBody.leadingAnchor), sidebarWidth,
+            sideTabs.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), sideTabs.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -14), sideTabs.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 18),
+            recentScroll.topAnchor.constraint(equalTo: sideTabs.bottomAnchor, constant: 12), recentScroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), recentScroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), recentScroll.bottomAnchor.constraint(equalTo: clearRecentButton.topAnchor, constant: -10),
+            recentStack.leadingAnchor.constraint(equalTo: recentScroll.contentView.leadingAnchor), recentStack.topAnchor.constraint(equalTo: recentScroll.contentView.topAnchor), recentStack.widthAnchor.constraint(equalTo: recentScroll.contentView.widthAnchor),
+            clearRecentButton.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 14), clearRecentButton.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), clearRecentButton.bottomAnchor.constraint(equalTo: sideNote.topAnchor, constant: -18),
+            sideNote.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 20), sideNote.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -14), sideNote.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -20),
+            canvasInsetLeading, canvas.trailingAnchor.constraint(equalTo: workspaceBody.trailingAnchor), canvas.topAnchor.constraint(equalTo: workspaceBody.topAnchor), canvas.bottomAnchor.constraint(equalTo: workspaceBody.bottomAnchor),
+            toolsContainer.leadingAnchor.constraint(equalTo: canvas.leadingAnchor), toolsContainer.trailingAnchor.constraint(equalTo: canvas.trailingAnchor), toolsContainer.topAnchor.constraint(equalTo: canvas.topAnchor), toolsHeight,
+            tools.leadingAnchor.constraint(equalTo: toolsContainer.leadingAnchor, constant: 12), tools.trailingAnchor.constraint(equalTo: toolsContainer.trailingAnchor, constant: -12), tools.topAnchor.constraint(equalTo: toolsContainer.topAnchor, constant: 8), tools.bottomAnchor.constraint(equalTo: toolsContainer.bottomAnchor, constant: -8),
+            ruler.leadingAnchor.constraint(equalTo: canvas.leadingAnchor), ruler.topAnchor.constraint(equalTo: documentSplit.topAnchor), ruler.bottomAnchor.constraint(equalTo: documentSplit.bottomAnchor), rulerWidth,
+            documentSplit.topAnchor.constraint(equalTo: toolsContainer.bottomAnchor), documentSplit.leadingAnchor.constraint(equalTo: ruler.trailingAnchor), documentSplit.trailingAnchor.constraint(equalTo: canvas.trailingAnchor), documentSplit.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor), footer.trailingAnchor.constraint(equalTo: root.trailingAnchor), footer.bottomAnchor.constraint(equalTo: root.bottomAnchor), footer.heightAnchor.constraint(equalToConstant: 50),
+            statusLeft.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 16), statusLeft.topAnchor.constraint(equalTo: footer.topAnchor, constant: 7), statusLeft.trailingAnchor.constraint(lessThanOrEqualTo: kindPopup.leadingAnchor, constant: -12),
+            statusRight.leadingAnchor.constraint(equalTo: statusLeft.leadingAnchor), statusRight.topAnchor.constraint(equalTo: statusLeft.bottomAnchor, constant: 3), statusRight.bottomAnchor.constraint(lessThanOrEqualTo: footer.bottomAnchor, constant: -7),
+            kindPopup.trailingAnchor.constraint(equalTo: codecPopup.leadingAnchor, constant: -14), kindPopup.widthAnchor.constraint(equalToConstant: 143), kindPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            codecPopup.trailingAnchor.constraint(equalTo: endingPopup.leadingAnchor, constant: -14), codecPopup.widthAnchor.constraint(equalToConstant: 131), codecPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
+            endingPopup.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -16), endingPopup.widthAnchor.constraint(equalToConstant: 171), endingPopup.centerYAnchor.constraint(equalTo: footer.centerYAnchor)
         ])
     }
 
@@ -354,24 +427,32 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func applyTheme() {
         if followSystemAppearance { dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
-        window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.panel
-        menuRow.color = theme.window
-        windowMenuBar.applyAppearance(foreground: theme.text, background: theme.window, highlight: theme.selection)
+        window?.appearance = NSAppearance(named: dark && !warmPaper ? .darkAqua : .aqua)
+        AppIconTheme.apply(AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme")))
+        root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.editor
+        menuRow.color = theme.panel; tabRow.color = theme.main; footer.color = theme.panel; toolsContainer.color = theme.main
+        for view in [menuRow, header, tabRow, sidebar, toolsContainer, footer] { view.wantsLayer = true; view.layer?.borderColor = theme.border.cgColor; view.layer?.borderWidth = 0.5 }
+        windowMenuBar.applyAppearance(foreground: theme.text, background: theme.panel, highlight: theme.hover)
+        for popup in [kindPopup, codecPopup, endingPopup, toolbarOptions!, markdownEditOptions!] { popup.applyTheme(theme) }
+        for field in [searchField, replaceField] { field.backgroundColor = theme.editor; field.textColor = theme.text }
+        presentationHint.textColor = theme.muted
+        markdownStateBadge.textColor = theme.text; markdownStateBadge.backgroundColor = theme.selection
+        markdownWritingHint.textColor = theme.accentText
         titleLabel.textColor = theme.text; subtitle.textColor = theme.muted; sideTitle.textColor = theme.muted; sideNote.textColor = theme.muted
         statusLeft.textColor = theme.muted; statusRight.textColor = theme.muted
         findCounter.textColor = theme.muted
         editor.backgroundColor = theme.editor; editor.textColor = theme.text; editor.insertionPointColor = theme.accent
         editor.selectedTextAttributes = [.backgroundColor: theme.selection, .foregroundColor: theme.text]
+        previewScroll.backgroundColor = theme.editor
         editorScroll.backgroundColor = theme.editor; preview.backgroundColor = theme.editor; preview.textColor = theme.text
-        ruler.ink = theme.muted; ruler.background = theme.editor; ruler.needsDisplay = true
+        ruler.ink = theme.muted; ruler.background = theme.panel; ruler.savedInk = theme.saved; ruler.unsavedInk = theme.unsaved; ruler.needsDisplay = true
         for b in buttons { style(b) }
         themeButton.title = followSystemAppearance ? "随系统" : (dark ? "明亮" : "深色")
         refreshTabs(); refreshRecent(); scheduleHighlight()
-        if reading { renderReading() }
+        if reading || active?.splitPreview == true { renderReading() }
     }
     private func style(_ b: ActionButton) {
-        b.fill = b.isEmphasized ? theme.accent : theme.border
+        b.fill = b.isEmphasized ? theme.accent : theme.button; b.hoverFill = theme.hover; b.borderColor = theme.border
         b.ink = b.isEmphasized ? .white : theme.text
     }
     private func refreshTabs() {
@@ -385,7 +466,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.selectTab(i) }
                 }
                 b.doubleClickHandler = { [weak self] in self?.renameDocument(id: id) }
-                b.tabID = id
+                b.tabID = id; b.controlHeight = 42; b.cornerRadius = 0; b.borderColor = .clear
                 b.widthAnchor.constraint(equalToConstant: 116).isActive = true
                 let context = NSMenu()
                 for (title, action) in [("重命名…", #selector(renameContextTab(_:))), ("关闭此标签", #selector(closeContextTab(_:))), ("关闭其他标签", #selector(closeOtherTabs(_:))), ("关闭全部标签", #selector(closeAllTabs(_:))), ("向左移动", #selector(moveContextLeft(_:))), ("向右移动", #selector(moveContextRight(_:))), ("切换此文件草稿恢复", #selector(toggleContextRecovery(_:))), ("复制路径", #selector(copyContextPath(_:))), ("在 Finder 中显示", #selector(revealContextFile(_:)))] {
@@ -395,8 +476,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                 let x = ActionButton("×") { [weak self] in
                     if let self = self, let i = self.tabs.firstIndex(where: { $0.file.id == id }) { self.closeTab(i) }
                 }
-                x.fill = theme.panel; x.ink = theme.muted
-                x.widthAnchor.constraint(equalToConstant: 48).isActive = true; x.setAccessibilityLabel("关闭 \(tab.file.title)")
+                x.fill = .clear; x.ink = theme.muted; x.borderColor = .clear; x.cornerRadius = 0; x.controlHeight = 22; x.horizontalPadding = 0
+                x.widthAnchor.constraint(equalToConstant: 22).isActive = true; x.setAccessibilityLabel("关闭 \(tab.file.title)")
                 tabsStack.addArrangedSubview(stack([b, x], spacing: 0)); tabTitleButtons.append(b)
             }
         }
@@ -404,7 +485,11 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let b = tabTitleButtons[index]
             let title = (tab.file.isDirty ? "● " : "") + tab.file.title
             if b.title != title { b.title = title }
-            b.fill = index == current ? theme.accent : theme.panel; b.ink = index == current ? .white : theme.muted
+            b.fill = index == current ? theme.tabSelected : theme.window; b.ink = index == current ? theme.text : theme.muted
+            b.bottomAccent = index == current ? theme.accent : .clear; b.borderColor = .clear; b.hoverFill = theme.hover
+            if let cell = b.superview { cell.wantsLayer = true; cell.layer?.backgroundColor = b.fill.cgColor; cell.layer?.borderWidth = 0
+                if let close = cell.subviews.compactMap({ $0 as? ActionButton }).first(where: { $0 !== b }) { close.ink = theme.muted; close.fill = b.fill; close.hoverFill = theme.hover }
+            }
             b.toolTip = tab.file.url?.path ?? "尚未保存的文档"
             b.constraints.first(where: { $0.firstAttribute == .width && $0.relation == .equal })?.constant = min(210, max(116, CGFloat(tab.file.title.count * 8 + 36)))
         }
@@ -414,16 +499,17 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func refreshRecent() {
         recentStack.arrangedSubviews.forEach { recentStack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        outlineButtons = []
+        if outlineMode { refreshOutlineSidebar(); return }
+        updateSidebarTabs()
         let files = recent.filter { FileManager.default.fileExists(atPath: $0) }
         if files.isEmpty {
             let hint = label("打开文件后\n会显示在这里", 12); hint.maximumNumberOfLines = 0
             recentStack.addArrangedSubview(hint)
         }
-        for path in files.prefix(12) {
-            let b = ActionButton(URL(fileURLWithPath: path).lastPathComponent) { [weak self] in self?.openURLs([URL(fileURLWithPath: path)]) }
-            b.font = .systemFont(ofSize: 11); b.toolTip = path; b.fill = theme.panel; b.ink = theme.text
-            recentStack.addArrangedSubview(b)
-            b.widthAnchor.constraint(equalTo: recentStack.widthAnchor).isActive = true
+        for path in files.prefix(15) {
+            let row = RecentFileRow(url: URL(fileURLWithPath: path), foreground: theme.text, muted: theme.muted) { [weak self] in self?.openURLs([URL(fileURLWithPath: path)]) }
+            row.rowColor = theme.selection; recentStack.addArrangedSubview(row); row.widthAnchor.constraint(equalTo: recentStack.widthAnchor).isActive = true
         }
     }
     private func remember(_ url: URL) {
@@ -473,6 +559,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         do {
             try file.rename(toName: input.stringValue)
+            migrateReadingMetadata(tab, oldPath: oldPath)
+            tab.automaticallyNamed = false
             if let before = oldPath, let after = file.url?.path, before != after {
                 recent = recent.map { $0 == before ? after : $0 }
                 var positions = UserDefaults.standard.dictionary(forKey: "positions") as? [String: [Double]] ?? [:]
@@ -585,12 +673,116 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc func newDocument(_ sender: Any?) {
         if modalDepth > 0 { deferredDocumentMutations.append { [weak self] in self?.newDocument(sender) }; return }
         if restoringWorkspace { pendingNewDocument = true; return }
-        stashCurrent(); tabs.append(ReaderTab(TextFile())); selectTab(tabs.count - 1, stash: false); scheduleRecovery()
+        stashCurrent()
+        var number = 1; while tabs.contains(where: { $0.file.title == "新文件 \(number).txt" }) { number += 1 }
+        let file = TextFile(); file.suggestedName = "新文件 \(number).txt"
+        let newTab = ReaderTab(file); newTab.automaticallyNamed = true; tabs.append(newTab); selectTab(tabs.count - 1, stash: false); scheduleRecovery()
     }
     @objc func openDocument(_ sender: Any?) {
         let p = NSOpenPanel(); p.allowsMultipleSelection = true; p.canChooseDirectories = false
         p.message = "打开本机文本文件 · TXT / JSON / YAML / MD / 配置文件"
         if runDocumentModal({ p.runModal() }) == .OK { openURLs(p.urls) }
+    }
+    @objc func openWorkspace(_ sender: Any?) {
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false; panel.prompt = "打开工作区"
+        guard runDocumentModal({ panel.runModal() }) == .OK, let root = panel.url else { return }
+        workspaceRoot = root.standardizedFileURL; UserDefaults.standard.set(workspaceRoot?.path, forKey: "workspaceRoot")
+        let controller = WorkspaceBrowserWindow(rootURL: root)
+        controller.openFile = { [weak self] url in self?.openURLs([url]) }
+        controller.rootChanged = { [weak self] root in self?.workspaceRoot = root; UserDefaults.standard.set(root.path, forKey: "workspaceRoot") }
+        retainResource(controller); controller.showWindow(nil)
+    }
+    @objc private func openWorkspacePath(_ item: NSMenuItem) {
+        if let target = item.representedObject as? [String: Any], let path = target["path"] as? String, let offset = target["offset"] as? Int {
+            pendingFileOffsets[URL(fileURLWithPath: path).standardizedFileURL.path] = offset
+            openURLs([URL(fileURLWithPath: path)]); return
+        }
+        if let url = item.representedObject as? URL { openURLs([url]) }
+    }
+    @objc func globalSearch(_ sender: Any?) {
+        let root: URL
+        if let workspaceRoot { root = workspaceRoot }
+        else {
+            let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.prompt = "选择工作区"
+            guard runDocumentModal({ panel.runModal() }) == .OK, let selected = panel.url else { return }
+            root = selected.standardizedFileURL; workspaceRoot = root; UserDefaults.standard.set(root.path, forKey: "workspaceRoot")
+        }
+        let controller = GlobalSearchWindow(rootURL: root)
+        controller.openResult = { [weak self] url, offset in
+            guard let self else { return }
+            self.pendingFileOffsets[url.standardizedFileURL.path] = offset; self.openURLs([url])
+        }
+        controller.canReplaceFile = { [weak self] url in
+            guard let self else { return false }
+            return !self.tabs.contains { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == url.resolvingSymlinksInPath().standardizedFileURL }
+        }
+        retainResource(controller); controller.showWindow(nil)
+    }
+    @objc func showReadingList(_ sender: Any?) {
+        let controller = ReadingListWindow(store: readingListStore)
+        controller.openItem = { [weak self] item in
+            guard let self else { return }
+            self.pendingFileOffsets[URL(fileURLWithPath: item.path).standardizedFileURL.path] = item.sourceAnchor
+            self.openURLs([URL(fileURLWithPath: item.path)])
+        }
+        retainResource(controller); controller.present(relativeTo: window)
+    }
+    @objc func addCurrentToReadingList(_ sender: Any?) {
+        guard let path = active?.file.url?.path else { updateStatus("未保存文档不能加入阅读清单"); return }
+        do { _ = try readingListStore.upsert(path: path, pinned: true, sourceAnchor: currentSourceOffset()); try readingListStore.save(); updateStatus("已加入阅读清单") }
+        catch { updateStatus("阅读清单保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func markCurrentRead(_ sender: Any?) {
+        guard let path = active?.file.url?.path else { return }
+        do { _ = try readingListStore.upsert(path: path, completed: true, progress: 1, sourceAnchor: currentSourceOffset()); try readingListStore.save(); updateStatus("已标记为已读") }
+        catch { updateStatus("阅读清单保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func toggleBookmark(_ sender: Any?) {
+        guard let tab = active else { return }
+        let offset = currentSourceOffset(), source = tab.file.text as NSString
+        let line = source.lineRange(for: NSRange(location: min(offset, source.length), length: 0))
+        let existing = bookmarkStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+            .first { $0.sourceAnchor >= line.location && $0.sourceAnchor <= NSMaxRange(line) }
+        do {
+            if let existing { _ = bookmarkStore.remove(id: existing.id) }
+            else { _ = try bookmarkStore.add(documentID: tab.file.id, path: tab.file.url?.path, sourceAnchor: offset, text: tab.file.text) }
+            try bookmarkStore.save(); updateStatus(existing == nil ? "已添加当前位置书签" : "已移除当前位置书签")
+        } catch { showError(error) }
+    }
+    @objc func showBookmarks(_ sender: Any?) {
+        guard let tab = active else { return }
+        let menu = NSMenu(title: "当前文档书签")
+        for bookmark in bookmarkStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path) {
+            let item = NSMenuItem(title: bookmark.label, action: #selector(jumpBookmark(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = bookmark.sourceAnchor; menu.addItem(item)
+        }
+        if menu.items.isEmpty { menu.addItem(NSMenuItem(title: "暂无书签 · ⌘D 添加", action: nil, keyEquivalent: "")) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 20, y: 0), in: tools)
+    }
+    @objc private func jumpBookmark(_ item: NSMenuItem) {
+        if let offset = item.representedObject as? Int { pushNavigation(); scrollToSource(offset) }
+    }
+    private func migrateReadingMetadata(_ tab: ReaderTab, oldPath: String?) {
+        guard let path = tab.file.url?.path, path != oldPath else { return }
+        let changedAnnotations = annotationStore.migratePath(documentID: tab.file.id, oldPath: oldPath, newPath: path)
+        let changedBookmarks = bookmarkStore.migratePath(documentID: tab.file.id, oldPath: oldPath, newPath: path)
+        do {
+            if changedBookmarks > 0 { try bookmarkStore.save() }
+            if changedAnnotations > 0 { let result = annotationStore.save(); if !result.errors.isEmpty { updateStatus(result.errors.joined(separator: "；")) } }
+            if let oldPath, let entry = readingListStore.item(for: oldPath) {
+                _ = try readingListStore.upsert(path: path, pinned: entry.pinned, completed: entry.completed, progress: entry.progress, sourceAnchor: entry.sourceAnchor)
+                _ = readingListStore.remove(path: oldPath); try readingListStore.save()
+            }
+        } catch { updateStatus("文件已保存，阅读记录迁移失败 · \(error.localizedDescription)") }
+    }
+    private func repairAnnotations(_ tab: ReaderTab) {
+        let items = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+        guard !items.isEmpty else { return }
+        let repairs = items.map { AnnotationAnchorResolver.repair($0, in: tab.file.text) }
+        if annotationStore.applyAnchorRepairs(repairs) > 0 {
+            let result = annotationStore.save()
+            if !result.errors.isEmpty { updateStatus(result.errors.joined(separator: "；")) }
+        }
     }
     func openURLs(_ urls: [URL]) {
         if modalDepth > 0 { deferredDocumentMutations.append { [weak self] in self?.openURLs(urls) }; return }
@@ -599,25 +791,38 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
             if let i = tabs.firstIndex(where: { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == resolved }) { selectTab(i); continue }
             guard openingPaths.insert(resolved.path).inserted else { continue }
-            statusLeft.stringValue = "正在打开 \(url.lastPathComponent)…"
+            if tabs.count >= 200 { updateStatus("最多同时打开200份文档"); openingPaths.remove(resolved.path); continue }
+            openingGeneration += 1; let openToken = openingGeneration
+            let progress = ReaderOperation(title: "打开 \(url.lastPathComponent)", parent: window); operation = progress
+            statusLeft.stringValue = "正在读取 \(url.lastPathComponent)…"
             fileOpenQueue.async { [weak self] in
                 let result = Result { try TextFile.open(url) }
                 DispatchQueue.main.async {
-                    guard let self = self else { return }
+                    guard let self = self else { progress.finish(); return }
                     self.performDocumentMutation { [weak self] in
-                    guard let self = self, !self.shuttingDown else { return }
-                    self.openingPaths.remove(resolved.path)
-                    switch result {
-                    case .success(let file):
-                        self.stashCurrent()
-                        if self.tabs.count == 1, let initial = self.tabs.first, initial.file.url == nil, initial.file.text.isEmpty, initial.file.suggestedName == nil {
-                            self.tabs.removeAll()
+                        guard let self = self, !self.shuttingDown else { progress.finish(); return }
+                        self.openingPaths.remove(resolved.path)
+                        guard !progress.cancelled else { progress.finish(); self.updateStatus("打开已取消"); return }
+                        switch result {
+                        case .success(let file):
+                            progress.stage("正在解析…")
+                            // Yield once between reading and native presentation so cancellation
+                            // can be processed before building the view.
+                            DispatchQueue.main.async {
+                                guard !progress.cancelled else { progress.finish(); return }
+                                self.performDocumentMutation {
+                                    self.stashCurrent()
+                                    if self.tabs.count == 1, let initial = self.tabs.first, initial.file.url == nil, initial.file.text.isEmpty, initial.file.suggestedName == nil || initial.automaticallyNamed { self.tabs.removeAll() }
+                                    let tab = ReaderTab(file); tab.recoverDraft = !self.excludedDraftPaths.contains(url.standardizedFileURL.path); self.restorePosition(tab)
+                                    progress.stage("正在排版…")
+                                    self.tabs.append(tab); self.selectTab(self.tabs.count - 1, stash: false); self.remember(url); self.scheduleRecovery()
+                                    if self.window?.isVisible == false { self.showWindow(nil) }
+                                    progress.finish()
+                                    if self.openingGeneration == openToken { self.operation = nil }
+                                }
+                            }
+                        case .failure(let error): progress.finish(); self.showError(error)
                         }
-                        let tab = ReaderTab(file); tab.recoverDraft = !self.excludedDraftPaths.contains(url.standardizedFileURL.path); self.restorePosition(tab)
-                        self.tabs.append(tab); self.selectTab(self.tabs.count - 1, stash: false); self.remember(url); self.scheduleRecovery()
-                        if self.window?.isVisible == false { self.showWindow(nil) }
-                    case .failure(let error): self.showError(error)
-                    }
                     }
                 }
             }
@@ -627,7 +832,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let tab = active else { return }
         editor.breakUndoCoalescing()
         tab.selection = editor.selectedRange()
-        if reading { tab.readingScroll = editorScroll.contentView.bounds.origin }
+        if reading { tab.readingScroll = previewScroll.contentView.bounds.origin }
         else { tab.scroll = editorScroll.contentView.bounds.origin }
         if !reading { tab.file.text = editor.string }
         tab.isReading = reading
@@ -638,6 +843,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard modalDepth == 0 else { return }
         guard tabs.indices.contains(index) else { return }
         if stash { stashCurrent() }
+        for button in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { button.isHidden = true }
+        for (i, tab) in tabs.enumerated() where i != index { tab.releasePresentation() }
+        installedPresentation = nil
+        preview.textStorage?.setAttributedString(NSAttributedString(string: ""))
         pendingFind = nil
         changing = true; current = index
         guard let tab = active else { changing = false; return }
@@ -652,7 +861,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         updateWrap(); refreshTabs(); updateStatus(); scheduleHighlight()
         updateModeControls()
         let anchor = tab.sourceAnchor
-        if reading { renderReading() }
+        if reading || active?.splitPreview == true { renderReading() }
         window?.contentView?.layoutSubtreeIfNeeded()
         if reading || tab.hasWorkspacePosition { scrollToSource(anchor); tab.hasWorkspacePosition = false }
         else {
@@ -660,9 +869,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             editorScroll.contentView.scroll(to: tab.scroll); editorScroll.reflectScrolledClipView(editorScroll.contentView)
             restoringLocation = false
         }
-        scheduleSearch()
+        scheduleSearch(); updateChangeMarks()
+        if let path = tab.file.url?.standardizedFileURL.path, let offset = pendingFileOffsets.removeValue(forKey: path) {
+            scrollToSource(offset)
+            if !reading { editor.setSelectedRange(NSRange(location: min(max(0, offset), editor.string.utf16.count), length: 0)) }
+        }
         window?.makeFirstResponder(reading ? preview : editor)
-        scheduleRecovery()
+        scheduleRecovery(); checkExternalFile(tab)
     }
     @objc func saveDocument(_ sender: Any?) { _ = saveCurrent() }
     @objc func undoEdit(_ sender: Any?) {
@@ -689,10 +902,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             destination = url
         }
         do {
+            let oldPath = tab.file.url?.path
             try tab.file.save(to: destination, allowOverwrite: overwrite)
+            migrateReadingMetadata(tab, oldPath: oldPath)
             refreshAutomaticKind(tab)
             if !tab.recoverDraft, let path = tab.file.url?.path { var excluded = excludedDraftPaths; excluded.insert(path); excludedDraftPaths = excluded }
             if let url = tab.file.url { remember(url) }
+            tab.savedText = tab.file.text; updateChangeMarks()
             refreshTabs(); updateStatus("已保存"); writeRecovery(); return true
         } catch TextFileError.externalChange {
             let result = alert("文件已在外部修改", "为避免覆盖其他程序的修改，请选择处理方式。当前编辑内容仍然保留。", buttons: ["另存为", "取消", "覆盖磁盘文件"])
@@ -721,7 +937,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             writeRecovery()
             updateStatus(summary)
         }
-        let ids = tabs.filter { $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil) }.map { $0.file.id }
+        let ids = tabs.filter { $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil && !$0.automaticallyNamed) }.map { $0.file.id }
         var count = 0
         for id in ids {
             guard let i = tabs.firstIndex(where: { $0.file.id == id }) else { continue }
@@ -754,12 +970,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @discardableResult private func closeTab(_ index: Int) -> Bool {
         guard tabs.indices.contains(index) else { return true }
         selectTab(index)
-        if let file = active?.file, file.isDirty && (!file.text.isEmpty || file.url != nil || file.suggestedName != nil) {
+        if let file = active?.file, file.isDirty && (!file.text.isEmpty || file.url != nil || file.suggestedName != nil && active?.automaticallyNamed != true) {
             let result = alert("保存“\(active!.file.title)”的修改？", "保存会写回本机文件。", buttons: ["保存", "取消", "不保存"])
             if result == .alertSecondButtonReturn { return false }
             if result == .alertFirstButtonReturn && !saveCurrent() { return false }
         }
+        tabs[index].releasePresentation()
         changing = true; tabs.remove(at: index); changing = false
+        installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: ""))
         if tabs.isEmpty { current = 0; if !closeBatch { window?.performClose(nil) } }
         else { selectTab(min(index, tabs.count - 1), stash: false) }
         writeRecovery()
@@ -768,7 +986,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func confirmDocumentsClosure(allowKeep: Bool = false) -> (confirmed: Bool, discarded: Set<UUID>) {
         stashCurrent()
         var discarded = Set<UUID>()
-        for index in tabs.indices where tabs[index].file.isDirty && (!tabs[index].file.text.isEmpty || tabs[index].file.url != nil || tabs[index].file.suggestedName != nil) {
+        for index in tabs.indices where tabs[index].file.isDirty && (!tabs[index].file.text.isEmpty || tabs[index].file.url != nil || tabs[index].file.suggestedName != nil && !tabs[index].automaticallyNamed) {
             selectTab(index)
             let tab = tabs[index]
             let canKeep = allowKeep && recoveryEnabled && tab.recoverDraft
@@ -837,8 +1055,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc func revealCurrentFile(_ sender: Any?) { if let url = active?.file.url { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
     @objc func becameActive() {
         guard !shuttingDown, let tab = active, tab.file.url != nil else { return }
-        do { if try tab.file.diskChanged() { updateStatus("磁盘文件已变化 · ⌘⇧R 可重新载入") } }
-        catch { updateStatus("磁盘文件暂不可访问，当前内容已保留") }
+        checkExternalFile(tab)
     }
     @objc func reloadDocument(_ sender: Any?) {
         guard let tab = active, let url = tab.file.url else { return }
@@ -846,10 +1063,27 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         do { let file = try TextFile.open(url); tabs[current] = ReaderTab(file); selectTab(current, stash: false); writeRecovery() }
         catch { showError(error) }
     }
+    @objc func keepExternalEdits(_ sender: Any?) {
+        externalConflictID = nil
+        for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true }
+        updateContextToolbar(); updateStatus("当前修改已保留，保存时仍会检查磁盘冲突")
+    }
+    @objc func acceptExternalVersion(_ sender: Any?) {
+        reloadDocument(sender)
+        if active?.file.id != externalConflictID {
+            externalConflictID = nil
+            for control in [keepExternalButton!, acceptExternalButton!, recheckExternalButton!] { control.isHidden = true }
+            updateContextToolbar(); updateStatus("已接纳磁盘版本")
+        }
+    }
+    @objc func recheckExternalVersion(_ sender: Any?) { if let tab = active { checkExternalFile(tab) } }
     func textDidChange(_ notification: Notification) {
         guard !changing, !reading, let tab = active else { return }
         tab.file.text = editor.string
-        tab.rendered = nil
+        tab.releasePresentation()
+        if !tab.splitPreview { installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: "")) }
+        scheduleSplitRender()
+        updateChangeMarks()
         if !lineIndexUpdated { ruler.updateLines(editor.string) }
         lineIndexUpdated = false; ruler.needsDisplay = true
         refreshTabs(); updateStatus(); scheduleHighlight(); scheduleRecovery(); scheduleSearch()
@@ -866,8 +1100,19 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc private func scrolled() {
         ruler.needsDisplay = true
         if !restoringLocation && liveResizeAnchor == nil { active?.sourceAnchor = currentSourceOffset() }
-        if reading { updateStatus() }
+        if reading { updateStatus(); highlightOutline(); updateReadingListProgress() }
         if !restoringLocation && liveResizeAnchor == nil { scheduleRecovery() }
+    }
+    private func updateReadingListProgress() {
+        guard let path = active?.file.url?.path, readingListStore.item(for: path) != nil else { return }
+        let length = max(1, active?.file.text.utf16.count ?? 1)
+        let progress = min(1, max(0, Double(currentSourceOffset()) / Double(length)))
+        do { _ = try readingListStore.upsert(path: path, progress: progress, sourceAnchor: currentSourceOffset()) } catch { return }
+        readingListSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            do { try self?.readingListStore.save() } catch { self?.updateStatus("阅读清单写入失败 · \(error.localizedDescription)") }
+        }
+        readingListSaveTask = task; DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: task)
     }
     private func cancelFind() { if searchVisible { hideFind() } else if focused { toggleFocus(nil) } }
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -879,6 +1124,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         return false
     }
     private func updateStatus(_ message: String? = nil) {
+        updateMarkdownWritingState()
         guard let file = active?.file else { return }
         let text = editor.string as NSString
         let location = min(editor.selectedRange().location, text.length)
@@ -889,13 +1135,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let column = location - ruler.starts[max(0, min(line - 1, ruler.starts.count - 1))] + 1
         if reading {
             let view = preview
-            let maximum = max(1, view.bounds.height - editorScroll.contentSize.height)
-            let progress = min(100, max(0, Int(editorScroll.contentView.bounds.origin.y / maximum * 100)))
+            let maximum = max(1, view.bounds.height - previewScroll.contentSize.height)
+            let progress = min(100, max(0, Int(previewScroll.contentView.bounds.origin.y / maximum * 100)))
             statusRight.stringValue = "阅读 · \(progress)%"
         } else { statusRight.stringValue = "行 \(line)，列 \(column)" }
         statusLeft.stringValue = message ?? "\(file.isDirty ? "未保存" : "已保存") · \(file.url?.path ?? "新建本机文本")"
         statusLeft.toolTip = file.url?.path
-        formatButton.isEnabled = active?.kind == .json && !reading
+        formatButton.isEnabled = active != nil && !restoringWorkspace
     }
     private func scheduleHighlight() {
         highlightTask?.cancel(); generation += 1
@@ -918,7 +1164,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func systemAppearanceChanged() { if followSystemAppearance { applyTheme() } }
     @objc func toggleTheme(_ sender: Any?) {
-        followSystemAppearance = false; dark.toggle()
+        followSystemAppearance = false; warmPaper = false; UserDefaults.standard.set("", forKey: "readerTheme"); dark.toggle()
         UserDefaults.standard.set(false, forKey: "followSystemAppearance"); UserDefaults.standard.set(dark, forKey: "dark"); applyTheme()
     }
     @objc func toggleSidebar(_ sender: Any?) {
@@ -932,25 +1178,56 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func updateModeControls() {
         let hideSidebar = focused || !showingSidebar
         sidebar.isHidden = hideSidebar
-        sidebarToggleButton.title = showingSidebar ? "收起侧栏" : "展开侧栏"
-        sidebarToggleButton.setAccessibilityLabel(sidebarToggleButton.title)
-        menuRow.isHidden = focused; menuRowHeight.constant = focused ? 0 : 34
+        sidebarToggleButton.title = ""; sidebarToggleButton.setAccessibilityLabel(showingSidebar ? "收起侧栏" : "展开侧栏")
+        sidebarToggleButton.toolTip = (showingSidebar ? "收起侧栏" : "展开侧栏") + " · ⌘B"
+        menuRow.isHidden = false; windowMenuBar.isHidden = focused; menuRowHeight.constant = 40
+        headerMenuLeading.isActive = !focused; headerFullLeading.isActive = focused
         canvasInsetLeading.isActive = !hideSidebar; canvasFullLeading.isActive = hideSidebar
-        tabsHeight.constant = focused ? 0 : 39; tabScroll.isHidden = focused
-        toolsHeight.constant = focused ? 0 : 36; tools.isHidden = focused
-        headerHeight.constant = focused ? 38 : 54; branding.isHidden = focused
-        for action in focusHiddenActions { action.isHidden = focused }
+        tabsHeight.constant = focused ? 0 : 34; tabRow.isHidden = focused
+        headerHeight.constant = 40; branding.isHidden = false
         focusButton.title = focused ? "退出专注" : "专注"
-        readButton.title = reading ? "返回编辑" : "阅读模式"
-        kindPopup.isHidden = reading; formatButton.isHidden = reading; wrapButton.isHidden = reading
-        replaceField.isHidden = reading; replacementButtons.forEach { $0.isHidden = reading }
-        codecPopup.isHidden = reading || focused; endingPopup.isHidden = reading || focused
-        statusLeft.isHidden = focused
-        statusNormalTrailing.isActive = !reading && !focused; statusReadingTrailing.isActive = reading || focused
-        editorScroll.documentView = reading ? preview : editor
+        readButton.title = reading ? "编辑原文" : "返回预览"
+        let kind = active?.kind
+        let md = kind == .markdown, json = kind == .json || kind == .jsonc
+        splitButton.isHidden = !md; splitButton.title = active?.splitPreview == true ? "关闭分屏" : "分屏编辑"
+        structureButton.isHidden = !json
+        toolbarCopyButton.isHidden = !md || (!reading && active?.splitPreview != true)
+        toolbarOptions.isHidden = !md
+        markdownEditOptions.isHidden = !md || reading
+        markdownStateBadge.isHidden = !md || reading; markdownWritingHint.isHidden = !md || reading
+        updateMarkdownWritingState()
+        returnPositionButton.isEnabled = active?.navigation.isEmpty == false
+        formatButton.title = kind == .plain ? "整理 TXT" : "格式化"
+        presentationHint.stringValue = md ? (reading ? "Markdown 预览 · 需要修改时点击编辑原文" : active?.splitPreview == true ? "左侧编辑 · 右侧预览" : "Markdown 原文 · 可开启分屏编辑") : ""
+        kindPopup.isHidden = false; codecPopup.isHidden = false; endingPopup.isHidden = false; statusLeft.isHidden = false
+        replaceBar.isHidden = !replacementVisible
+        editorScroll.isHidden = reading; previewScroll.isHidden = !reading && active?.splitPreview != true
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
-        window?.contentView?.layoutSubtreeIfNeeded()
+        window?.contentView?.layoutSubtreeIfNeeded(); updateContextToolbar()
+        layoutDocumentPanes(); updateSidebarTabs()
     }
+    private func updateMarkdownWritingState() {
+        guard active?.kind == .markdown, !reading else { return }
+        let selected = editor.selectedRange()
+        if let item = MarkdownListEditing.item(in: editor.string, at: selected.location) {
+            markdownStateBadge.stringValue = "  \(item.task ? "任务列表" : item.ordered ? "有序列表" : "无序列表") · 第 \(item.level + 1) 层 · 选区 \(selected.length)  "
+        } else {
+            markdownStateBadge.stringValue = "  Markdown 正文 · 选区 \(selected.length)  "
+        }
+    }
+    private func updateContextToolbar() {
+        let width = max(100, canvas.bounds.width - 24)
+        let height = tools.arrange(width: width)
+        if abs(toolsHeight.constant - (height + 16)) > 0.5 { toolsHeight.constant = height + 16 }
+    }
+    private func updateSidebarTabs() {
+        clearRecentButton.isHidden = outlineMode
+        for (button, selected) in [(sidebarRecentButton, !outlineMode), (sidebarOutlineButton, outlineMode)] {
+            guard let button = button else { continue }; button.fill = selected ? theme.panel : theme.window; button.ink = selected ? theme.text : theme.muted
+            button.borderColor = .clear; button.bottomAccent = selected ? theme.accent : .clear; button.hoverFill = theme.hover
+        }
+    }
+    private func setSidebarOutline(_ value: Bool) { outlineMode = value; refreshRecent() }
     @objc func toggleWrap(_ sender: Any?) { wrapping.toggle(); UserDefaults.standard.set(wrapping, forKey: "wrapping"); wrapButton.title = wrapping ? "自动换行 ✓" : "自动换行"; updateWrap() }
     private func updateWrap() {
         editorScroll.hasHorizontalScroller = !wrapping && !reading
@@ -964,22 +1241,134 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func changeFont(_ delta: CGFloat) {
         active?.sourceAnchor = currentSourceOffset()
         fontSize = min(30, max(10, fontSize + delta)); UserDefaults.standard.set(Double(fontSize), forKey: "fontSize")
-        editor.font = editorFont(); scheduleHighlight(); if reading { renderReading() }
+        editor.font = editorFont(); scheduleHighlight(); if reading || active?.splitPreview == true { renderReading() }
     }
     @objc func increaseFont(_ sender: Any?) { changeFont(1) }
     @objc func decreaseFont(_ sender: Any?) { changeFont(-1) }
+    @objc func validateDocument(_ sender: Any?) {
+        guard let tab = active else { return }
+        let diagnostic = TextFeatures.diagnostic(tab.file.text, kind: tab.kind)
+        let supported = tab.kind == .json || tab.kind == .jsonc
+        updateStatus(diagnostic ?? (supported ? "检查通过" : tab.kind == .yaml ? "未发现缩进 Tab（仅基础检查）" : "此类型没有完整校验器"))
+    }
+    @objc func toggleLineNumbers(_ sender: Any?) {
+        showLineNumbers.toggle(); UserDefaults.standard.set(showLineNumbers, forKey: "lineNumbers"); updateModeControls()
+    }
+    @objc func changeReadingWidth(_ sender: NSMenuItem) {
+        let anchor = currentSourceOffset(); readingWidth = CGFloat(sender.tag == 5000 ? 1_000_000 : sender.tag)
+        UserDefaults.standard.set(Double(readingWidth), forKey: "readingWidth"); updateReadingWidth(); scrollToSource(anchor)
+    }
+    @objc func closeOtherDocuments(_ sender: Any?) {
+        guard let id = active?.file.id else { return }; let item = NSMenuItem(); item.representedObject = id; closeOtherTabs(item)
+    }
+    @objc func showDiagnostics(_ sender: Any?) {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "9"
+        let details = ["Mac \(version) · 构建 \(build)", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
+        _ = alert("打开与阅读诊断", details.joined(separator: "\n"), buttons: ["关闭"])
+    }
+    @objc func checkForUpdates(_ sender: Any?) {
+        updateRequest?.cancel(); updateStatus("正在检查 Mac 更新…")
+        let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "8") ?? 8
+        updateRequest = QingyueUpdateService.checkMac(currentBuild: build) { [weak self] result in
+            guard let self else { return }; self.updateRequest = nil
+            switch result {
+            case .success(let release?):
+                if self.alert("发现 Mac 构建 \(release.build)", "打开 GitHub 发布页下载 Mac 更新。", buttons: ["打开发布页", "稍后"]) == .alertFirstButtonReturn { NSWorkspace.shared.open(release.url) }
+            case .success(nil): self.updateStatus("没有比当前构建更新的 Mac 发布包")
+            case .failure(let error): self.updateStatus("更新检查未完成 · \(error.localizedDescription)")
+            }
+        }
+    }
+    private func selectedSourceRangeForAnnotation() -> NSRange? {
+        guard let tab = active else { return nil }
+        if !reading { return editor.selectedRange().length > 0 ? editor.selectedRange() : nil }
+        guard let rendered = tab.rendered else { return nil }
+        let selected = preview.selectedRange()
+        guard selected.length > 0 else { return nil }
+        let start = rendered.sourceRange(forDisplayOffset: selected.location)
+        let end = rendered.sourceRange(forDisplayOffset: NSMaxRange(selected))
+        let location = min(start.location, end.location)
+        let finish = max(NSMaxRange(start), NSMaxRange(end))
+        return finish > location ? NSRange(location: location, length: finish - location) : nil
+    }
+    @objc func addAnnotation(_ sender: Any?) {
+        guard let tab = active, let range = selectedSourceRangeForAnnotation() else { updateStatus("先选择一段正文，再添加批注"); return }
+        let source = tab.file.text as NSString
+        guard range.location >= 0, range.length > 0, NSMaxRange(range) <= source.length else { return }
+        let quote = source.substring(with: range)
+        let beforeStart = max(0, range.location - 160)
+        let before = source.substring(with: NSRange(location: beforeStart, length: range.location - beforeStart))
+        let afterLength = min(160, source.length - NSMaxRange(range))
+        let after = source.substring(with: NSRange(location: NSMaxRange(range), length: afterLength))
+        let note = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26)); note.placeholderString = "备注（可选）"
+        let tags = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26)); tags.placeholderString = "标签，用逗号分隔（可选）"
+        let content = NSStackView(views: [note, tags]); content.orientation = .vertical; content.spacing = 8; content.frame = NSRect(x: 0, y: 0, width: 360, height: 62)
+        let alert = NSAlert(); alert.messageText = "添加批注"; alert.informativeText = String(quote.prefix(400)); alert.accessoryView = content
+        alert.addButton(withTitle: "保存批注"); alert.addButton(withTitle: "取消")
+        guard runDocumentModal({ alert.runModal() }) == .alertFirstButtonReturn else { return }
+        let draft = AnnotationDraft(documentID: tab.file.id, path: tab.file.url?.path, sourceStart: range.location, sourceEnd: NSMaxRange(range), quote: quote, contextBefore: before, contextAfter: after, note: note.stringValue, tags: tags.stringValue.split(separator: ",").map { String($0) })
+        do { _ = try annotationStore.add(draft); let result = annotationStore.save(); updateStatus(result.errors.isEmpty ? "批注已保存到本机" : result.errors.joined(separator: "；")) }
+        catch { updateStatus("批注保存失败 · \(error.localizedDescription)") }
+    }
+    @objc func showAnnotations(_ sender: Any?) {
+        guard let tab = active else { return }
+        repairAnnotations(tab)
+        let controller = AnnotationPanelWindow(store: annotationStore, documentID: tab.file.id, path: tab.file.url?.path)
+        controller.jump = { [weak self, weak tab] annotation in
+            guard let self, let tab, let index = self.tabs.firstIndex(where: { $0 === tab }) else { return }
+            if self.active !== tab { self.selectTab(index) }
+            self.pushNavigation(); self.scrollToSource(annotation.sourceStart)
+            self.updateStatus("已跳转到批注 · " + annotation.anchorState.label)
+        }
+        controller.onChange = { [weak self] in self?.paintAnnotationMatches(); self?.updateStatus("批注已更新") }
+        retainResource(controller); controller.present(relativeTo: window)
+    }
+    @objc private func jumpAnnotation(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? UUID, let tab = active,
+              let annotation = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path).first(where: { $0.id == id }) else { return }
+        pushNavigation(); scrollToSource(annotation.sourceStart); updateStatus("已跳转到批注 · \(annotation.anchorState.label)")
+    }
+    @objc func exportReadingBriefMarkdown(_ sender: Any?) { exportReadingBrief(asHTML: false) }
+    @objc func exportReadingBriefHTML(_ sender: Any?) { exportReadingBrief(asHTML: true) }
+    private func exportReadingBrief(asHTML: Bool) {
+        guard let tab = active else { return }
+        repairAnnotations(tab)
+        let rendered = tab.rendered ?? ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing)
+        let headings = rendered.headings.map { ReadingBriefHeading(title: $0.title, sourceStart: $0.sourceRange.location) }
+        let annotations = annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path)
+        let length = max(1, tab.file.text.utf16.count)
+        let input = ReadingBriefInput(title: tab.file.title, sourcePath: tab.file.url?.path, sourceText: tab.file.text, progressPercent: min(100, max(0, Int((Double(currentSourceOffset()) / Double(length) * 100).rounded()))), generatedAt: Date(), headings: headings, annotations: annotations)
+        do {
+            let output = try asHTML ? ReadingBriefExporter.buildHTML(input) : ReadingBriefExporter.buildMarkdown(input)
+            let panel = NSSavePanel(); panel.allowedContentTypes = asHTML ? [.html] : [.plainText]
+            panel.nameFieldStringValue = (tab.file.title as NSString).deletingPathExtension + (asHTML ? "-阅读简报.html" : "-阅读简报.md")
+            panel.canCreateDirectories = true; panel.prompt = "导出"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard !tabs.contains(where: { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == url.resolvingSymlinksInPath().standardizedFileURL }) else { updateStatus("简报不能覆盖已打开的源文件"); return }
+            try Data(output.utf8).write(to: url, options: .atomic); updateStatus("已导出阅读简报 · \(url.lastPathComponent)")
+        } catch { updateStatus("阅读简报导出失败 · \(error.localizedDescription)") }
+    }
+    private func lineNumber(in text: String, offset: Int) -> Int {
+        let source = text as NSString; let end = min(source.length, max(0, offset)); var line = 1
+        for index in 0..<end where source.character(at: index) == 10 { line += 1 }
+        return line
+    }
     @objc func showPreferences(_ sender: Any?) {
-        let a = NSAlert(); a.messageText = "阅读与编辑设置"; a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
+        let a = NSAlert(); a.messageText = "阅读外观与编辑设置"; a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
         let numbers = NSButton(checkboxWithTitle: "编辑时显示行号", target: nil, action: nil); numbers.state = showLineNumbers ? .on : .off
         let wrap = NSButton(checkboxWithTitle: "自动换行", target: nil, action: nil); wrap.state = wrapping ? .on : .off
         let size = NSPopUpButton(); size.addItems(withTitles: (10...30).map(String.init)); size.selectItem(withTitle: String(Int(fontSize)))
         let face = NSPopUpButton(); face.addItems(withTitles: ["苹方", "宋体", "系统字体"]); face.selectItem(at: readingFontName == "Songti SC" ? 1 : (readingFontName == "system" ? 2 : 0))
         let spacing = NSPopUpButton(); spacing.addItems(withTitles: ["紧凑", "舒适", "宽松"]); spacing.selectItem(at: readingLineSpacing < 4 ? 0 : (readingLineSpacing > 8 ? 2 : 1))
+        let paragraph = NSPopUpButton(); paragraph.addItems(withTitles: ["无段距", "紧凑", "标准", "宽松"]); paragraph.selectItem(at: readingParagraphSpacing < 1 ? 0 : readingParagraphSpacing < 10 ? 1 : readingParagraphSpacing > 18 ? 3 : 2)
         let systemTheme = NSButton(checkboxWithTitle: "外观跟随系统", target: nil, action: nil); systemTheme.state = followSystemAppearance ? .on : .off
+        let colors = NSPopUpButton(); colors.addItems(withTitles: ["深色", "浅色", "暖纸"]); colors.selectItem(at: warmPaper ? 2 : dark ? 0 : 1); colors.setAccessibilityLabel("阅读主题")
+        let icon = NSPopUpButton(); icon.addItems(withTitles: AppIconTheme.allCases.map(\.label)); icon.selectItem(at: AppIconTheme.allCases.firstIndex(of: AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme"))) ?? 0); icon.setAccessibilityLabel("应用图标")
         let width = NSPopUpButton(); width.addItems(withTitles: ["紧凑", "标准", "宽", "全宽"])
         width.selectItem(at: readingWidth > 1000 ? 3 : (readingWidth < 600 ? 0 : (readingWidth > 750 ? 2 : 1)))
-        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("阅读版心"), width])])
-        content.orientation = .vertical; content.alignment = .leading; content.spacing = 12; content.frame = NSRect(x: 0, y: 0, width: 320, height: 260)
+        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("主题"), colors]), stack([label("应用图标"), icon]), stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("段间距"), paragraph]), stack([label("阅读版心"), width])])
+        content.orientation = .vertical; content.alignment = .leading; content.spacing = 10; content.frame = NSRect(x: 0, y: 0, width: 330, height: 350)
         a.accessoryView = content
         guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         active?.sourceAnchor = currentSourceOffset()
@@ -987,12 +1376,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         fontSize = CGFloat(Int(size.titleOfSelectedItem ?? "14") ?? 14)
         readingFontName = ["PingFang SC", "Songti SC", "system"][face.indexOfSelectedItem]
         readingLineSpacing = [2, 6, 11][spacing.indexOfSelectedItem]
+        readingParagraphSpacing = [0, 6, 13, 24][paragraph.indexOfSelectedItem]
         readingWidth = [520, 680, 840, 1_000_000][width.indexOfSelectedItem]
-        followSystemAppearance = systemTheme.state == .on
+        followSystemAppearance = systemTheme.state == .on; warmPaper = colors.indexOfSelectedItem == 2; dark = colors.indexOfSelectedItem == 0
         let d = UserDefaults.standard
         d.set(showLineNumbers, forKey: "lineNumbers"); d.set(wrapping, forKey: "wrapping"); d.set(Double(fontSize), forKey: "fontSize")
-        d.set(readingFontName, forKey: "readingFont"); d.set(Double(readingLineSpacing), forKey: "lineSpacing")
+        d.set(readingFontName, forKey: "readingFont"); d.set(Double(readingLineSpacing), forKey: "lineSpacing"); d.set(Double(readingParagraphSpacing), forKey: "paragraphSpacing")
         d.set(Double(readingWidth), forKey: "readingWidth"); d.set(followSystemAppearance, forKey: "followSystemAppearance")
+        d.set(warmPaper ? "WarmPaper" : dark ? "Dark" : "Light", forKey: "readerTheme"); d.set(dark, forKey: "dark")
+        AppIconTheme.apply(AppIconTheme.allCases[icon.indexOfSelectedItem])
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
         wrapButton.title = wrapping ? "自动换行 ✓" : "自动换行"; window?.contentView?.layoutSubtreeIfNeeded()
         editor.font = editorFont(); updateWrap(); applyTheme()
@@ -1003,7 +1395,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         pendingFind = nil
         stashCurrent(); reading.toggle(); tab.isReading = reading; tab.sourceAnchor = anchor
         updateModeControls()
-        if reading { renderReading() } else { editor.font = editorFont(); updateWrap(); scheduleHighlight() }
+        if reading || active?.splitPreview == true { renderReading() }
+        else { tab.releasePresentation(); installedPresentation = nil; preview.textStorage?.setAttributedString(NSAttributedString(string: "")); editor.font = editorFont(); updateWrap(); scheduleHighlight() }
         scrollToSource(anchor); scheduleSearch()
         window?.makeFirstResponder(reading ? preview : editor); updateStatus()
     }
@@ -1014,8 +1407,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let glyphs = lm.glyphRange(forBoundingRect: rect, in: tc)
         let visible = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         let selected = view.selectedRange()
-        if selected.length > 0 && NSIntersectionRange(visible, selected).length > 0 { return selected.location }
-        return min(visible.location, view.string.utf16.count)
+        if selected.location >= visible.location && selected.location <= NSMaxRange(visible) { return selected.location }
+        let top = NSPoint(x: 2, y: max(0, rect.minY + 5))
+        return min(lm.characterIndex(for: top, in: tc, fractionOfDistanceBetweenInsertionPoints: nil), view.string.utf16.count)
     }
     private func currentSourceOffset() -> Int {
         let offset = visibleOffset(in: displayedTextView)
@@ -1041,19 +1435,29 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             let glyph = lm.glyphIndexForCharacter(at: location)
             y = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
         }
-        editorScroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y + view.textContainerOrigin.y - 12)))
-        editorScroll.reflectScrolledClipView(editorScroll.contentView)
+        let scroll = reading ? previewScroll : editorScroll
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y + view.textContainerOrigin.y - 6)))
+        scroll.reflectScrolledClipView(scroll.contentView)
         tab.sourceAnchor = min(max(0, offset), tab.file.text.utf16.count)
     }
     private func updateReadingWidth() {
-        guard reading else { return }
-        let available = max(100, editorScroll.contentSize.width)
+        guard reading || active?.splitPreview == true else { return }
+        let available = max(100, previewScroll.contentSize.width)
         let width = min(max(100, available - 48), readingWidth)
         let margin = max(24, (available - width) / 2)
         preview.textContainerInset = NSSize(width: margin, height: 26)
-        preview.frame.size.width = available
+        preview.setFrameSize(NSSize(width: available, height: max(previewScroll.contentSize.height, preview.frame.height)))
         preview.textContainer?.widthTracksTextView = false
         preview.textContainer?.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        if let storage = preview.textStorage {
+            ReadingMediaLoader.resizeAttachments(in: storage, maxWidth: width)
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
+                if let attachment = value as? NSTextAttachment, !(attachment is ReadingImageAttachment), let image = attachment.image {
+                    let scaled = min(width, image.size.width)
+                    attachment.bounds = NSRect(x: 0, y: 0, width: scaled, height: image.size.height * scaled / max(1, image.size.width))
+                }
+            }
+        }
     }
     func windowWillStartLiveResize(_ notification: Notification) { liveResizeAnchor = currentSourceOffset() }
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -1061,23 +1465,55 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         liveResizeAnchor = nil
     }
     func windowDidResize(_ notification: Notification) {
+        if toolsHeight != nil { updateContextToolbar() }
+        layoutDocumentPanes()
         guard reading, let anchor = liveResizeAnchor ?? active?.sourceAnchor else { updateWrap(); return }
         updateReadingWidth(); scrollToSource(anchor)
     }
     private func renderReading() {
         guard let tab = active else { return }
+        presentationGeneration += 1
         let anchor = tab.sourceAnchor
-        let document = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing)
-        tab.rendered = document
-        preview.textStorage?.setAttributedString(document.attributedText)
-        preview.frame.size.width = editorScroll.contentSize.width
-        updateReadingWidth(); scrollToSource(anchor); scheduleSearch()
+        let key = "\(tab.kind.rawValue)|\(fontSize)|\(readingFontName)|\(readingLineSpacing)|\(readingParagraphSpacing)|\(warmPaper)|\(dark)|\(tab.file.url?.path ?? "")"
+        if tab.renderKey != key || tab.rendered == nil {
+            tab.mediaGeneration += 1; tab.mediaTask?.cancel(); tab.mediaTask = nil; tab.mediaNotices = []
+            tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing)
+            tab.renderKey = key
+            if tab.kind == .markdown, let document = tab.rendered {
+                let diagrams = addSequenceDiagrams(document.attributedText, source: tab.file.text)
+                tab.rendered = document.replacingPresentation(diagrams)
+            }
+        }
+        guard let document = tab.rendered else { return }
+        let presentationChanged = installedPresentation !== document.attributedText
+        if presentationChanged {
+            preview.textStorage?.setAttributedString(document.attributedText); installedPresentation = document.attributedText
+            updateReadingWidth()
+            if reading { scrollToSource(anchor) }
+        } else { updateReadingWidth() }
+        if tab.kind == .markdown, tab.mediaTask == nil {
+            tab.mediaGeneration += 1; let mediaGeneration = tab.mediaGeneration
+            tab.mediaTask = ReadingMediaLoader.load(document: document.attributedText, baseURL: tab.file.url, maxWidth: min(readingWidth, max(100, previewScroll.contentSize.width - 48))) { [weak self, weak tab] text, notices in
+                guard let self = self, let tab = tab, tab.renderKey == key, tab.mediaGeneration == mediaGeneration, self.tabs.contains(where: { $0 === tab }) else { return }
+                tab.mediaNotices = Array(Set(tab.mediaNotices + notices)).sorted()
+                tab.rendered = document.replacingPresentation(text)
+                if self.active === tab, tab.renderKey == key {
+                    let position = self.currentSourceOffset()
+                    self.preview.textStorage?.setAttributedString(text); self.updateReadingWidth()
+                    self.installedPresentation = tab.rendered?.attributedText
+                    if self.reading { self.scrollToSource(position) }; self.scheduleSearch()
+                    if !tab.mediaNotices.isEmpty { self.updateStatus(tab.mediaNotices.joined(separator: "；")) }
+                }
+            }
+        }
+        if outlineMode { refreshRecent() }
+        if presentationChanged { scheduleSearch() }
     }
     private func refreshAutomaticKind(_ tab: ReaderTab) {
         tab.updateKindAfterPathChange()
         kindPopup.selectItem(at: tab.automaticKind ? 0 : (TextKind.allCases.firstIndex(of: tab.kind) ?? 0) + 1)
-        tab.rendered = nil
-        if reading { renderReading() } else { scheduleHighlight() }
+        tab.rendered = nil; tab.renderKey = nil; tab.mediaGeneration += 1; tab.mediaTask?.cancel(); tab.mediaTask = nil
+        if reading || active?.splitPreview == true { renderReading() } else { scheduleHighlight() }
     }
     @objc private func kindChanged() {
         guard let tab = active else { return }
@@ -1114,15 +1550,88 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         } catch { showError(error) }
     }
 
+    private func applyMarkdownTableAction(_ action: MarkdownTableAction) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard let edit = MarkdownTableEditing.edit(text: editor.string, selection: editor.selectedRange(), action: action) else {
+            updateStatus("当前光标不在 Markdown 表格内"); return
+        }
+        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已更新 Markdown 表格 · ⌘Z 撤销")
+    }
+    @objc func insertMarkdownTableRow(_ sender: Any?) { applyMarkdownTableAction(.insertRow) }
+    @objc func deleteMarkdownTableRow(_ sender: Any?) { applyMarkdownTableAction(.deleteRow) }
+    @objc func insertMarkdownTableColumn(_ sender: Any?) { applyMarkdownTableAction(.insertColumn) }
+    @objc func deleteMarkdownTableColumn(_ sender: Any?) { applyMarkdownTableAction(.deleteColumn) }
+    @objc func alignMarkdownTableLeft(_ sender: Any?) { applyMarkdownTableAction(.align(.left)) }
+    @objc func alignMarkdownTableCenter(_ sender: Any?) { applyMarkdownTableAction(.align(.center)) }
+    @objc func alignMarkdownTableRight(_ sender: Any?) { applyMarkdownTableAction(.align(.right)) }
+    @objc func toggleMarkdownTask(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard let edit = MarkdownListEditing.edit(text: editor.string, selection: editor.selectedRange(), action: .toggleTask) else { updateStatus("当前光标不在任务列表内"); return }
+        editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已切换任务状态 · ⌘Z 撤销")
+    }
+    @objc func pasteMarkdownTable(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown, let value = NSPasteboard.general.string(forType: .string), let rendered = MarkdownTableEditing.markdownTable(fromTSV: value) else { updateStatus("剪贴板没有可转换的 TSV 表格"); return }
+        let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: rendered, selection: NSRange(location: range.location + rendered.utf16.count, length: 0)); editor.applyExternalEdit(edit); scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴 Markdown 表格 · ⌘Z 撤销")
+    }
+    @objc func insertMarkdownImage(_ sender: Any?) {
+        guard !reading, active?.kind == .markdown else { updateStatus("请先进入 Markdown 原文编辑"); return }
+        guard active?.file.url != nil else { updateStatus("请先保存 Markdown 文档，再插入图片"); return }
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.png, .jpeg, .tiff, .gif, .bmp, .heic]; panel.allowsMultipleSelection = true; panel.canChooseDirectories = false; panel.prompt = "插入图片"
+        guard runDocumentModal({ panel.runModal() }) == .OK else { return }
+        _ = insertMarkdownImages(panel.urls)
+    }
+    private func insertMarkdownImages(_ urls: [URL]) -> Bool {
+        guard !reading, active?.kind == .markdown, let documentURL = active?.file.url else { return false }
+        guard !urls.isEmpty else { return false }
+        var links: [String] = []; var created: [URL] = []
+        do {
+            for url in urls.prefix(8) {
+                let result = try MarkdownAssetWriter.write(sourceURL: url, documentURL: documentURL); links.append(result.markdownLink); created.append(result.fileURL)
+            }
+        } catch {
+            for file in created { try? FileManager.default.removeItem(at: file) }
+            updateStatus("图片插入失败 · \(error.localizedDescription)"); return false
+        }
+        let insertion = links.joined(separator: "\n")
+        let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: insertion, selection: NSRange(location: range.location + insertion.utf16.count, length: 0))
+        guard editor.applyExternalEdit(edit) else { for file in created { try? FileManager.default.removeItem(at: file) }; return true }
+        scheduleSplitRender(); scheduleHighlight(); updateStatus("已插入 \(links.count) 张图片 · 图片写入文档旁 .assets")
+        return true
+    }
+    private func pasteMarkdownImage() -> Bool {
+        guard !reading, active?.kind == .markdown, let documentURL = active?.file.url else { return false }
+        guard NSPasteboard.general.string(forType: .string) == nil,
+              NSPasteboard.general.availableType(from: [.png, .tiff]) != nil,
+              let image = NSImage(pasteboard: NSPasteboard.general) else { return false }
+        do {
+            let result = try MarkdownAssetWriter.write(image: image, suggestedName: "pasted-image", documentURL: documentURL)
+            let range = editor.selectedRange(); let edit = TextEditResult(range: range, replacement: result.markdownLink, selection: NSRange(location: range.location + result.markdownLink.utf16.count, length: 0))
+            guard editor.applyExternalEdit(edit) else { try? FileManager.default.removeItem(at: result.fileURL); return true }
+            scheduleSplitRender(); scheduleHighlight(); updateStatus("已粘贴图片 · 图片写入文档旁 .assets"); return true
+        } catch {
+            updateStatus("图片粘贴失败 · \(error.localizedDescription)"); return true
+        }
+    }
+
     @objc func showFind(_ sender: Any?) {
-        searchVisible = true; searchBar.isHidden = false; searchOptionsRow.isHidden = false; searchHeight.constant = 66
+        if !searchVisible { searchReturnOffset = currentSourceOffset() }
+        replacementVisible = false; showSearchPanel()
+    }
+    @objc func showReplace(_ sender: Any?) {
+        if !searchVisible { searchReturnOffset = currentSourceOffset() }
+        replacementVisible = true; showSearchPanel()
+    }
+    private func showSearchPanel() {
+        searchVisible = true; searchContainer.isHidden = false; searchBar.isHidden = false; searchOptionsRow.isHidden = false
+        replaceBar.isHidden = !replacementVisible; searchHeight.constant = replacementVisible ? 110 : 76
         if displayedTextView.selectedRange().length > 0 { searchField.stringValue = (displayedTextView.string as NSString).substring(with: displayedTextView.selectedRange()) }
         scheduleSearch(); window?.makeFirstResponder(searchField)
     }
     private func hideFind() {
-        searchVisible = false; searchBar.isHidden = true; searchOptionsRow.isHidden = true; searchHeight.constant = 0
+        searchVisible = false; replacementVisible = false; searchContainer.isHidden = true; searchBar.isHidden = true; searchOptionsRow.isHidden = true; replaceBar.isHidden = true; searchHeight.constant = 0
         searchVersion += 1; searchTask?.cancel(); searchMatches = []; searchReady = false; pendingFind = nil
-        paintSearchMatches(); window?.makeFirstResponder(displayedTextView)
+        paintSearchMatches(); if let offset = searchReturnOffset { scrollToSource(offset) }; searchReturnOffset = nil
+        window?.makeFirstResponder(displayedTextView)
     }
     @objc private func searchOptionsChanged() { scheduleSearch() }
     func controlTextDidChange(_ obj: Notification) { scheduleSearch() }
@@ -1145,6 +1654,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                     case .success(let matches):
                         self.searchMatches = matches; self.searchReady = true; self.findCounter.stringValue = "共 \(matches.count) 处"
                         self.paintSearchMatches()
+                        if self.pendingFind == nil && !matches.isEmpty { self.find(backward: false) }
                         if let backward = self.pendingFind { self.pendingFind = nil; self.find(backward: backward) }
                     case .failure(let error): self.findCounter.stringValue = error.localizedDescription; self.findCounter.textColor = .systemRed; self.pendingFind = nil
                     }
@@ -1154,6 +1664,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         searchTask = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: task)
     }
     private func paintSearchMatches() {
+        paintAnnotationMatches()
         for view in [editor, preview] {
             view.layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: NSRange(location: 0, length: view.string.utf16.count))
         }
@@ -1161,6 +1672,31 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let length = displayedTextView.string.utf16.count
         for match in searchMatches.prefix(3000) where match.range.length > 0 && NSMaxRange(match.range) <= length {
             lm.addTemporaryAttribute(.backgroundColor, value: theme.accent.withAlphaComponent(0.18), forCharacterRange: match.range)
+        }
+    }
+    private func paintAnnotationMatches() {
+        for view in [editor, preview] {
+            let all = NSRange(location: 0, length: view.string.utf16.count)
+            view.layoutManager?.removeTemporaryAttribute(.underlineStyle, forCharacterRange: all)
+            view.layoutManager?.removeTemporaryAttribute(.underlineColor, forCharacterRange: all)
+        }
+        guard let tab = active, tab.file.text.utf16.count <= 500_000 else { return }
+        for annotation in annotationStore.forDocument(documentID: tab.file.id, path: tab.file.url?.path).prefix(500) {
+            let anchor = AnnotationAnchorResolver.repair(annotation, in: tab.file.text)
+            guard anchor.anchorState != .missing else { continue }
+            let sourceRange = NSRange(location: anchor.sourceStart, length: max(0, anchor.sourceEnd - anchor.sourceStart))
+            let color: NSColor
+            switch annotation.color { case .amber: color = .systemOrange; case .blue: color = .systemBlue; case .green: color = .systemGreen; case .rose: color = .systemPink; case .violet: color = .systemPurple }
+            if NSMaxRange(sourceRange) <= editor.string.utf16.count {
+                editor.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: color], forCharacterRange: sourceRange)
+            }
+            if let rendered = tab.rendered {
+                let block = rendered.displayRange(forSourceOffset: anchor.sourceStart)
+                guard NSMaxRange(block) <= preview.string.utf16.count else { continue }
+                let quote = (preview.string as NSString).range(of: annotation.quote, range: block)
+                let target = quote.location == NSNotFound ? block : quote
+                preview.layoutManager?.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: color], forCharacterRange: target)
+            }
         }
     }
     @objc func findNext(_ sender: Any?) { find(backward: false) }
@@ -1183,7 +1719,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         findCounter.stringValue = "\(searchIndex + 1) / \(searchMatches.count) 处"
     }
     @objc func replaceOne(_ sender: Any?) {
-        guard !reading, searchReady else { return }
+        if reading { toggleReading(nil); pendingFind = false; return }
+        guard searchReady else { return }
         let selected = editor.selectedRange()
         let match = searchMatches.first(where: { $0.range == selected })
         guard let match = match else { find(backward: false); return }
@@ -1196,7 +1733,8 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         }
     }
     @objc func replaceAll(_ sender: Any?) {
-        guard !reading, searchReady, !searchMatches.isEmpty else { return }
+        if reading { toggleReading(nil); pendingFind = false; return }
+        guard searchReady, !searchMatches.isEmpty else { return }
         let count = searchMatches.count
         if count > 1000 && alert("替换全部 \(count) 处？", "这会修改当前文件，保存前仍可按 ⌘Z 撤销。", buttons: ["替换", "取消"]) != .alertFirstButtonReturn { return }
         let original = editor.string
@@ -1219,7 +1757,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func showOutline(_ sender: Any?) {
         guard let tab = active else { return }
-        if tab.rendered == nil { tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing) }
+        if tab.rendered == nil { tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing) }
         let headings = tab.rendered?.headings ?? []
         guard !headings.isEmpty else { updateStatus("当前文档没有可识别的目录标题"); return }
         let menu = NSMenu()
@@ -1231,7 +1769,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc private func jumpHeading(_ item: NSMenuItem) {
         guard let location = item.representedObject as? Int else { return }
-        scrollToSource(location); window?.makeFirstResponder(displayedTextView); updateStatus()
+        pushNavigation(); scrollToSource(location); window?.makeFirstResponder(displayedTextView); updateStatus()
     }
     @objc func showGuide(_ sender: Any?) {
         if let url = Bundle.main.url(forResource: "使用说明", withExtension: "md"), let text = try? String(contentsOf: url, encoding: .utf8) {
@@ -1259,7 +1797,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                            selectionLocation: tab.selection.location, selectionLength: tab.selection.length,
                            automaticKind: tab.automaticKind, kindRaw: tab.kind.rawValue, recoverDraft: tab.recoverDraft)
         }
-        let drafts = recoveryEnabled ? visible.filter { !ids.contains($0.file.id) && $0.recoverDraft && $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil) }.map { $0.file.recoverySnapshot() } : []
+        let drafts = recoveryEnabled ? visible.filter { !ids.contains($0.file.id) && $0.recoverDraft && $0.file.isDirty && (!$0.file.text.isEmpty || $0.file.url != nil || $0.file.suggestedName != nil && !$0.automaticallyNamed) }.map { $0.file.recoverySnapshot() } : []
         let draftIDs = Set(drafts.map { $0.id })
         let storedEntries = restoreSessionEnabled ? entries : entries.filter { draftIDs.contains($0.id) }
         return (WorkspaceSession(version: 1, entries: storedEntries, activeID: storedEntries.contains(where: { $0.id == active?.file.id }) ? active?.file.id : nil), drafts)
@@ -1304,6 +1842,298 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func showPersistenceErrors(_ messages: [String]) {
         _ = alert("本机状态未完整保存", messages.joined(separator: "\n"), buttons: ["知道了"])
+    }
+    private func layoutDocumentPanes() {
+        guard !layingOutPanes else { return }
+        layingOutPanes = true
+        defer { layingOutPanes = false }
+        let size = documentSplit.bounds.size
+        guard size.width > 0 else { return }
+        let both = !reading && active?.splitPreview == true
+        if both {
+            let width = max(100, (size.width - documentSplit.dividerThickness) * splitFraction)
+            editorScroll.frame = NSRect(x: 0, y: 0, width: width, height: size.height)
+            previewScroll.frame = NSRect(x: width + documentSplit.dividerThickness, y: 0, width: max(100, size.width - width - documentSplit.dividerThickness), height: size.height)
+        } else {
+            editorScroll.frame = NSRect(origin: .zero, size: size)
+            previewScroll.frame = NSRect(origin: .zero, size: size)
+        }
+        if both { documentSplit.setPosition(max(100, size.width * splitFraction), ofDividerAt: 0) }
+        updateWrap(); updateReadingWidth()
+    }
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        if !layingOutPanes && !reading && active?.splitPreview == true && documentSplit.bounds.width > 0 {
+            splitFraction = min(0.8, max(0.2, editorScroll.frame.width / documentSplit.bounds.width))
+        }
+        updateWrap(); updateReadingWidth()
+    }
+    @objc func toggleSplitPreview(_ sender: Any?) {
+        guard let tab = active, tab.kind == .markdown else { return }
+        if reading { toggleReading(nil) }
+        tab.splitPreview.toggle(); updateModeControls()
+        if tab.splitPreview { renderReading() }
+        splitButton.title = tab.splitPreview ? "关闭分屏" : "分屏编辑"
+    }
+    private func scheduleSplitRender() {
+        splitTask?.cancel(); active?.mediaGeneration += 1; active?.mediaTask?.cancel(); active?.mediaTask = nil
+        guard active?.splitPreview == true else { return }
+        let task = DispatchWorkItem { [weak self] in guard let self = self, !self.editor.hasMarkedText() else { return }; self.renderReading() }
+        splitTask = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
+    }
+    private func pushNavigation() {
+        guard let tab = active else { return }
+        tab.navigation.append(currentSourceOffset()); if tab.navigation.count > 64 { tab.navigation.removeFirst() }; returnPositionButton.isEnabled = true
+    }
+    @objc func returnReadingPosition(_ sender: Any?) {
+        guard let offset = active?.navigation.popLast() else { return }
+        scrollToSource(offset); returnPositionButton.isEnabled = active?.navigation.isEmpty == false; updateStatus("已返回跳转前位置")
+    }
+    @objc private func sidebarModeChanged() { outlineMode = sidebarMode.selectedSegment == 0; refreshRecent() }
+    private func refreshOutlineSidebar() {
+        updateSidebarTabs()
+        let headings = active?.rendered?.headings ?? []
+        if headings.isEmpty { recentStack.addArrangedSubview(label("暂无可识别的章节")); return }
+        for heading in headings.prefix(500) {
+            let button = ActionButton(heading.title) { [weak self] in
+                self?.pushNavigation(); self?.scrollToSource(heading.sourceRange.location); self?.highlightOutline()
+            }
+            button.toolTip = heading.title; button.font = .systemFont(ofSize: 11)
+            button.fill = theme.panel; button.ink = theme.text
+            recentStack.addArrangedSubview(button); button.widthAnchor.constraint(equalTo: recentStack.widthAnchor).isActive = true
+            outlineButtons.append((heading.sourceRange.location, button))
+        }
+        highlightOutline()
+    }
+    private func highlightOutline() {
+        guard outlineMode else { return }
+        let offset = currentSourceOffset()
+        let index = outlineButtons.lastIndex(where: { $0.0 <= offset }) ?? 0
+        for (i, item) in outlineButtons.enumerated() { let color = i == index ? theme.selection : theme.panel; if item.1.fill != color { item.1.fill = color } }
+    }
+    @objc private func tabBlankDoubleClick(_ gesture: NSClickGestureRecognizer) {
+        let point = gesture.location(in: tabsStack)
+        if !tabsStack.arrangedSubviews.contains(where: { $0.frame.contains(point) }) { newDocument(nil) }
+    }
+    private func updateChangeMarks() {
+        guard let tab = active else { return }
+        let id = tab.file.id, text = tab.file.text, saved = tab.savedText, original = tab.openedText
+        fileOpenQueue.async { [weak self] in
+            let marks = LineChanges.marks(original: original, saved: saved, current: text)
+            DispatchQueue.main.async {
+                guard let self = self, self.active?.file.id == id, self.active?.file.text == text else { return }
+                self.ruler.lineMarks = Dictionary(marks.map { ($0.line, $0.saved) }, uniquingKeysWith: { _, last in last }); self.ruler.needsDisplay = true
+            }
+        }
+    }
+    @objc func showJSONStructure(_ sender: Any?) {
+        guard let tab = active, tab.kind == .json || tab.kind == .jsonc else { return }
+        do { let controller = try JSONStructureController(text: tab.file.text, allowComments: tab.kind == .jsonc); retainResource(controller); controller.present(relativeTo: window) }
+        catch { showError(error) }
+    }
+    @objc func formatDocument(_ sender: Any?) {
+        guard let tab = active else { return }
+        stashCurrent()
+        let source = tab.file.text, kind = tab.kind.rawValue, id = tab.file.id
+        if source.utf16.count > 500_000 { updateStatus("格式化上限50万文本单元，请分段处理"); return }
+        operation?.cancelOperation(); let progress = ReaderOperation(title: "格式化 / 整理文本", parent: window); operation = progress
+        progress.stage("正在分析排版…")
+        fileOpenQueue.async { [weak self] in
+            let result = Result { try TextFormatting.format(source, kind: kind) }
+            DispatchQueue.main.async {
+                guard let self = self else { progress.finish(); return }
+                progress.finish()
+                guard !progress.cancelled, self.active?.file.id == id, self.active?.file.text == source else { return }
+                switch result {
+                case .failure(let error): self.showError(error)
+                case .success(let text):
+                    guard !text.utf8.elementsEqual(source.utf8) else { self.updateStatus("当前内容无需整理"); return }
+                    if !["plain", "markdown", "json", "jsonc", "xml"].contains(kind) {
+                        let a = NSAlert(); a.messageText = "整理空白预览"; a.informativeText = "此类型没有专用格式化器，仅整理行尾空白与空行。确认后可撤销。"
+                        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 650, height: 320)); view.isEditable = false
+                        view.string = "整理前：\n" + String(source.prefix(6000)) + "\n\n整理后：\n" + String(text.prefix(6000))
+                        let scroll = NSScrollView(frame: view.frame); scroll.hasVerticalScroller = true; scroll.documentView = view; a.accessoryView = scroll
+                        a.addButton(withTitle: "应用"); a.addButton(withTitle: "取消")
+                        guard self.runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
+                    }
+                    if self.reading { self.toggleReading(nil) }
+                    let range = NSRange(location: 0, length: self.editor.string.utf16.count)
+                    self.editor.breakUndoCoalescing()
+                    if self.editor.shouldChangeText(in: range, replacementString: text) { self.editor.replaceCharacters(in: range, with: text); self.editor.didChangeText(); self.editor.breakUndoCoalescing() }
+                }
+            }
+        }
+    }
+    private func checkExternalFile(_ tab: ReaderTab) {
+        guard !externalCheckRunning, !restoringWorkspace, modalDepth == 0, let url = tab.file.url else { return }
+        externalCheckRunning = true
+        let id = tab.file.id, snapshot = tab.file.recoverySnapshot(), wasDirty = tab.file.isDirty, oldText = tab.file.text
+        fileOpenQueue.async { [weak self] in
+            let result = Result { () -> TextFile? in
+                let captured = try TextFile.restore(snapshot: snapshot)
+                guard try captured.diskChanged() else { return nil }
+                if wasDirty { return captured }
+                return try TextFile.open(url)
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }; self.externalCheckRunning = false
+                self.performDocumentMutation {
+                    guard self.active?.file.id == id, tab.file.text == oldText else { return }
+                    switch result {
+                    case .success(nil): break
+                    case .success(let updated?):
+                        if wasDirty || tab.file.isDirty {
+                            self.externalConflictID = tab.file.id
+                            for control in [self.keepExternalButton!, self.acceptExternalButton!, self.recheckExternalButton!] { control.isHidden = false }
+                            self.updateContextToolbar(); self.updateStatus("磁盘文件已变化 · 当前修改已保留，保存时需处理冲突"); return
+                        }
+                        self.stashCurrent()
+                        let replacement = ReaderTab(updated); replacement.isReading = tab.isReading; replacement.splitPreview = tab.splitPreview
+                        replacement.sourceAnchor = TextAnchorMapper.map(oldText: oldText, newText: updated.text, oldAnchor: tab.sourceAnchor)
+                        let selectionStart = TextAnchorMapper.map(oldText: oldText, newText: updated.text, oldAnchor: tab.selection.location)
+                        let selectionEnd = TextAnchorMapper.map(oldText: oldText, newText: updated.text,
+                                                                 oldAnchor: tab.selection.location + tab.selection.length)
+                        replacement.selection = NSRange(location: selectionStart, length: max(0, selectionEnd - selectionStart))
+                        replacement.hasWorkspacePosition = true; replacement.recoverDraft = tab.recoverDraft
+                        replacement.automaticKind = tab.automaticKind; if !tab.automaticKind { replacement.kind = tab.kind }
+                        self.tabs[self.current] = replacement; self.selectTab(self.current, stash: false); self.updateStatus("已读取磁盘最新内容")
+                    case .failure: self.updateStatus("磁盘文件暂不可读 · 窗口正文已保留，可重试")
+                    }
+                }
+            }
+        }
+    }
+    private func addSequenceDiagrams(_ text: NSAttributedString, source: String) -> NSAttributedString {
+        guard source.utf16.count <= 500_000 else { return text }
+        let output = NSMutableAttributedString(attributedString: text)
+        guard let regex = try? NSRegularExpression(pattern: #"(?m)^ {0,3}(`{3,}|~{3,})mermaid[^\r\n]*\r?\n([\s\S]*?)^ {0,3}\1[ \t]*(?:\r?\n|$)"#) else { return text }
+        let ns = source as NSString
+        let matches = regex.matches(in: source, range: NSRange(location: 0, length: ns.length))
+        var additions: [(Int, NSAttributedString)] = [], total = 0, events = 0
+        for match in matches.prefix(12) {
+            let body = ns.substring(with: match.range(at: 2)); total += body.utf16.count
+            if total > 64_000 { break }
+            do {
+                let image: NSImage
+                if body.trimmingCharacters(in: .whitespacesAndNewlines).range(of: #"^(flowchart|graph)\b"#, options: .regularExpression) != nil {
+                    let diagram = try MermaidFlowchart.parse(body); events += diagram.edges.count
+                    if events > 400 { break }
+                    image = try MermaidFlowchart.render(body, fontSize: fontSize + 1, dark: dark)
+                } else {
+                    let diagram = try MermaidSequence.parse(body); events += diagram.events.count
+                    if events > 400 { break }
+                    image = try MermaidSequence.render(body, fontSize: fontSize + 1, dark: dark)
+                }
+                let attachment = NSTextAttachment(); attachment.image = image
+                let width = min(680, image.size.width); attachment.bounds = NSRect(x: 0, y: 0, width: width, height: image.size.height * width / max(1, image.size.width))
+                let label = NSMutableAttributedString(attachment: attachment)
+                label.addAttributes([NSAttributedString.Key("qingyue.sourceRange"): NSValue(range: NSRange(location: match.range.location, length: 0)), NSAttributedString.Key("qingyue.blockKind"): "diagram", NSAttributedString.Key("qingyue.mermaidSource"): body], range: NSRange(location: 0, length: label.length))
+                label.append(NSAttributedString(string: "\n"))
+                var position: Int?
+                text.enumerateAttribute(ReadingDocument.sourceRangeAttribute, in: NSRange(location: 0, length: text.length)) { value, range, stop in
+                    if let sourceRange = (value as? NSValue)?.rangeValue, NSIntersectionRange(sourceRange, match.range(at: 2)).length > 0 { position = range.location; stop.pointee = true }
+                }
+                if let position = position { additions.append((position, label)) }
+            } catch {
+                let reason = "时序图保留源码：" + error.localizedDescription
+                active?.mediaNotices.append(reason)
+                var position: Int?
+                text.enumerateAttribute(ReadingDocument.sourceRangeAttribute, in: NSRange(location: 0, length: text.length)) { value, range, stop in
+                    if let sr = (value as? NSValue)?.rangeValue, NSIntersectionRange(sr, match.range(at: 2)).length > 0 { position = range.location; stop.pointee = true }
+                }
+                if let position = position { additions.append((position, NSAttributedString(string: reason + "\n", attributes: [.foregroundColor: theme.muted, .font: NSFont.systemFont(ofSize: fontSize), ReadingDocument.sourceRangeAttribute: NSValue(range: NSRange(location: match.range.location, length: 0))]))) }
+            }
+        }
+        for addition in additions.reversed() { output.insert(addition.1, at: addition.0) }
+        return output
+    }
+    private func retainResource(_ controller: NSWindowController) {
+        resourceWindows.removeAll { $0.window?.isVisible == false }
+        resourceWindows.append(controller); if resourceWindows.count > 8 { resourceWindows.removeFirst().close() }
+    }
+    private func showAttachment(_ attachment: NSTextAttachment) {
+        guard let image = attachment.image else { return }
+        let controller = ReaderResourceWindow(image: image, title: "图片 / 图表 · Ctrl+滚轮缩放")
+        retainResource(controller); controller.showWindow(nil)
+    }
+    private func readingContextMenu(offset: Int) -> NSMenu {
+        contextualOffset = offset
+        let menu = NSMenu()
+        for (title, action) in [("复制选中图文", #selector(copyReadingSelection(_:))), ("复制全文（含图片）", #selector(copyReadingFull(_:))), ("复制全文纯文本", #selector(copyReadingPlain(_:))), ("复制 Markdown 源文", #selector(copyMarkdownSource(_:))), ("复制当前代码块", #selector(copyCodeBlock(_:))), ("复制当前表格", #selector(copyTableBlock(_:))), ("展开表格（横向滚动）", #selector(expandTable(_:))), ("查看图片 / 图表", #selector(openContextAttachment(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
+        }
+        return menu
+    }
+    @objc private func openContextAttachment(_ sender: Any?) {
+        guard let text = preview.textStorage, text.length > 0 else { return }
+        let index = min(contextualOffset, text.length - 1)
+        if let attachment = text.attribute(.attachment, at: index, effectiveRange: nil) as? NSTextAttachment { showAttachment(attachment) }
+    }
+    private func readingBlock(_ kind: String) -> NSRange? {
+        guard let text = preview.textStorage, text.length > 0 else { return nil }
+        let index = min(max(0, contextualOffset), text.length - 1)
+        var range = NSRange()
+        guard text.attribute(NSAttributedString.Key("qingyue.blockKind"), at: index, longestEffectiveRange: &range, in: NSRange(location: 0, length: text.length)) as? String == kind else { return nil }
+        return range
+    }
+    @objc func copyCodeBlock(_ sender: Any?) { if let range = readingBlock("code") { copyReadingRange(range) } else { updateStatus("请先在代码块内右键操作") } }
+    @objc func copyTableBlock(_ sender: Any?) { if let range = readingBlock("table") { copyReadingRange(range) } else { updateStatus("请先在表格内右键操作") } }
+    @objc func expandTable(_ sender: Any?) {
+        guard let range = readingBlock("table"), let text = preview.textStorage else { updateStatus("请先在表格内右键操作"); return }
+        let controller = ReaderResourceWindow(text: text.attributedSubstring(from: range), title: "展开表格 · 横向滚动")
+        retainResource(controller); controller.showWindow(nil)
+    }
+    @objc func copyReadingSelection(_ sender: Any?) { copyReadingRange(preview.selectedRange()) }
+    private func copyReadingRange(_ range: NSRange) {
+        guard let text = preview.textStorage, range.length > 0, range.location <= text.length, range.length <= text.length - range.location else { updateStatus("请先选择阅读内容"); return }
+        do {
+            let data = try ReadingShare.clipboard(text.attributedSubstring(from: range))
+            NSPasteboard.general.declareTypes(Array(data.keys), owner: nil)
+            for (kind, value) in data { NSPasteboard.general.setData(value, forType: kind) }
+            updateStatus("已复制选中图文，接收应用支持程度可能不同")
+        } catch { showError(error) }
+    }
+    private func preparedReading(_ action: @escaping (NSAttributedString) -> Void) {
+        guard let tab = active else { return }
+        let oldSelection = preview.selectedRange(), oldOrigin = previewScroll.contentView.bounds.origin
+        let oldPresentation = tab.rendered?.attributedText
+        stashCurrent(); renderReading()
+        if oldPresentation === tab.rendered?.attributedText {
+            preview.setSelectedRange(oldSelection); previewScroll.contentView.scroll(to: oldOrigin)
+        }
+        let id = tab.file.id, text = tab.file.text
+        let wait = ReaderOperation(title: "准备图片与图文", parent: window); wait.stage("正在等待图片，最多5秒…")
+        let deadline = Date(timeIntervalSinceNow: 5)
+        func poll() {
+            guard !wait.cancelled, self.active?.file.id == id, self.active?.file.text == text else { wait.finish(); return }
+            if tab.mediaTask?.isFinished == true || tab.kind != .markdown || Date() >= deadline {
+                wait.finish()
+                if Date() >= deadline || !tab.mediaNotices.isEmpty {
+                    guard self.alert("部分图片未准备完成", "可继续复制当前内容，或取消后重试。\n" + tab.mediaNotices.joined(separator: "\n"), buttons: ["继续", "取消"]) == .alertFirstButtonReturn else { return }
+                }
+                if let attributed = tab.rendered?.attributedText { action(attributed) }
+            } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { poll() } }
+        }
+        poll()
+    }
+    @objc func copyReadingFull(_ sender: Any?) {
+        preparedReading { text in
+            do { let values = try ReadingShare.clipboard(text); NSPasteboard.general.declareTypes(Array(values.keys), owner: nil); for (type, data) in values { NSPasteboard.general.setData(data, forType: type) }; self.updateStatus("已复制全文图文") }
+            catch { self.showError(error) }
+        }
+    }
+    @objc func copyReadingPlain(_ sender: Any?) { preparedReading { text in NSPasteboard.general.clearContents(); NSPasteboard.general.setString(ReadingShare.plainText(text), forType: .string); self.updateStatus("已复制全文纯文本") } }
+    @objc func copyMarkdownSource(_ sender: Any?) { if let source = active?.file.text { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(source, forType: .string); updateStatus("已复制源文") } }
+    @objc func exportReadingHTML(_ sender: Any?) {
+        preparedReading { text in
+            let identity = self.active?.file.id
+            let source = self.active?.file.text
+            let title = self.active?.file.title ?? "轻阅文档"
+            let panel = NSSavePanel(); panel.nameFieldStringValue = (self.active?.file.title ?? "文档") + ".html"
+            guard self.runDocumentModal({ panel.runModal() }) == .OK, let url = panel.url else { return }
+            guard self.active?.file.id == identity, self.active?.file.text == source else { self.updateStatus("文档已变化，请重新导出"); return }
+            guard !self.tabs.contains(where: { $0.file.url?.resolvingSymlinksInPath().standardizedFileURL == url.resolvingSymlinksInPath().standardizedFileURL }) else { self.updateStatus("导出不能覆盖正在打开的源文件，请使用新的.html文件名"); return }
+            do { try ReadingShare.exportHTML(text, title: title).write(to: url, options: .atomic); self.updateStatus("已导出自包含HTML") } catch { self.showError(error) }
+        }
     }
     private func performDocumentMutation(_ action: @escaping () -> Void) {
         if modalDepth > 0 { deferredDocumentMutations.append(action) } else { action() }

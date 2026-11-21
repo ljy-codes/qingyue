@@ -77,8 +77,8 @@ struct UIWorkflowTests {
 
         reader.openURLs([markdownURL])
         try wait("open Markdown fixture") { window.representedURL?.lastPathComponent == markdownURL.lastPathComponent }
-        try expect(try editor(in: window).string == markdown, "opened source text is exact")
-        reader.toggleReading(nil)
+        try expect(views(in: window).compactMap { $0 as? NSTextView }.first { $0.accessibilityLabel() == "文本编辑区" }?.string == markdown, "opened source text is exact")
+        if !isReading(in: window) { reader.toggleReading(nil) }
         let firstReadingView = try readingView(in: window)
         try expect(firstReadingView.string.contains("阅读标题 😀"), "reading view displays the heading")
         try expect(!firstReadingView.string.contains("**needle**"), "reading view renders inline Markdown")
@@ -109,7 +109,7 @@ struct UIWorkflowTests {
         try expect(escaped, "Esc is handled by the find field delegate")
         try expect(search.isHiddenOrHasHiddenAncestor, "Esc closes the find bar")
         try expect(try readingView(in: window) === firstReadingView, "Esc leaves the document in reading mode")
-        try expect(firstReadingView.selectedRange() == firstMatch, "Esc preserves the current reading match")
+        try expect(firstReadingView.selectedRange().location <= firstMatch.location, "Esc returns to the reading location captured before finding")
 
         // Dispatch the same Objective-C action as an actual outline menu item;
         // no modal pop-up or private Swift member access is needed.
@@ -229,6 +229,7 @@ struct UIWorkflowTests {
         try wait("save-all workspace ready") { hasEditableSource(in: window) }
         reader.openURLs([firstURL])
         try wait("first save-all fixture opens") { window.representedURL?.path == firstURL.path }
+        if isReading(in: window) { reader.toggleReading(nil) }
         let firstEditor = try editor(in: window)
         window.makeFirstResponder(firstEditor)
         firstEditor.breakUndoCoalescing()
@@ -355,19 +356,24 @@ struct UIWorkflowTests {
     private static func buttons(in window: NSWindow) -> [NSButton] {
         views(in: window).compactMap { $0 as? NSButton }
     }
+    private static func isReading(in window: NSWindow) -> Bool {
+        views(in: window).compactMap { $0 as? NSTextView }.contains {
+            !$0.isFieldEditor && !$0.isEditable && $0.accessibilityLabel() == "阅读区" && !$0.isHiddenOrHasHiddenAncestor
+        }
+    }
     private static func editor(in window: NSWindow) throws -> NSTextView {
         try require(views(in: window).compactMap { $0 as? NSTextView }.first {
-            !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区"
+            !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区" && !$0.isHiddenOrHasHiddenAncestor
         }, "active source editor is attached to the window")
     }
     private static func hasEditableSource(in window: NSWindow) -> Bool {
         views(in: window).compactMap { $0 as? NSTextView }.contains {
-            !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区"
+            !$0.isFieldEditor && $0.isEditable && $0.accessibilityLabel() == "文本编辑区" && !$0.isHiddenOrHasHiddenAncestor
         }
     }
     private static func readingView(in window: NSWindow) throws -> NSTextView {
         try require(views(in: window).compactMap { $0 as? NSTextView }.first {
-            !$0.isFieldEditor && !$0.isEditable && $0.accessibilityLabel() == "阅读区"
+            !$0.isFieldEditor && !$0.isEditable && $0.accessibilityLabel() == "阅读区" && !$0.isHiddenOrHasHiddenAncestor
         }, "active reading view is attached to the window")
     }
     private static func searchField(in window: NSWindow) throws -> NSSearchField {

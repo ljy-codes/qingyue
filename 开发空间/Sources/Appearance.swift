@@ -2,7 +2,7 @@ import AppKit
 
 extension NSColor {
     convenience init(hex: UInt32) {
-        self.init(calibratedRed: CGFloat((hex >> 16) & 255) / 255,
+        self.init(srgbRed: CGFloat((hex >> 16) & 255) / 255,
                   green: CGFloat((hex >> 8) & 255) / 255,
                   blue: CGFloat(hex & 255) / 255, alpha: 1)
     }
@@ -10,19 +10,31 @@ extension NSColor {
 
 struct ReaderTheme {
     let dark: Bool
-    var window: NSColor { NSColor(hex: dark ? 0x11141A : 0xEFF2F7) }
-    var panel: NSColor { NSColor(hex: dark ? 0x191D26 : 0xFFFFFF) }
-    var editor: NSColor { NSColor(hex: dark ? 0x151920 : 0xFFFFFF) }
-    var text: NSColor { NSColor(hex: dark ? 0xEDF1F8 : 0x243044) }
-    var muted: NSColor { NSColor(hex: dark ? 0x929DB0 : 0x6B778C) }
-    var border: NSColor { NSColor(hex: dark ? 0x2B3342 : 0xDDE3ED) }
-    var accent: NSColor { NSColor(hex: 0x4782FF) }
-    var selection: NSColor { NSColor(hex: dark ? 0x284674 : 0xDBE7FF) }
+    var warmPaper = false
+    private func color(_ darkValue: UInt32, _ lightValue: UInt32, _ warmValue: UInt32) -> NSColor {
+        NSColor(hex: warmPaper ? warmValue : dark ? darkValue : lightValue)
+    }
+    // Shared Windows 0.18 palette: window, side panel, main surface, editor.
+    var window: NSColor { color(0x191B1F, 0xF6F4EF, 0xEDE3D1) }
+    var panel: NSColor { color(0x23262B, 0xEFEAE2, 0xE5D6C0) }
+    var main: NSColor { color(0x24354A, 0xE6F0FA, 0xE7EEF0) }
+    var editor: NSColor { color(0x30343A, 0xF8FAFC, 0xFFF8E9) }
+    var text: NSColor { color(0xE8E2D8, 0x262A2F, 0x3C3026) }
+    var muted: NSColor { color(0xBEB8AE, 0x6B6A66, 0x786A5A) }
+    var border: NSColor { color(0x4B4D52, 0xD8D1C5, 0xCDB99C) }
+    var accent: NSColor { color(0x2F6FDB, 0x2F6FDB, 0xA75832) }
+    var selection: NSColor { color(0x355A91, 0xD7E5FA, 0xE8D2B6) }
+    var hover: NSColor { color(0x34383F, 0xF3EDE4, 0xF1E4D1) }
+    var button: NSColor { panel }
+    var tabSelected: NSColor { panel }
+    var accentText: NSColor { color(0x8DC5FF, 0x175BB5, 0xA75832) }
+    var unsaved: NSColor { color(0xFFC078, 0xA95A00, 0xA95A00) }
+    var saved: NSColor { color(0x7BDEB3, 0x19764E, 0x19764E) }
     var palette: EditorPalette {
-        EditorPalette(background: editor, foreground: text, muted: muted, accent: accent,
-                      string: NSColor(hex: dark ? 0x9FCB9B : 0x387545),
-                      number: NSColor(hex: dark ? 0xD7ABEB : 0x8652A8),
-                      comment: muted, key: NSColor(hex: dark ? 0x85B9EF : 0x246CAB))
+        EditorPalette(background: editor, foreground: text, muted: muted, accent: accentText,
+                      string: color(0xFFD39A, 0xA64A0A, 0xA64A0A),
+                      number: color(0x82DFC9, 0x087563, 0x087563),
+                      comment: color(0xC3C9BF, 0x5C6D59, 0x5C6D59), key: accentText)
     }
 }
 
@@ -45,10 +57,21 @@ final class FlippedStackView: NSStackView {
 
 class ActionButton: NSButton {
     override var isEnabled: Bool { didSet { needsDisplay = true } }
-    override var title: String { didSet { setAccessibilityLabel(title); needsDisplay = true } }
+    override var title: String { didSet { setAccessibilityLabel(title); invalidateIntrinsicContentSize(); needsDisplay = true } }
     var actionHandler: (() -> Void)?
     var fill: NSColor = .clear { didSet { needsDisplay = true } }
     var ink: NSColor = .labelColor { didSet { needsDisplay = true } }
+    var hoverFill: NSColor? { didSet { needsDisplay = true } }
+    var borderColor: NSColor = .clear { didSet { needsDisplay = true } }
+    var bottomAccent: NSColor? { didSet { needsDisplay = true } }
+    var cornerRadius: CGFloat = 6 { didSet { needsDisplay = true } }
+    var horizontalPadding: CGFloat = 14 { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var controlHeight: CGFloat = 32 {
+        didSet { heightConstraint?.constant = controlHeight; invalidateIntrinsicContentSize(); needsDisplay = true }
+    }
+    private var heightConstraint: NSLayoutConstraint?
+    private var tracking: NSTrackingArea?
+    private var hovered = false
     var isEmphasized = false
     init(_ title: String, symbol: String? = nil, action: @escaping () -> Void) {
         super.init(frame: .zero)
@@ -57,32 +80,58 @@ class ActionButton: NSButton {
         self.target = self
         self.action = #selector(performAction)
         isBordered = false
-        font = .systemFont(ofSize: 12, weight: .medium)
+        font = .systemFont(ofSize: 13, weight: .regular)
         setAccessibilityLabel(title)
         toolTip = title
         if let symbol = symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: title); imagePosition = .imageLeading }
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 32).isActive = true
-        widthAnchor.constraint(greaterThanOrEqualToConstant: symbol == nil ? 48 : 74).isActive = true
+        heightConstraint = heightAnchor.constraint(equalToConstant: controlHeight)
+        heightConstraint?.isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:)") }
+    override var intrinsicContentSize: NSSize {
+        let measured = (title as NSString).size(withAttributes: [.font: font ?? NSFont.systemFont(ofSize: 13)])
+        let imageWidth: CGFloat = image == nil ? 0 : (title.isEmpty ? 14 : 21)
+        return NSSize(width: ceil(measured.width + horizontalPadding * 2 + imageWidth), height: controlHeight)
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let old = tracking { removeTrackingArea(old) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area); tracking = area
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
     @objc private func performAction() { if isEnabled { actionHandler?() } }
     override func draw(_ dirtyRect: NSRect) {
-        let bg = isHighlighted ? fill.blended(withFraction: 0.15, of: ink) ?? fill : fill
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        if !isEnabled { NSGraphicsContext.current?.cgContext.setAlpha(0.42) }
+        else if isHighlighted { NSGraphicsContext.current?.cgContext.setAlpha(0.75) }
+        let bg = isEnabled && hovered ? hoverFill ?? fill : fill
         bg.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 1), xRadius: 7, yRadius: 7).fill()
-        let drawInk = isEnabled ? ink : ink.withAlphaComponent(0.35)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font!, .foregroundColor: drawInk]
-        let str = NSAttributedString(string: title, attributes: attrs)
+        let frame = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: cornerRadius, yRadius: cornerRadius)
+        frame.fill()
+        borderColor.setStroke(); frame.lineWidth = 1; frame.stroke()
+        if let accent = bottomAccent {
+            accent.setFill(); NSRect(x: 0, y: 0, width: bounds.width, height: 2).fill()
+        }
+        let drawInk = ink
+        let attrs: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.systemFont(ofSize: 13), .foregroundColor: drawInk]
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center; style.lineBreakMode = .byTruncatingTail
+        var textAttributes = attrs; textAttributes[.paragraphStyle] = style
+        let str = NSAttributedString(string: title, attributes: textAttributes)
         let size = str.size()
         var x = (bounds.width - size.width) / 2
         if let image = image {
             let img = image.copy() as! NSImage
             img.isTemplate = false
             let imageSize: CGFloat = 14
-            x -= 10
+            x -= title.isEmpty ? 0 : 10
             drawInk.setFill()
-            let rect = NSRect(x: x, y: (bounds.height - imageSize) / 2, width: imageSize, height: imageSize)
+            let rect = NSRect(x: title.isEmpty ? (bounds.width - imageSize) / 2 : x,
+                              y: (bounds.height - imageSize) / 2, width: imageSize, height: imageSize)
             img.lockFocus()
             drawInk.set()
             NSRect(origin: .zero, size: img.size).fill(using: .sourceAtop)
@@ -90,11 +139,18 @@ class ActionButton: NSButton {
             img.draw(in: rect)
             x += 21
         }
-        str.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))
+        // Windows' tab headers use CharacterEllipsis. Keep long filenames inside
+        // their cell without drawing through the close button or a nearby tab.
+        let leading = image == nil ? max(4, horizontalPadding) : max(4, x)
+        let textRect = NSRect(x: leading + (image == nil ? 0 : 21),
+                              y: (bounds.height - size.height) / 2,
+                              width: max(0, bounds.width - leading - max(4, horizontalPadding) - (image == nil ? 0 : 21)),
+                              height: size.height)
+        str.draw(in: textRect)
         if window?.firstResponder === self {
             NSColor.keyboardFocusIndicatorColor.setStroke()
-            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 3), xRadius: 6, yRadius: 6)
-            ring.lineWidth = 2; ring.stroke()
+            let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: cornerRadius, yRadius: cornerRadius)
+            ring.lineWidth = 1; ring.stroke()
         }
     }
 }
@@ -147,6 +203,9 @@ final class TabStripView: NSStackView {
 final class EditorTextView: NSTextView {
     var tabUndo = UndoManager()
     var filesDropped: (([URL]) -> Void)?
+    var imagesDropped: (([URL]) -> Bool)?
+    var imagePasteHandler: (() -> Bool)?
+    var listEditHandler: ((NSRange, MarkdownListAction) -> TextEditResult?)?
     var cancelHandler: (() -> Void)?
     override func cancelOperation(_ sender: Any?) {
         if hasMarkedText() { super.cancelOperation(sender); return }
@@ -155,20 +214,40 @@ final class EditorTextView: NSTextView {
     override var undoManager: UndoManager? { tabUndo }
     override func insertTab(_ sender: Any?) {
         if hasMarkedText() { super.insertTab(sender); return }
+        if let edit = tableEditHandler?(selectedRange(), false) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .indent) { applyEdit(edit); return }
         applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: false))
     }
-    override func insertBacktab(_ sender: Any?) { applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: true)) }
+    override func insertBacktab(_ sender: Any?) {
+        if hasMarkedText() { super.insertBacktab(sender); return }
+        if let edit = tableEditHandler?(selectedRange(), true) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .outdent) { applyEdit(edit); return }
+        applyEdit(TextEditing.indent(text: string, selection: selectedRange(), remove: true))
+    }
     override func insertNewline(_ sender: Any?) {
         if hasMarkedText() { super.insertNewline(sender); return }
+        if let edit = tableNewlineHandler?(selectedRange()) { applyEdit(edit); return }
+        if let edit = listEditHandler?(selectedRange(), .newline) { applyEdit(edit); return }
         applyEdit(TextEditing.newline(text: string, selection: selectedRange()))
     }
-    private func applyEdit(_ edit: TextEditResult?) {
-        guard let edit = edit, isEditable else { return }
+    @discardableResult private func applyEdit(_ edit: TextEditResult?) -> Bool {
+        guard let edit = edit, isEditable, !hasMarkedText() else { return false }
+        if edit.range.length == 0 && edit.replacement.isEmpty {
+            setSelectedRange(edit.selection); scrollRangeToVisible(edit.selection); return true
+        }
         breakUndoCoalescing()
         if shouldChangeText(in: edit.range, replacementString: edit.replacement) {
             replaceCharacters(in: edit.range, with: edit.replacement); didChangeText(); setSelectedRange(edit.selection)
+            breakUndoCoalescing(); return true
         }
-        breakUndoCoalescing()
+        breakUndoCoalescing(); return false
+    }
+    var tableEditHandler: ((NSRange, Bool) -> TextEditResult?)?
+    var tableNewlineHandler: ((NSRange) -> TextEditResult?)?
+    @discardableResult func applyExternalEdit(_ edit: TextEditResult) -> Bool { applyEdit(edit) }
+    override func paste(_ sender: Any?) {
+        if imagePasteHandler?() == true { return }
+        super.paste(sender)
     }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         if sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return .copy }
@@ -176,13 +255,21 @@ final class EditorTextView: NSTextView {
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         if let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            let images = urls.filter { Self.isImageURL($0) }
+            if !images.isEmpty, imagesDropped?(images) == true { return true }
             filesDropped?(urls); return true
         }
         return super.performDragOperation(sender)
     }
+    private static func isImageURL(_ url: URL) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "tif", "tiff", "webp", "bmp", "heic"].contains(url.pathExtension.lowercased())
+    }
 }
 
 final class LineNumberRuler: NSRulerView {
+    var lineMarks: [Int: Bool] = [:]
+    var savedInk = NSColor(hex: 0x74D6AD)
+    var unsavedInk = NSColor(hex: 0xFFBE72)
     weak var editor: NSTextView?
     var ink = NSColor.secondaryLabelColor
     var background = NSColor.windowBackgroundColor
@@ -255,6 +342,10 @@ final class LineNumberRuler: NSRulerView {
                 y = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
             }
             let label = NSAttributedString(string: "\(i + 1)", attributes: attrs)
+            if let saved = lineMarks[i + 1] {
+                (saved ? savedInk : unsavedInk).setFill()
+                NSRect(x: 1, y: y + inset.y - visible.minY, width: 4, height: max(12, editor.font?.pointSize ?? 14)).fill()
+            }
             let point = NSPoint(x: ruleThickness - label.size().width - 10, y: y + inset.y - visible.minY + 1)
             label.draw(at: point)
             i += 1
