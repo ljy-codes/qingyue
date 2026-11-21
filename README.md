@@ -4,7 +4,7 @@
 
 A lightweight local text reader and editor for macOS and Windows.
 
-macOS 当前为 **0.1.0 · Mac 构建 9**。本轮修复 Markdown 表格和正文的 `<br>` 换行，复制及 HTML 导出同步保留；构建 8 的工作区、搜索、清单、批注、主题和内存优化继续保留。下载：[Mac 构建 9 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)；[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.1.0 · Mac 构建 10**。本轮基于构建 9 重新打包发布，保留 Markdown 表格内 `<br>` 换行及此前功能。发布记录见 [Mac 构建 10](docs/Mac构建10发布.md)。下载：[Mac 构建 10 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-10)；[Mac 构建 9](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)、[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
@@ -98,7 +98,7 @@ bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
 ```
 
-应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `9`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
+应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `10`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
 
 当前脚本编译 Intel macOS 13 目标，执行 ad-hoc 本机签名；正式 Developer ID 签名、公证及自动更新仍待后续处理。构建不会自动替换 `/Applications` 中已安装的副本。
 
