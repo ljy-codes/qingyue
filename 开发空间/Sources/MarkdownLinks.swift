@@ -114,7 +114,8 @@ enum MarkdownLinks {
         }
         return result
     }
-    private static func codeRanges(in text: String) -> [NSRange] {
+    // Shared by inline rendering so literal code never interprets HTML breaks.
+    static func codeRanges(in text: String) -> [NSRange] {
         let ns = text as NSString; var result: [NSRange] = []; var fence: (Character, Int, Int)?
         for line in text.enumeratedLinesWithRanges() {
             let raw = ns.substring(with: line.range)

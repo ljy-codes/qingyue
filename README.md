@@ -4,7 +4,7 @@
 
 A lightweight local text reader and editor for macOS and Windows.
 
-macOS 当前为 **0.1.0 · Mac 构建 8**，继续对齐 Windows 0.18.0：本轮补齐工作区/搜索/阅读清单/批注窗口，并同步四款图标、暖纸主题、紧凑顶栏和非活动标签阅读资源释放。下载：[Mac 构建 8 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)；[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.1.0 · Mac 构建 9**。本轮修复 Markdown 表格和正文的 `<br>` 换行，复制及 HTML 导出同步保留；构建 8 的工作区、搜索、清单、批注、主题和内存优化继续保留。下载：[Mac 构建 9 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)；[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
@@ -22,6 +22,10 @@ JSON 结构折叠、本地图片与有限 Mermaid 图形；保留安全保存、
 操作与解析边界见 [Windows 使用说明](操作指导/Windows使用说明.md)。
 本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
+
+## Mac 构建 9 的换行修复
+
+Markdown 表格可用 `<br>`、`<br/>`、`<br />` 在同一单元格内换行，代码内的标签保持字面文字。复制、RTF 和 HTML 导出同时保留换行；不修改原文件。验证见 [Mac 构建 9 换行修复](docs/Mac构建9换行修复.md)。
 
 ## Mac 构建 8 的 Windows 功能对齐
 
@@ -94,7 +98,7 @@ bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
 ```
 
-应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `8`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
+应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `9`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
 
 当前脚本编译 Intel macOS 13 目标，执行 ad-hoc 本机签名；正式 Developer ID 签名、公证及自动更新仍待后续处理。构建不会自动替换 `/Applications` 中已安装的副本。
 

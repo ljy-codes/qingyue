@@ -42,7 +42,7 @@ enum ReadingShare {
             replacements.append((range, alt.isEmpty ? "〔图片〕" : "〔图片：\(alt)〕"))
         }
         for (range, replacement) in replacements.reversed() { output.replaceCharacters(in: range, with: replacement) }
-        return output as String
+        return (output as String).replacingOccurrences(of: "\u{2028}", with: "\n")
     }
 
     static func exportHTML(_ input: NSAttributedString, title: String = "轻阅文档") throws -> Data {
@@ -115,6 +115,7 @@ enum ReadingShare {
                 } else { value = "〔无法复制图片〕" }
             } else {
                 var rendered = escape((text.string as NSString).substring(with: span))
+                    .replacingOccurrences(of: "\u{2028}", with: "<br>")
                 var css: [String] = []
                 if let font = attrs[.font] as? NSFont {
                     let traits = NSFontManager.shared.traits(of: font)

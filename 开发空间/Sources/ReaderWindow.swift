@@ -1262,7 +1262,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let id = active?.file.id else { return }; let item = NSMenuItem(); item.representedObject = id; closeOtherTabs(item)
     }
     @objc func showDiagnostics(_ sender: Any?) {
-        let details = ["Mac 0.1.0 · 构建 8", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "9"
+        let details = ["Mac \(version) · 构建 \(build)", "原生 AppKit / TextKit", "打开文件上限 50 MiB，富预览上限 50 万 UTF-16 单元", "当前标签数：\(tabs.count)"] + restoreNotices + (active?.mediaNotices ?? [])
         _ = alert("打开与阅读诊断", details.joined(separator: "\n"), buttons: ["关闭"])
     }
     @objc func checkForUpdates(_ sender: Any?) {

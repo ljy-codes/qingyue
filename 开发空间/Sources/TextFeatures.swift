@@ -491,7 +491,7 @@ enum TextFeatures {
         return fenceMarker(line.trimmingCharacters(in: .whitespaces))
     }
 
-    private static let inlinePattern = ##"!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\(([^)\s]+)(?:[ \t]+\"[^\"]*\")?\)|`([^`]+)`|\*\*([^*]+)\*\*|(?<![\p{L}\p{N}])__([^_]+)__(?![\p{L}\p{N}])|~~([^~]+)~~|\*([^*\n]+)\*|(?<![\p{L}\p{N}])_([^_\n]+)_(?![\p{L}\p{N}])|\\([!\"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])"##
+    private static let inlinePattern = ##"!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\(([^)\s]+)(?:[ \t]+\"[^\"]*\")?\)|`([^`]+)`|\*\*([^*]+)\*\*|(?<![\p{L}\p{N}])__([^_]+)__(?![\p{L}\p{N}])|~~([^~]+)~~|\*([^*\n]+)\*|(?<![\p{L}\p{N}])_([^_\n]+)_(?![\p{L}\p{N}])|\\([!\"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])|(?i:(<br[ \t]*/?>))"##
     private static let inlineRegex = try? NSRegularExpression(pattern: inlinePattern)
 
     private static func inline(_ source: String, attributes: [NSAttributedString.Key: Any], palette: EditorPalette, codeFont: NSFont, references: [String: MarkdownLinkReference], depth: Int = 0, allowLinks: Bool = true) -> NSAttributedString {
@@ -499,13 +499,31 @@ enum TextFeatures {
         guard let regex = inlineRegex, depth < 8 else { return NSAttributedString(string: source, attributes: attributes) }
         let ns = source as NSString
         let occurrences = allowLinks ? MarkdownLinks.occurrences(in: source, references: references) : []
-        var tokens: [(range: NSRange, match: NSTextCheckingResult?, link: MarkdownLinkOccurrence?)] = regex.matches(in: source, range: NSRange(location: 0, length: ns.length)).map { ($0.range, $0, nil) }
-        tokens.append(contentsOf: occurrences.map { ($0.range, nil, $0) })
+        let codeRanges = source.range(of: "<br", options: .caseInsensitive) == nil ? [] : MarkdownLinks.codeRanges(in: source)
+        var tokens: [(range: NSRange, match: NSTextCheckingResult?, link: MarkdownLinkOccurrence?, code: Bool)] = regex.matches(in: source, range: NSRange(location: 0, length: ns.length)).filter { match in
+            // Outer emphasis may contain a complete code span and recurse.
+            // Tokens inside, or crossing one boundary of code, cannot recurse.
+            !codeRanges.contains { code in
+                NSIntersectionRange(code, match.range).length > 0 && !(match.range.location < code.location && NSMaxRange(match.range) > NSMaxRange(code))
+            }
+        }.map { ($0.range, $0, nil, false) }
+        tokens.append(contentsOf: codeRanges.map { ($0, nil, nil, true) })
+        tokens.append(contentsOf: occurrences.map { ($0.range, nil, $0, false) })
         tokens.sort { $0.range.location == $1.range.location ? ($0.link != nil && $1.link == nil) : $0.range.location < $1.range.location }
         var position = 0
         for token in tokens {
             guard token.range.location >= position else { continue }
             if token.range.location > position { output.append(NSAttributedString(string: ns.substring(with: NSRange(location: position, length: token.range.location - position)), attributes: attributes)) }
+            if token.code {
+                var content = ns.substring(with: token.range)
+                let delimiters = content.prefix { $0 == "`" }.count
+                if delimiters > 0 { content = String(content.dropFirst(delimiters).dropLast(delimiters)) }
+                var attrs = attributes
+                attrs[.font] = codeFont; attrs[.foregroundColor] = palette.string
+                attrs[.backgroundColor] = palette.muted.withAlphaComponent(0.09)
+                output.append(NSAttributedString(string: content, attributes: attrs))
+                position = NSMaxRange(token.range); continue
+            }
             if let link = token.link {
                 var attrs = attributes
                 if link.isImage {
@@ -530,7 +548,11 @@ enum TextFeatures {
             var attrs = attributes
             var content = ns.substring(with: match.range)
             var nested = false
-            if let escaped = value(10) {
+            if value(11) != nil {
+                // A Unicode line separator wraps inside the same native table
+                // cell/paragraph. A newline would create an extra table cell.
+                content = "\u{2028}"
+            } else if let escaped = value(10) {
                 content = escaped
             } else if let alt = value(1) {
                 content = alt.isEmpty ? "〔图片〕" : "〔图片：\(alt)〕"

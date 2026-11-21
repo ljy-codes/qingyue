@@ -49,6 +49,8 @@ xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_r
 "$reader_test_build/FormattingParityTests"
 xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Sources/MarkdownLinks.swift" "$reader_test_root/Sources/ReadingDocument.swift" "$reader_test_root/Sources/ReadingMedia.swift" "$reader_test_root/Sources/ReadingShare.swift" "$reader_test_root/Tests/RichReadingTests.swift" -o "$reader_test_build/RichReadingTests"
 "$reader_test_build/RichReadingTests"
+xcrun swiftc -module-cache-path "$reader_test_build/ModuleCache" "$reader_test_root/Sources/TextFeatures.swift" "$reader_test_root/Sources/MarkdownLinks.swift" "$reader_test_root/Sources/ReadingDocument.swift" "$reader_test_root/Sources/ReadingMedia.swift" "$reader_test_root/Sources/ReadingShare.swift" "$reader_test_root/Tests/MarkdownBreakTests.swift" -o "$reader_test_build/MarkdownBreakTests"
+"$reader_test_build/MarkdownBreakTests"
 reader_ui_sources=()
 for reader_source in "$reader_test_root"/Sources/*.swift; do
     if [ "$(basename "$reader_source")" != "main.swift" ]; then reader_ui_sources+=("$reader_source"); fi
