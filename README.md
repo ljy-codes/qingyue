@@ -49,7 +49,7 @@ bash 开发空间/scripts/test.sh
 
 - [Mac 构建 12 验收](docs/Mac构建12验收.md)
 - [Mac 构建 12 挑刺记录](docs/Mac构建12挑刺记录.md)
-- [配色方案参考库](docs/配色方案.md)
+- [轻阅配色方案（Palette Atlas 版）](docs/配色方案.md)
 - [使用说明](操作指导/使用说明.md)
 
 ## 平台说明
