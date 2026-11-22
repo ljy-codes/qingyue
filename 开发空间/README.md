@@ -1,19 +1,19 @@
 # 轻阅 · 开发空间
 
-产品版本保持 **0.1.0**，本轮 **Mac 构建 4**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
+产品版本为 **0.2.0**，本轮 **Mac 构建 11**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
 
 本机只维护 Mac 客户端。Windows 的独立实现要求记录在上一级 `docs/Windows后续实现.md`，没有 Windows 工程、客户端或安装包。
 
 ## 目录
 
-- `Sources/`：Mac 界面、文件读写、编辑、搜索与阅读模型。
+- `Sources/`：Mac 界面、文件读写、编辑、搜索、阅读、主题与工作区模型。
 - `Sources/ReadingDocument.swift`：阅读内容、源文/显示块范围对应和目录。
 - `Sources/WorkspaceStore.swift`：会话元数据、独立恢复草稿与后台串行持久化。
 - `Sources/QuickOpenController.swift`：已打开与最近文件的原生快速定位面板。
 - `Sources/WindowMenuBar.swift`：窗口内紧凑菜单条。
 - `Sources/ReaderMenus.swift`：系统菜单和窗口菜单共用的命令分组。
 - `Resources/Info.plist`：版本、构建编号、应用与文本关联元数据。
-- `Tests/`：文件往返、冲突、Unicode、搜索、编辑操作与阅读映射测试。
+- `Tests/`：文件往返、冲突、Unicode、搜索、编辑操作、阅读映射、主题对比度及完整工作区流程测试。
 - `Samples/`：Markdown、JSON、YAML 和配置示例。
 - `scripts/build.sh`：优化编译、图标生成、本机签名与应用打包。
 - `scripts/test.sh`：独立测试入口；不等同于全部界面流程或性能验收。

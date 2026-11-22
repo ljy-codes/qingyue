@@ -47,8 +47,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private var changing = false
     private var lineIndexUpdated = false
     private var dark = UserDefaults.standard.object(forKey: "dark") as? Bool ?? true
-    private var warmPaper = UserDefaults.standard.string(forKey: "readerTheme") == "WarmPaper"
-    private var theme: ReaderTheme { ReaderTheme(dark: dark, warmPaper: warmPaper && !followSystemAppearance) }
+    private var themeID = ReaderThemeID.stored(UserDefaults.standard.string(forKey: "readerThemeID"),
+                                                legacy: UserDefaults.standard.string(forKey: "readerTheme"))
+    private var theme: ReaderTheme { ReaderTheme(id: themeID, dark: dark) }
     private var fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize") == 0 ? 14 : UserDefaults.standard.double(forKey: "fontSize"))
     private var wrapping = UserDefaults.standard.object(forKey: "wrapping") as? Bool ?? true
     private var reading = false
@@ -427,7 +428,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func applyTheme() {
         if followSystemAppearance { dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
-        window?.appearance = NSAppearance(named: dark && !warmPaper ? .darkAqua : .aqua)
+        window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         AppIconTheme.apply(AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme")))
         root.color = theme.window; sidebar.color = theme.panel; canvas.color = theme.editor
         menuRow.color = theme.panel; tabRow.color = theme.main; footer.color = theme.panel; toolsContainer.color = theme.main
@@ -453,7 +454,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     private func style(_ b: ActionButton) {
         b.fill = b.isEmphasized ? theme.accent : theme.button; b.hoverFill = theme.hover; b.borderColor = theme.border
-        b.ink = b.isEmphasized ? .white : theme.text
+        b.ink = b.isEmphasized ? theme.accentForeground : theme.text
     }
     private func refreshTabs() {
         let ids = tabs.map { $0.file.id }
@@ -1164,7 +1165,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     }
     @objc func systemAppearanceChanged() { if followSystemAppearance { applyTheme() } }
     @objc func toggleTheme(_ sender: Any?) {
-        followSystemAppearance = false; warmPaper = false; UserDefaults.standard.set("", forKey: "readerTheme"); dark.toggle()
+        followSystemAppearance = false; dark.toggle()
         UserDefaults.standard.set(false, forKey: "followSystemAppearance"); UserDefaults.standard.set(dark, forKey: "dark"); applyTheme()
     }
     @objc func toggleSidebar(_ sender: Any?) {
@@ -1363,12 +1364,13 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let spacing = NSPopUpButton(); spacing.addItems(withTitles: ["紧凑", "舒适", "宽松"]); spacing.selectItem(at: readingLineSpacing < 4 ? 0 : (readingLineSpacing > 8 ? 2 : 1))
         let paragraph = NSPopUpButton(); paragraph.addItems(withTitles: ["无段距", "紧凑", "标准", "宽松"]); paragraph.selectItem(at: readingParagraphSpacing < 1 ? 0 : readingParagraphSpacing < 10 ? 1 : readingParagraphSpacing > 18 ? 3 : 2)
         let systemTheme = NSButton(checkboxWithTitle: "外观跟随系统", target: nil, action: nil); systemTheme.state = followSystemAppearance ? .on : .off
-        let colors = NSPopUpButton(); colors.addItems(withTitles: ["深色", "浅色", "暖纸"]); colors.selectItem(at: warmPaper ? 2 : dark ? 0 : 1); colors.setAccessibilityLabel("阅读主题")
+        let themePopup = NSPopUpButton(); themePopup.addItems(withTitles: ReaderThemeID.allCases.map { $0.label }); themePopup.selectItem(at: ReaderThemeID.allCases.firstIndex(of: themeID) ?? 0); themePopup.setAccessibilityLabel("外观主题")
+        let appearance = NSPopUpButton(); appearance.addItems(withTitles: ["浅色", "深色"]); appearance.selectItem(at: dark ? 1 : 0); appearance.setAccessibilityLabel("明暗外观")
         let icon = NSPopUpButton(); icon.addItems(withTitles: AppIconTheme.allCases.map(\.label)); icon.selectItem(at: AppIconTheme.allCases.firstIndex(of: AppIconTheme.parse(UserDefaults.standard.string(forKey: "iconTheme"))) ?? 0); icon.setAccessibilityLabel("应用图标")
         let width = NSPopUpButton(); width.addItems(withTitles: ["紧凑", "标准", "宽", "全宽"])
         width.selectItem(at: readingWidth > 1000 ? 3 : (readingWidth < 600 ? 0 : (readingWidth > 750 ? 2 : 1)))
-        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("主题"), colors]), stack([label("应用图标"), icon]), stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("段间距"), paragraph]), stack([label("阅读版心"), width])])
-        content.orientation = .vertical; content.alignment = .leading; content.spacing = 10; content.frame = NSRect(x: 0, y: 0, width: 330, height: 350)
+        let content = NSStackView(views: [numbers, wrap, systemTheme, stack([label("外观主题"), themePopup]), stack([label("明暗外观"), appearance]), stack([label("应用图标"), icon]), stack([label("字号"), size]), stack([label("阅读字体"), face]), stack([label("阅读行距"), spacing]), stack([label("段间距"), paragraph]), stack([label("阅读版心"), width])])
+        content.orientation = .vertical; content.alignment = .leading; content.spacing = 9; content.frame = NSRect(x: 0, y: 0, width: 360, height: 400)
         a.accessoryView = content
         guard runDocumentModal({ a.runModal() }) == .alertFirstButtonReturn else { return }
         active?.sourceAnchor = currentSourceOffset()
@@ -1378,13 +1380,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         readingLineSpacing = [2, 6, 11][spacing.indexOfSelectedItem]
         readingParagraphSpacing = [0, 6, 13, 24][paragraph.indexOfSelectedItem]
         readingWidth = [520, 680, 840, 1_000_000][width.indexOfSelectedItem]
-        followSystemAppearance = systemTheme.state == .on; warmPaper = colors.indexOfSelectedItem == 2; dark = colors.indexOfSelectedItem == 0
+        themeID = ReaderThemeID.allCases[max(0, min(themePopup.indexOfSelectedItem, ReaderThemeID.allCases.count - 1))]
+        followSystemAppearance = systemTheme.state == .on
+        dark = followSystemAppearance ? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua) : appearance.indexOfSelectedItem == 1
         let d = UserDefaults.standard
         d.set(showLineNumbers, forKey: "lineNumbers"); d.set(wrapping, forKey: "wrapping"); d.set(Double(fontSize), forKey: "fontSize")
         d.set(readingFontName, forKey: "readingFont"); d.set(Double(readingLineSpacing), forKey: "lineSpacing"); d.set(Double(readingParagraphSpacing), forKey: "paragraphSpacing")
         d.set(Double(readingWidth), forKey: "readingWidth"); d.set(followSystemAppearance, forKey: "followSystemAppearance")
-        d.set(warmPaper ? "WarmPaper" : dark ? "Dark" : "Light", forKey: "readerTheme"); d.set(dark, forKey: "dark")
-        AppIconTheme.apply(AppIconTheme.allCases[icon.indexOfSelectedItem])
+        d.set(themeID.rawValue, forKey: "readerThemeID"); d.set(themeID == .coffee ? "WarmPaper" : dark ? "Dark" : "Light", forKey: "readerTheme"); d.set(dark, forKey: "dark")
+        AppIconTheme.apply(AppIconTheme.allCases[max(0, min(icon.indexOfSelectedItem, AppIconTheme.allCases.count - 1))])
         ruler.isHidden = reading || !showLineNumbers; rulerWidth.constant = reading || !showLineNumbers ? 0 : 48
         wrapButton.title = wrapping ? "自动换行 ✓" : "自动换行"; window?.contentView?.layoutSubtreeIfNeeded()
         editor.font = editorFont(); updateWrap(); applyTheme()
@@ -1474,7 +1478,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         guard let tab = active else { return }
         presentationGeneration += 1
         let anchor = tab.sourceAnchor
-        let key = "\(tab.kind.rawValue)|\(fontSize)|\(readingFontName)|\(readingLineSpacing)|\(readingParagraphSpacing)|\(warmPaper)|\(dark)|\(tab.file.url?.path ?? "")"
+        let key = "\(tab.kind.rawValue)|\(fontSize)|\(readingFontName)|\(readingLineSpacing)|\(readingParagraphSpacing)|\(themeID.rawValue)|\(dark)|\(tab.file.url?.path ?? "")"
         if tab.renderKey != key || tab.rendered == nil {
             tab.mediaGeneration += 1; tab.mediaTask?.cancel(); tab.mediaTask = nil; tab.mediaNotices = []
             tab.rendered = ReadingDocument.build(text: tab.file.text, kind: tab.kind, palette: theme.palette, fontSize: fontSize + 1, readingFontName: readingFontName, lineSpacing: readingLineSpacing, paragraphSpacing: readingParagraphSpacing)

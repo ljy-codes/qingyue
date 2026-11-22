@@ -8,33 +8,232 @@ extension NSColor {
     }
 }
 
-struct ReaderTheme {
-    let dark: Bool
-    var warmPaper = false
-    private func color(_ darkValue: UInt32, _ lightValue: UInt32, _ warmValue: UInt32) -> NSColor {
-        NSColor(hex: warmPaper ? warmValue : dark ? darkValue : lightValue)
+extension NSColor {
+    var readerRelativeLuminance: CGFloat {
+        guard let color = usingColorSpace(.sRGB) else { return 0 }
+        func channel(_ value: CGFloat) -> CGFloat {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(color.redComponent)
+            + 0.7152 * channel(color.greenComponent)
+            + 0.0722 * channel(color.blueComponent)
     }
-    // Shared Windows 0.18 palette: window, side panel, main surface, editor.
-    var window: NSColor { color(0x191B1F, 0xF6F4EF, 0xEDE3D1) }
-    var panel: NSColor { color(0x23262B, 0xEFEAE2, 0xE5D6C0) }
-    var main: NSColor { color(0x24354A, 0xE6F0FA, 0xE7EEF0) }
-    var editor: NSColor { color(0x30343A, 0xF8FAFC, 0xFFF8E9) }
-    var text: NSColor { color(0xE8E2D8, 0x262A2F, 0x3C3026) }
-    var muted: NSColor { color(0xBEB8AE, 0x6B6A66, 0x786A5A) }
-    var border: NSColor { color(0x4B4D52, 0xD8D1C5, 0xCDB99C) }
-    var accent: NSColor { color(0x2F6FDB, 0x2F6FDB, 0xA75832) }
-    var selection: NSColor { color(0x355A91, 0xD7E5FA, 0xE8D2B6) }
-    var hover: NSColor { color(0x34383F, 0xF3EDE4, 0xF1E4D1) }
+
+    func readerContrastRatio(with other: NSColor) -> CGFloat {
+        let first = readerRelativeLuminance, second = other.readerRelativeLuminance
+        return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+    }
+
+    func readerMixed(with other: NSColor, fraction: CGFloat) -> NSColor {
+        guard let a = usingColorSpace(.sRGB), let b = other.usingColorSpace(.sRGB) else { return self }
+        let t = min(1, max(0, fraction))
+        return NSColor(srgbRed: a.redComponent + (b.redComponent - a.redComponent) * t,
+                       green: a.greenComponent + (b.greenComponent - a.greenComponent) * t,
+                       blue: a.blueComponent + (b.blueComponent - a.blueComponent) * t,
+                       alpha: 1)
+    }
+
+    func readerEnsureContrast(against background: NSColor, target: CGFloat) -> NSColor {
+        var result = self
+        let toward: NSColor = background.readerRelativeLuminance > 0.45 ? NSColor(hex: 0x11141A) : NSColor(hex: 0xFFFFFF)
+        var guardCount = 0
+        while result.readerContrastRatio(with: background) < target && guardCount < 28 {
+            result = result.readerMixed(with: toward, fraction: 0.08)
+            guardCount += 1
+        }
+        return result
+    }
+}
+
+enum ReaderThemeID: String, CaseIterable, Codable {
+    case classic, coffee, celadon, seaSalt, mistPurple, inkBlue, paper
+
+    var label: String {
+        switch self {
+        case .classic: return "经典"
+        case .coffee: return "咖色暖读"
+        case .celadon: return "青瓷古色"
+        case .seaSalt: return "海盐蓝"
+        case .mistPurple: return "烟雨紫"
+        case .inkBlue: return "墨蓝深色"
+        case .paper: return "纸白极简"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .classic: return "原有蓝灰 / 暖纸"
+        case .coffee: return "暖纸底 · 褐橘"
+        case .celadon: return "玉色底 · 碧山绿"
+        case .seaSalt: return "湖水蓝 · 釉蓝"
+        case .mistPurple: return "烟雨白 · 紫幽兰"
+        case .inkBlue: return "深蓝黑 · 珊瑚红"
+        case .paper: return "白卡 · 深紫 / 青绿"
+        }
+    }
+
+    var swatches: [UInt32] {
+        switch self {
+        case .classic: return [0xF6F4EF, 0xEFEAE2, 0x262A2F, 0x2F6FDB, 0xD7E5FA]
+        case .coffee: return [0xEDE3D1, 0xFFF8E9, 0x3C3026, 0xA75832, 0xE8D2B6]
+        case .celadon: return [0xEDF1E9, 0xFBFCFB, 0x2E3427, 0x719847, 0xDFE8D7]
+        case .seaSalt: return [0xEAF4F7, 0xFFFFFF, 0x1B2B33, 0x1477A8, 0xCDEAF7]
+        case .mistPurple: return [0xEFF0F5, 0xFCFCFE, 0x2B2A35, 0x686F8F, 0xE4E2F2]
+        case .inkBlue: return [0xE9ECF1, 0xFBFBFC, 0x1E3B7A, 0xCA462F, 0xF1D7D3]
+        case .paper: return [0xF3F4F6, 0xFFFFFF, 0x1F2937, 0x6D5BD0, 0xEDE9FE]
+        }
+    }
+
+    static func stored(_ raw: String?, legacy: String? = nil) -> ReaderThemeID {
+        if let raw = raw, let value = ReaderThemeID(rawValue: raw) { return value }
+        switch (legacy ?? "").lowercased() {
+        case "warmpaper": return .coffee
+        case "dark", "light": return .classic
+        default: return .classic
+        }
+    }
+}
+
+struct ReaderThemeDefinition {
+    let window: UInt32
+    let panel: UInt32
+    let editor: UInt32
+    let text: UInt32
+    let muted: UInt32
+    let border: UInt32
+    let accent: UInt32
+    let selection: UInt32
+    let string: UInt32
+    let number: UInt32
+    let key: UInt32
+    let comment: UInt32
+    var main: UInt32? = nil
+    var hover: UInt32? = nil
+    var accentText: UInt32? = nil
+    var unsaved: UInt32? = nil
+    var saved: UInt32? = nil
+}
+
+enum ReaderThemeCatalog {
+    static func definition(for id: ReaderThemeID, dark: Bool) -> ReaderThemeDefinition {
+        switch id {
+        case .classic:
+            return dark
+                ? ReaderThemeDefinition(window: 0x191B1F, panel: 0x23262B, editor: 0x30343A,
+                                        text: 0xE8E2D8, muted: 0xBEB8AE, border: 0x4B4D52,
+                                        accent: 0x2F6FDB, selection: 0x355A91,
+                                        string: 0xFFD39A, number: 0x82DFC9, key: 0x8DC5FF, comment: 0xC3C9BF,
+                                        main: 0x24354A, hover: 0x34383F, accentText: 0x8DC5FF,
+                                        unsaved: 0xFFC078, saved: 0x7BDEB3)
+                : ReaderThemeDefinition(window: 0xF6F4EF, panel: 0xEFEAE2, editor: 0xF8FAFC,
+                                        text: 0x262A2F, muted: 0x6B6A66, border: 0xD8D1C5,
+                                        accent: 0x2F6FDB, selection: 0xD7E5FA,
+                                        string: 0xA64A0A, number: 0x087563, key: 0x175BB5, comment: 0x5C6D59,
+                                        main: 0xE6F0FA, hover: 0xF3EDE4, accentText: 0x175BB5,
+                                        unsaved: 0xA95A00, saved: 0x19764E)
+        case .coffee:
+            return dark
+                ? ReaderThemeDefinition(window: 0x1A1310, panel: 0x241A15, editor: 0x1E1612,
+                                        text: 0xEFDFD2, muted: 0xA58F7E, border: 0x3A2B23,
+                                        accent: 0xE17A84, selection: 0x4A2D31,
+                                        string: 0x9FCB9B, number: 0xD9A05B, key: 0x85B9EF, comment: 0x8C7667,
+                                        main: 0x2A1F18, hover: 0x2F231B, accentText: 0xF0A0AA,
+                                        unsaved: 0xFFC078, saved: 0x7BDEB3)
+                : ReaderThemeDefinition(window: 0xEDE3D1, panel: 0xE5D6C0, editor: 0xFFF8E9,
+                                        text: 0x3C3026, muted: 0x6A5C4D, border: 0xCDB99C,
+                                        accent: 0xA75832, selection: 0xE8D2B6,
+                                        string: 0xA64A0A, number: 0x087563, key: 0xA75832, comment: 0x5C6D59,
+                                        main: 0xE7EEF0, hover: 0xF1E4D1, accentText: 0xA75832,
+                                        unsaved: 0xA95A00, saved: 0x19764E)
+        case .celadon:
+            return dark
+                ? ReaderThemeDefinition(window: 0x101612, panel: 0x18201B, editor: 0x141A16,
+                                        text: 0xE4EEE5, muted: 0x94A799, border: 0x2B3A31,
+                                        accent: 0x8FBF6B, selection: 0x31452F,
+                                        string: 0x9FCB9B, number: 0xD9B26A, key: 0x85B9EF, comment: 0x8C9E92)
+                : ReaderThemeDefinition(window: 0xEDF1E9, panel: 0xF6F8F4, editor: 0xFBFCFB,
+                                        text: 0x2E3427, muted: 0x647267, border: 0xDDE3D8,
+                                        accent: 0x719847, selection: 0xDFE8D7,
+                                        string: 0x5B8C43, number: 0xA96A1E, key: 0x3E7C86, comment: 0x8A968B)
+        case .seaSalt:
+            return dark
+                ? ReaderThemeDefinition(window: 0x0B1419, panel: 0x121D24, editor: 0x0F181E,
+                                        text: 0xE3EEF4, muted: 0x8FA7B2, border: 0x23343D,
+                                        accent: 0x4FB3E8, selection: 0x1E3E52,
+                                        string: 0x9FCB9B, number: 0xD9B26A, key: 0x85B9EF, comment: 0x8198A4)
+                : ReaderThemeDefinition(window: 0xEAF4F7, panel: 0xF5FAFB, editor: 0xFFFFFF,
+                                        text: 0x1B2B33, muted: 0x62757E, border: 0xD5E4E8,
+                                        accent: 0x1477A8, selection: 0xCDEAF7,
+                                        string: 0x2F7D64, number: 0xA96A1E, key: 0x1660AB, comment: 0x7C929B)
+        case .mistPurple:
+            return dark
+                ? ReaderThemeDefinition(window: 0x111118, panel: 0x191923, editor: 0x15151E,
+                                        text: 0xE8E7F0, muted: 0x9C9BB2, border: 0x2D2D3D,
+                                        accent: 0x9AA2D6, selection: 0x35354F,
+                                        string: 0x9FCB9B, number: 0xD9B26A, key: 0x9AB3FF, comment: 0x8D8CA3)
+                : ReaderThemeDefinition(window: 0xEFF0F5, panel: 0xF7F7FA, editor: 0xFCFCFE,
+                                        text: 0x2B2A35, muted: 0x706F86, border: 0xDEDEE6,
+                                        accent: 0x686F8F, selection: 0xE4E2F2,
+                                        string: 0x5E7F6A, number: 0xA96A1E, key: 0x5B6FA8, comment: 0x8B8AA0)
+        case .inkBlue:
+            return dark
+                ? ReaderThemeDefinition(window: 0x13151B, panel: 0x1C1F26, editor: 0x101114,
+                                        text: 0xECE9E9, muted: 0x9AA0AD, border: 0x2B2F3A,
+                                        accent: 0xCA462F, selection: 0x642920,
+                                        string: 0x9FCB9B, number: 0xD9B26A, key: 0x85B9EF, comment: 0x8D93A0)
+                : ReaderThemeDefinition(window: 0xE9ECF1, panel: 0xF4F5F8, editor: 0xFBFBFC,
+                                        text: 0x1E3B7A, muted: 0x626E87, border: 0xD8DEE8,
+                                        accent: 0xCA462F, selection: 0xF1D7D3,
+                                        string: 0x5E7F6A, number: 0xA96A1E, key: 0x2A5FA8, comment: 0x8A93A6)
+        case .paper:
+            return dark
+                ? ReaderThemeDefinition(window: 0x111318, panel: 0x171A21, editor: 0x14171D,
+                                        text: 0xE7EAF0, muted: 0x9AA1AD, border: 0x2A2F38,
+                                        accent: 0x9B8BFF, selection: 0x322B5A,
+                                        string: 0x4FD1C5, number: 0xE3A15A, key: 0xB3A6FF, comment: 0x8A919C)
+                : ReaderThemeDefinition(window: 0xF3F4F6, panel: 0xFFFFFF, editor: 0xFFFFFF,
+                                        text: 0x1F2937, muted: 0x6B7280, border: 0xE5E7EB,
+                                        accent: 0x6D5BD0, selection: 0xEDE9FE,
+                                        string: 0x0F9F8F, number: 0xB45309, key: 0x6D5BD0, comment: 0x9CA3AF)
+        }
+    }
+}
+
+struct ReaderTheme {
+    let id: ReaderThemeID
+    let dark: Bool
+
+    init(dark: Bool) { self.init(id: .classic, dark: dark) }
+    init(dark: Bool, warmPaper: Bool) { self.init(id: warmPaper ? .coffee : .classic, dark: dark) }
+    init(id: ReaderThemeID, dark: Bool) { self.id = id; self.dark = dark }
+
+    var warmPaper: Bool { id == .coffee }
+
+    private var definition: ReaderThemeDefinition { ReaderThemeCatalog.definition(for: id, dark: dark) }
+
+    var window: NSColor { NSColor(hex: definition.window) }
+    var panel: NSColor { NSColor(hex: definition.panel) }
+    var editor: NSColor { NSColor(hex: definition.editor) }
+    var text: NSColor { NSColor(hex: definition.text) }
+    var muted: NSColor { NSColor(hex: definition.muted) }
+    var border: NSColor { NSColor(hex: definition.border) }
+    var accent: NSColor { NSColor(hex: definition.accent) }
+    var selection: NSColor { NSColor(hex: definition.selection) }
+    var main: NSColor { definition.main.map { NSColor(hex: $0) } ?? panel.readerMixed(with: editor, fraction: 0.35) }
+    var hover: NSColor { definition.hover.map { NSColor(hex: $0) } ?? panel.readerMixed(with: text, fraction: 0.06) }
     var button: NSColor { panel }
     var tabSelected: NSColor { panel }
-    var accentText: NSColor { color(0x8DC5FF, 0x175BB5, 0xA75832) }
-    var unsaved: NSColor { color(0xFFC078, 0xA95A00, 0xA95A00) }
-    var saved: NSColor { color(0x7BDEB3, 0x19764E, 0x19764E) }
+    var accentText: NSColor { definition.accentText.map { NSColor(hex: $0) } ?? accent.readerEnsureContrast(against: editor, target: 4.5) }
+    var unsaved: NSColor { NSColor(hex: definition.unsaved ?? (dark ? 0xFFC078 : 0xA95A00)) }
+    var saved: NSColor { NSColor(hex: definition.saved ?? (dark ? 0x7BDEB3 : 0x19764E)) }
+    var accentForeground: NSColor {
+        let light = NSColor(hex: 0xFFFFFF), dark = NSColor(hex: 0x11141A)
+        return light.readerContrastRatio(with: accent) >= dark.readerContrastRatio(with: accent) ? light : dark
+    }
     var palette: EditorPalette {
         EditorPalette(background: editor, foreground: text, muted: muted, accent: accentText,
-                      string: color(0xFFD39A, 0xA64A0A, 0xA64A0A),
-                      number: color(0x82DFC9, 0x087563, 0x087563),
-                      comment: color(0xC3C9BF, 0x5C6D59, 0x5C6D59), key: accentText)
+                      string: NSColor(hex: definition.string), number: NSColor(hex: definition.number),
+                      comment: NSColor(hex: definition.comment), key: NSColor(hex: definition.key))
     }
 }
 
