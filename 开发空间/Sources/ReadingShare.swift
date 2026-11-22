@@ -151,7 +151,10 @@ enum ReadingShare {
         // Export that source, not an undocumented raster snapshot of the diagram.
         for range in diagrams.reversed() { output.replaceCharacters(in: range, with: "") }
         if output.length > 0 {
-            output.addAttribute(.foregroundColor, value: NSColor.black, range: NSRange(location: 0, length: output.length))
+            // Use an explicit calibrated color for RTF/RTFD serialization.
+            // Semantic colors can carry an unresolved color-space marker in a
+            // headless test process, which makes AppKit log colorspace -1.
+            output.addAttribute(.foregroundColor, value: NSColor(calibratedWhite: 0, alpha: 1), range: NSRange(location: 0, length: output.length))
             output.removeAttribute(.backgroundColor, range: NSRange(location: 0, length: output.length))
         }
         return output

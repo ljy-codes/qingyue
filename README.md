@@ -1,15 +1,17 @@
 # 轻阅 Qingyue
 
-轻量的本地文本阅读与编辑工具，面向 Intel Mac / macOS 13+。
+轻量的本地文本阅读与编辑工具，面向 Intel 与 Apple Silicon Mac / macOS 13+。
 
-当前版本：**0.2.0 · Mac 构建 12**。
+当前版本：**0.4.0 · Mac 构建 14（发布准备）**。
 
 ## 安装与交付
 
 - 本机安装：`/Applications/轻阅.app`
-- 交付目录：[轻阅-macOS-0.2.0](交付产品/轻阅-macOS-0.2.0/)
-- 交付压缩包：[轻阅-macOS-0.2.0-交付.zip](交付产品/轻阅-macOS-0.2.0-交付.zip)
-- 校验文件：[SHA256SUMS.txt](交付产品/轻阅-macOS-0.2.0/SHA256SUMS.txt)
+- 交付目录：[轻阅-macOS-0.4.0](交付产品/轻阅-macOS-0.4.0/)
+- 交付压缩包：[轻阅-macOS-0.4.0-交付.zip](交付产品/轻阅-macOS-0.4.0-交付.zip)
+- 校验文件：[SHA256SUMS.txt](交付产品/轻阅-macOS-0.4.0/SHA256SUMS.txt)
+
+交付目录由构建脚本生成；发布准备阶段以验收记录中的检查结果为准。
 
 ## 主要功能
 
@@ -41,19 +43,25 @@
 ```bash
 bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
+bash 开发空间/scripts/check-artifact.sh
 ```
 
-构建输出到 `交付产品/轻阅-macOS-0.2.0/轻阅.app`，同时生成 SHA256SUMS 和交付 ZIP。当前为 Intel macOS 13+、x86_64、ad-hoc 本机签名；未做 Developer ID、公证和 Apple Silicon 实机验收。
+构建输出到 `交付产品/轻阅-macOS-0.4.0/轻阅.app`，同时生成 SHA256SUMS 和交付 ZIP；`check-artifact.sh` 会复核版本、架构、签名、校验和及 ZIP 内容。默认构建 universal（x86_64 + arm64），使用 macOS 13 SDK 和 ad-hoc 本机签名；尚未做 Developer ID、公证和 Apple Silicon 实机验收。
+
+需要单架构包时，可以使用 `QINGYUE_ARCH=x86_64` 或 `QINGYUE_ARCH=arm64`；检查单架构产物时相应设置 `QINGYUE_EXPECTED_ARCH=x86_64` 或 `QINGYUE_EXPECTED_ARCH=arm64`。
 
 ## 文档
 
-- [Mac 构建 12 验收](docs/Mac构建12验收.md)
-- [Mac 构建 12 挑刺记录](docs/Mac构建12挑刺记录.md)
+- [Mac 0.4.0 方案与验收](docs/Mac0.4.0方案与验收.md)
+- [Mac 构建 14 验收](docs/Mac构建14验收.md)
+- [跨平台版本与功能对齐规则](docs/跨平台版本与功能对齐规则.md)
+- [Mac 构建 12 验收（历史）](docs/Mac构建12验收.md)
+- [Mac 构建 12 挑刺记录（历史）](docs/Mac构建12挑刺记录.md)
 - [轻阅配色方案（Palette Atlas 版）](docs/配色方案.md)
 - [使用说明](操作指导/使用说明.md)
 
 ## 平台说明
 
-- Intel Mac：当前客户端与构建目标。
-- Apple Silicon：尚未交付原生 ARM 包，未做实机验收。
+- Intel Mac：universal 包包含 x86_64 架构。
+- Apple Silicon：universal 包包含 arm64 架构，尚未做实机启动和性能验收。
 - Windows：独立 WPF 实现保留在 `开发空间/Windows`，版本 0.18.0；Windows 构建、安装器和验收需在 Windows 环境单独进行，不计入本轮 Mac 交付。

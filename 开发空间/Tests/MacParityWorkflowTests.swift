@@ -214,8 +214,9 @@ struct MacParityWorkflowTests {
         return ranges
     }
     private static func smallPNG() throws -> Data {
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 3, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw fail("PNG bitmap") }
-        for y in 0..<2 { for x in 0..<3 { rep.setColor(.red, atX: x, y: y) } }
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 3, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw fail("PNG bitmap") }
+        let red = NSColor(calibratedRed: 1, green: 0, blue: 0, alpha: 1)
+        for y in 0..<2 { for x in 0..<3 { rep.setColor(red, atX: x, y: y) } }
         return try require(rep.representation(using: .png, properties: [:]), "PNG encoded")
     }
     private static func wait(_ description: String, timeout: TimeInterval = 8, until predicate: () -> Bool) throws {

@@ -13,6 +13,33 @@ struct SearchMatch {
     let replacement: String
 }
 
+struct TextSearchProgress {
+    let completedUTF16: Int
+    let totalUTF16: Int
+
+    var fraction: Double {
+        guard totalUTF16 > 0 else { return 1 }
+        return min(1, max(0, Double(completedUTF16) / Double(totalUTF16)))
+    }
+}
+
+/// Cooperative cancellation for searches running away from the main thread.
+/// The lock keeps the token safe when the UI cancels while the search worker is
+/// scanning a large document.
+final class TextSearchCancellation {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock(); cancelled = true; lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+}
+
 enum TextSearchError: LocalizedError {
     case invalidRegularExpression(String)
     case textTooLarge
@@ -21,6 +48,7 @@ enum TextSearchError: LocalizedError {
     case tooManyMatches
     case resultTooLarge
     case timedOut
+    case cancelled
     case engineFailure
 
     var errorDescription: String? {
@@ -32,6 +60,7 @@ enum TextSearchError: LocalizedError {
         case .tooManyMatches: return "匹配超过 100,000 处，请缩小查找范围或使用更具体的条件。"
         case .resultTooLarge: return "替换后的内容过大，本次没有替换；请分批处理。"
         case .timedOut: return "查找耗时过长，请简化正则表达式或缩小文件后再试。"
+        case .cancelled: return "查找已取消。"
         case .engineFailure: return "无法完成这次查找，请简化正则表达式后再试。"
         }
     }
@@ -44,6 +73,7 @@ enum TextSearch {
     private static let maximumQueryLength = 4_096
     private static let maximumReplacementLength = 1_000_000
     private static let defaultTimeLimit: TimeInterval = 0.35
+    private static let progressChunkSize = 1_048_576
 
     /// Kept separate from the text allocation so tests can verify the limit
     /// without building a 50-million-unit string.
@@ -61,15 +91,22 @@ enum TextSearch {
     /// Chinese letters are therefore one continuous word until punctuation/space;
     /// searching for `中` as a whole word will not match inside `中文`.
     /// Regex follows Foundation/ICU semantics. Use (?m) for per-line ^ / $ anchors.
-    static func matches(in text: String, query: String, replacement: String = "", options: SearchOptions) throws -> [SearchMatch] {
+    static func matches(in text: String, query: String, replacement: String = "", options: SearchOptions,
+                        progress: ((TextSearchProgress) -> Void)? = nil,
+                        cancellation: TextSearchCancellation? = nil) throws -> [SearchMatch] {
         guard !query.isEmpty else { return [] }
         let textLength = text.utf16.count
         try validateTextLength(textLength)
         guard query.utf16.count <= maximumQueryLength else { throw TextSearchError.queryTooLong }
         guard replacement.utf16.count <= maximumReplacementLength else { throw TextSearchError.replacementTooLong }
+        if cancellation?.isCancelled == true { throw TextSearchError.cancelled }
+        progress?(TextSearchProgress(completedUTF16: 0, totalUTF16: textLength))
 
         if !options.regularExpression {
-            return try literalMatches(in: text, query: query, replacement: replacement, options: options)
+            let result = try literalMatches(in: text, query: query, replacement: replacement, options: options,
+                                            progress: progress, cancellation: cancellation)
+            progress?(TextSearchProgress(completedUTF16: textLength, totalUTF16: textLength))
+            return result
         }
 
         var pattern = query
@@ -88,9 +125,14 @@ enum TextSearch {
         var failure: TextSearchError?
         var outputLength = textLength
         let deadline = ProcessInfo.processInfo.systemUptime + Self.timeLimit(for: textLength)
+        var lastProgress = 0
+        var nextProgress = Self.progressChunkSize
         // Progress callbacks let ICU interrupt pathological backtracking as well as
         // ordinary long searches. Enumerating also avoids allocating unbounded matches.
         expression.enumerateMatches(in: text, options: [.reportProgress], range: NSRange(location: 0, length: textLength)) { match, flags, stop in
+            if cancellation?.isCancelled == true {
+                failure = .cancelled; stop.pointee = true; return
+            }
             if flags.contains(.internalError) {
                 failure = .engineFailure; stop.pointee = true; return
             }
@@ -98,6 +140,11 @@ enum TextSearch {
                 failure = .timedOut; stop.pointee = true; return
             }
             guard let match = match else { return }
+            lastProgress = max(lastProgress, NSMaxRange(match.range))
+            if lastProgress >= nextProgress {
+                progress?(TextSearchProgress(completedUTF16: lastProgress, totalUTF16: textLength))
+                while nextProgress <= lastProgress { nextProgress += Self.progressChunkSize }
+            }
             guard results.count < maximumMatchCount else {
                 failure = .tooManyMatches; stop.pointee = true; return
             }
@@ -111,60 +158,58 @@ enum TextSearch {
             results.append(SearchMatch(range: match.range, replacement: expanded))
         }
         if let failure = failure { throw failure }
+        progress?(TextSearchProgress(completedUTF16: textLength, totalUTF16: textLength))
         return results
     }
 
     /// Fast literal path. Foundation's literal range search avoids compiling a
     /// regex for every keystroke and keeps multi-megabyte logs responsive.
-    private static func literalMatches(in text: String, query: String, replacement: String, options: SearchOptions) throws -> [SearchMatch] {
-        let textBytes = Array(text.utf8)
+    private static func literalMatches(in text: String, query: String, replacement: String, options: SearchOptions,
+                                       progress: ((TextSearchProgress) -> Void)?,
+                                       cancellation: TextSearchCancellation?) throws -> [SearchMatch] {
         let queryBytes = Array(query.utf8)
-        if textBytes.allSatisfy({ $0 < 0x80 }) && queryBytes.allSatisfy({ $0 < 0x80 }) {
+        let queryIsASCII = queryBytes.allSatisfy({ $0 < 0x80 })
+        let textIsASCII = text.utf8.allSatisfy({ $0 < 0x80 })
+        if textIsASCII && queryIsASCII {
+            let textBytes = Array(text.utf8)
             return try asciiLiteralMatches(textBytes: textBytes, queryBytes: queryBytes,
-                                           replacement: replacement, options: options)
+                                           replacement: replacement, options: options,
+                                           progress: progress, cancellation: cancellation)
         }
-        let source = text as NSString
-        var compareOptions: NSString.CompareOptions = [.literal]
-        if !options.caseSensitive { compareOptions.insert(.caseInsensitive) }
-        let deadline = ProcessInfo.processInfo.systemUptime + Self.timeLimit(for: source.length)
-        var results: [SearchMatch] = []
-        var searchRange = NSRange(location: 0, length: source.length)
-        var outputLength = source.length
-        var iterations = 0
-        while searchRange.length > 0 {
-            if iterations & 255 == 0, ProcessInfo.processInfo.systemUptime > deadline { throw TextSearchError.timedOut }
-            iterations += 1
-            let found = source.range(of: query, options: compareOptions, range: searchRange)
-            if found.location == NSNotFound { break }
-            let wordStart = found.location == 0 || !isWordCharacter(in: source, at: found.location - 1)
-            let end = NSMaxRange(found)
-            let wordEnd = end == source.length || !isWordCharacter(in: source, at: end)
-            if !options.wholeWord || (wordStart && wordEnd) {
-                guard results.count < maximumMatchCount else { throw TextSearchError.tooManyMatches }
-                outputLength += replacement.utf16.count - found.length
-                guard outputLength <= maximumResultLength else { throw TextSearchError.resultTooLarge }
-                results.append(SearchMatch(range: found, replacement: replacement))
-            }
-            let next = found.location + max(1, found.length)
-            guard next <= source.length else { break }
-            searchRange = NSRange(location: next, length: source.length - next)
+        // Exact UTF-16 matching avoids NSString's case-folding machinery for
+        // Chinese, emoji and other non-ASCII queries. It also scans incrementally
+        // without creating a second 100+ MiB byte buffer for a 50 MiB document.
+        if options.caseSensitive || !hasCaseMapping(query) {
+            return try utf16LiteralMatches(in: text, query: query, replacement: replacement, options: options,
+                                           progress: progress, cancellation: cancellation)
         }
-        return results
+        return try foundationLiteralMatches(in: text, query: query, replacement: replacement, options: options,
+                                            progress: progress, cancellation: cancellation)
     }
 
     /// ASCII logs are the common large-file case. A byte scan avoids ICU's
     /// case-insensitive literal machinery and keeps multi-megabyte searches
     /// comfortably inside the time budget.
     private static func asciiLiteralMatches(textBytes: [UInt8], queryBytes: [UInt8],
-                                            replacement: String, options: SearchOptions) throws -> [SearchMatch] {
+                                            replacement: String, options: SearchOptions,
+                                            progress: ((TextSearchProgress) -> Void)?,
+                                            cancellation: TextSearchCancellation?) throws -> [SearchMatch] {
         let needle = options.caseSensitive ? queryBytes : queryBytes.map(asciiLower)
         guard !needle.isEmpty else { return [] }
         let deadline = ProcessInfo.processInfo.systemUptime + Self.timeLimit(for: textBytes.count)
         var results: [SearchMatch] = []
         var outputLength = textBytes.count
         var index = 0
+        var nextProgress = progressChunkSize
         while index <= textBytes.count - needle.count {
-            if index & 4095 == 0, ProcessInfo.processInfo.systemUptime > deadline { throw TextSearchError.timedOut }
+            if index & 4095 == 0 {
+                if cancellation?.isCancelled == true { throw TextSearchError.cancelled }
+                if ProcessInfo.processInfo.systemUptime > deadline { throw TextSearchError.timedOut }
+            }
+            if index >= nextProgress {
+                progress?(TextSearchProgress(completedUTF16: index, totalUTF16: textBytes.count))
+                while nextProgress <= index { nextProgress += progressChunkSize }
+            }
             var offset = 0
             while offset < needle.count {
                 let byte = options.caseSensitive ? textBytes[index + offset] : asciiLower(textBytes[index + offset])
@@ -186,7 +231,120 @@ enum TextSearch {
                 index += 1
             }
         }
+        progress?(TextSearchProgress(completedUTF16: textBytes.count, totalUTF16: textBytes.count))
         return results
+    }
+
+    private static func utf16LiteralMatches(in text: String, query: String, replacement: String, options: SearchOptions,
+                                            progress: ((TextSearchProgress) -> Void)?,
+                                            cancellation: TextSearchCancellation?) throws -> [SearchMatch] {
+        let pattern = Array(query.utf16)
+        guard !pattern.isEmpty else { return [] }
+        let prefix = failureTable(for: pattern)
+        let source = text as NSString
+        let total = source.length
+        let deadline = ProcessInfo.processInfo.systemUptime + Self.timeLimit(for: total)
+        var results: [SearchMatch] = []
+        var outputLength = total
+        var matched = 0
+        var index = 0
+        var nextProgress = progressChunkSize
+        for unit in text.utf16 {
+            if index & 4095 == 0 {
+                if cancellation?.isCancelled == true { throw TextSearchError.cancelled }
+                if ProcessInfo.processInfo.systemUptime > deadline { throw TextSearchError.timedOut }
+            }
+            while matched > 0 && unit != pattern[matched] { matched = prefix[matched - 1] }
+            if unit == pattern[matched] { matched += 1 }
+            if matched == pattern.count {
+                let start = index + 1 - pattern.count
+                let end = index + 1
+                let wordStart = start == 0 || !isWordCharacter(in: source, at: start - 1)
+                let wordEnd = end == total || !isWordCharacter(in: source, at: end)
+                if !options.wholeWord || (wordStart && wordEnd) {
+                    guard results.count < maximumMatchCount else { throw TextSearchError.tooManyMatches }
+                    outputLength += replacement.utf16.count - pattern.count
+                    guard outputLength <= maximumResultLength else { throw TextSearchError.resultTooLarge }
+                    results.append(SearchMatch(range: NSRange(location: start, length: pattern.count), replacement: replacement))
+                }
+                // Match ranges are intentionally non-overlapping, matching
+                // NSString.range(of:) and the existing replacement behavior.
+                matched = 0
+            }
+            index += 1
+            if index >= nextProgress {
+                progress?(TextSearchProgress(completedUTF16: index, totalUTF16: total))
+                nextProgress += progressChunkSize
+            }
+        }
+        progress?(TextSearchProgress(completedUTF16: total, totalUTF16: total))
+        return results
+    }
+
+    private static func foundationLiteralMatches(in text: String, query: String, replacement: String, options: SearchOptions,
+                                                 progress: ((TextSearchProgress) -> Void)?,
+                                                 cancellation: TextSearchCancellation?) throws -> [SearchMatch] {
+        let source = text as NSString
+        let total = source.length
+        let overlap = max(0, (query as NSString).length - 1)
+        let deadline = ProcessInfo.processInfo.systemUptime + Self.timeLimit(for: total)
+        var results: [SearchMatch] = []
+        var outputLength = total
+        var chunkStart = 0
+        var iterations = 0
+        var compareOptions: NSString.CompareOptions = [.literal]
+        if !options.caseSensitive { compareOptions.insert(.caseInsensitive) }
+        while chunkStart < total {
+            if cancellation?.isCancelled == true { throw TextSearchError.cancelled }
+            let chunkEnd = min(total, chunkStart + progressChunkSize)
+            let extendedEnd = min(total, chunkEnd + overlap)
+            var searchStart = chunkStart
+            while searchStart < extendedEnd {
+                if iterations & 255 == 0 {
+                    if cancellation?.isCancelled == true { throw TextSearchError.cancelled }
+                    if ProcessInfo.processInfo.systemUptime > deadline { throw TextSearchError.timedOut }
+                }
+                iterations += 1
+                let found = source.range(of: query, options: compareOptions,
+                                         range: NSRange(location: searchStart, length: extendedEnd - searchStart))
+                if found.location == NSNotFound || found.location >= chunkEnd { break }
+                let wordStart = found.location == 0 || !isWordCharacter(in: source, at: found.location - 1)
+                let end = NSMaxRange(found)
+                let wordEnd = end == total || !isWordCharacter(in: source, at: end)
+                if !options.wholeWord || (wordStart && wordEnd) {
+                    guard results.count < maximumMatchCount else { throw TextSearchError.tooManyMatches }
+                    outputLength += replacement.utf16.count - found.length
+                    guard outputLength <= maximumResultLength else { throw TextSearchError.resultTooLarge }
+                    results.append(SearchMatch(range: found, replacement: replacement))
+                }
+                let next = found.location + max(1, found.length)
+                guard next > searchStart else { break }
+                searchStart = next
+            }
+            chunkStart = chunkEnd
+            progress?(TextSearchProgress(completedUTF16: chunkStart, totalUTF16: total))
+        }
+        return results
+    }
+
+    private static func failureTable(for pattern: [UInt16]) -> [Int] {
+        var table = Array(repeating: 0, count: pattern.count)
+        var length = 0
+        var index = 1
+        while index < pattern.count {
+            if pattern[index] == pattern[length] {
+                length += 1; table[index] = length; index += 1
+            } else if length > 0 {
+                length = table[length - 1]
+            } else {
+                index += 1
+            }
+        }
+        return table
+    }
+
+    private static func hasCaseMapping(_ text: String) -> Bool {
+        text.lowercased() != text.uppercased()
     }
 
     private static func asciiLower(_ byte: UInt8) -> UInt8 {

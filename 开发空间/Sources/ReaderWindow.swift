@@ -129,8 +129,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private let regexCheck = NSButton(checkboxWithTitle: "正则", target: nil, action: nil)
     private let wordCheck = NSButton(checkboxWithTitle: "全词", target: nil, action: nil)
     private let findCounter = NSTextField(labelWithString: "")
+    private var cancelSearchButton: ActionButton!
     private let searchQueue = DispatchQueue(label: "qingyue.search", qos: .userInitiated)
     private var searchTask: DispatchWorkItem?
+    private var searchCancellation: TextSearchCancellation?
     private var searchVersion = 0
     private var searchReady = false
     private var searchMatches: [SearchMatch] = []
@@ -317,7 +319,10 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         [replaceField, replacementButtons[0], replacementButtons[1]].forEach { replaceBar.addArrangedSubview($0) }; replaceField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         for c in [caseCheck, regexCheck, wordCheck] { c.font = .systemFont(ofSize: 12); c.target = self; c.action = #selector(searchOptionsChanged) }
         findCounter.font = .systemFont(ofSize: 11); findCounter.lineBreakMode = .byTruncatingTail
-        [caseCheck, regexCheck, wordCheck, findCounter].forEach { searchOptionsRow.addArrangedSubview($0) }
+        findCounter.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        cancelSearchButton = button("取消查找") { [weak self] in self?.hideFind() }
+        cancelSearchButton.setAccessibilityLabel("取消查找")
+        [caseCheck, regexCheck, wordCheck, findCounter, cancelSearchButton].forEach { searchOptionsRow.addArrangedSubview($0) }
         searchContainer.isHidden = true; replaceBar.isHidden = true
 
         add(sidebar, to: workspaceBody); add(canvas, to: workspaceBody)
@@ -1040,7 +1045,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let outcome = confirmDocumentsClosure()
         guard outcome.confirmed else { return false }
         stashCurrent()
-        recoveryTask?.cancel(); searchTask?.cancel(); searchVersion += 1
+        recoveryTask?.cancel(); searchTask?.cancel(); searchCancellation?.cancel(); searchCancellation = nil; searchVersion += 1
         writeRecovery()
         return true
     }
@@ -1416,7 +1421,9 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
             active?.sourceAnchor = anchor
             renderReading()
         }
-        updateStatus("外观设置已更新")
+        // Keep the file/line or reading-progress status visible while settings
+        // are applied; the preferences window already reflects the change.
+        updateStatus()
     }
 
     @objc func showPreferences(_ sender: Any?) {
@@ -1668,13 +1675,15 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     private func hideFind() {
         searchVisible = false; replacementVisible = false; searchContainer.isHidden = true; searchBar.isHidden = true; searchOptionsRow.isHidden = true; replaceBar.isHidden = true; searchHeight.constant = 0
         searchVersion += 1; searchTask?.cancel(); searchMatches = []; searchReady = false; pendingFind = nil
+        searchCancellation?.cancel(); searchCancellation = nil
         paintSearchMatches(); if let offset = searchReturnOffset { scrollToSource(offset) }; searchReturnOffset = nil
         window?.makeFirstResponder(displayedTextView)
     }
     @objc private func searchOptionsChanged() { scheduleSearch() }
     func controlTextDidChange(_ obj: Notification) { scheduleSearch() }
     private func scheduleSearch() {
-        searchTask?.cancel(); searchVersion += 1; searchReady = false; searchMatches = []; searchIndex = -1
+        searchTask?.cancel(); searchCancellation?.cancel(); searchCancellation = nil
+        searchVersion += 1; searchReady = false; searchMatches = []; searchIndex = -1
         paintSearchMatches()
         guard searchVisible, let tab = active else { return }
         let query = searchField.stringValue
@@ -1682,10 +1691,23 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         let version = searchVersion, id = tab.file.id, mode = reading, source = displayedTextView.string, replacement = reading ? "" : replaceField.stringValue
         var options = SearchOptions(); options.caseSensitive = caseCheck.state == .on; options.regularExpression = regexCheck.state == .on; options.wholeWord = wordCheck.state == .on
         findCounter.stringValue = "正在查找…"; findCounter.textColor = theme.muted
+        let cancellation = TextSearchCancellation()
+        searchCancellation = cancellation
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.searchQueue.async { [weak self] in
-                let result = Result { try TextSearch.matches(in: source, query: query, replacement: replacement, options: options) }
+                let result = Result {
+                    try TextSearch.matches(in: source, query: query, replacement: replacement, options: options,
+                                          progress: { [weak self] progress in
+                                              guard let self = self else { return }
+                                              DispatchQueue.main.async {
+                                                  guard self.searchVersion == version, self.active?.file.id == id,
+                                                        self.reading == mode, self.searchVisible else { return }
+                                                  let percent = Int((progress.fraction * 100).rounded())
+                                                  self.findCounter.stringValue = "正在查找… \(percent)%"
+                                              }
+                                          }, cancellation: cancellation)
+                }
                 DispatchQueue.main.async {
                     guard let self = self, self.searchVersion == version, self.active?.file.id == id, self.reading == mode, self.searchVisible else { return }
                     switch result {
@@ -1696,6 +1718,7 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
                         if let backward = self.pendingFind { self.pendingFind = nil; self.find(backward: backward) }
                     case .failure(let error): self.findCounter.stringValue = error.localizedDescription; self.findCounter.textColor = .systemRed; self.pendingFind = nil
                     }
+                    if self.searchCancellation === cancellation { self.searchCancellation = nil }
                 }
             }
         }

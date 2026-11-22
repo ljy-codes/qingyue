@@ -104,6 +104,11 @@ struct UIWorkflowTests {
         reader.findPrevious(nil)
         try expect(firstReadingView.selectedRange() == firstMatch, "previous match restores the prior reading match")
 
+        let cancelSearch = try require(views(in: window).compactMap { $0 as? NSButton }.first { $0.title == "取消查找" }, "find bar exposes an explicit cancel action")
+        cancelSearch.performClick(nil)
+        try expect(search.isHiddenOrHasHiddenAncestor, "cancel button closes the find bar")
+        reader.showFind(nil)
+
         let fieldEditor = try require(window.fieldEditor(true, for: search) as? NSTextView, "find field has a native field editor")
         let escaped = reader.control(search, textView: fieldEditor, doCommandBy: #selector(NSResponder.cancelOperation(_:)))
         try expect(escaped, "Esc is handled by the find field delegate")

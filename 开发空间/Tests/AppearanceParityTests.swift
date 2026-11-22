@@ -41,11 +41,42 @@ struct AppearanceParityTests {
         let iconDefaults = UserDefaults(suiteName: iconSuite)!
         defer { iconDefaults.removePersistentDomain(forName: iconSuite) }
         for option in AppIconTheme.allCases {
-            expect(AppIconTheme.load(option)?.isValid == true, "Bundled \(option.label) PNG is readable")
+            let image = AppIconTheme.load(option)
+            let maximumPixels = image?.representations.compactMap { ($0 as? NSBitmapImageRep)?.pixelsWide }.max() ?? 0
+            expect(image?.isValid == true && maximumPixels >= 1024, "Bundled \(option.label) icon has a high-resolution PNG")
             AppIconTheme.apply(option, defaults: iconDefaults)
             expect(AppIconTheme.parse(iconDefaults.string(forKey: "iconTheme")) == option, "Icon choice survives local setting serialization")
         }
         AppIconTheme.apply(.sky, defaults: iconDefaults)
+
+        let preferences = PreferencesWindowController(state: ReaderPreferencesState.defaults(dark: false))
+        preferences.present(relativeTo: nil)
+        defer { preferences.window?.close() }
+        guard let preferencesWindow = preferences.window, let preferencesContent = preferencesWindow.contentView else {
+            fatalError("Preferences window has no content")
+        }
+        preferencesWindow.contentView?.layoutSubtreeIfNeeded()
+        let preferenceViews = descendants(preferencesContent)
+        let cards = preferenceViews.compactMap { $0 as? ThemeCardButton }
+        expect(cards.count == ReaderThemeID.allCases.count, "Settings exposes every theme card")
+        let previewScrolls = preferenceViews.compactMap { $0 as? NSScrollView }
+            .filter { $0.documentView is NSTextView }
+        expect(previewScrolls.count == 2 && previewScrolls.allSatisfy { $0.hasVerticalScroller },
+               "Reading and editing previews scroll independently")
+        let accessibleControls = Set(preferenceViews.compactMap { $0.accessibilityLabel() })
+        for label in ["外观主题", "应用图标", "字号", "阅读字体", "阅读行距", "段间距", "阅读版心"] {
+            expect(accessibleControls.contains(label), "Settings control remains accessible: \(label)")
+        }
+        var changedState: ReaderPreferencesState?
+        preferences.onChange = { changedState = $0 }
+        guard let themePopup = preferenceViews.compactMap({ $0 as? NSPopUpButton }).first(where: { $0.accessibilityLabel() == "外观主题" }),
+              let action = themePopup.action, let target = themePopup.target,
+              let paperIndex = ReaderThemeID.allCases.firstIndex(of: .paper) else {
+            fatalError("Settings theme popup is missing")
+        }
+        themePopup.selectItem(at: paperIndex)
+        _ = NSApp.sendAction(action, to: target, from: themePopup)
+        expect(changedState?.themeID == .paper, "Settings theme changes propagate immediately")
 
         var actions = 0
         let button = ActionButton("打开文件") { actions += 1 }
@@ -92,7 +123,7 @@ struct AppearanceParityTests {
     }
 
     private static func drawPreview(dark: ReaderTheme, light: ReaderTheme) throws {
-        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 720, pixelsHigh: 180, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 720, pixelsHigh: 180, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         let context = NSGraphicsContext(bitmapImageRep: bitmap)!
         NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
         for (row, theme) in [dark, light].enumerated() {
@@ -126,7 +157,7 @@ struct AppearanceParityTests {
     }
 
     private static func image(of view: NSView) throws -> NSBitmapImageRep {
-        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width), pixelsHigh: Int(view.bounds.height), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width), pixelsHigh: Int(view.bounds.height), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: bitmap) else { throw NSError(domain: "AppearanceParityTests", code: 1) }
         NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
         view.draw(view.bounds)
@@ -140,6 +171,9 @@ struct AppearanceParityTests {
     private static func close(_ first: NSColor?, _ second: NSColor) -> Bool {
         guard let first = first?.usingColorSpace(.sRGB), let second = second.usingColorSpace(.sRGB) else { return false }
         return abs(first.redComponent - second.redComponent) < 0.025 && abs(first.greenComponent - second.greenComponent) < 0.025 && abs(first.blueComponent - second.blueComponent) < 0.025
+    }
+    private static func descendants(_ view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
     }
     private static func contrast(_ first: NSColor, _ second: NSColor) -> CGFloat {
         func luminance(_ color: NSColor) -> CGFloat {

@@ -101,7 +101,7 @@ struct MermaidSequenceTests {
     }
     static func rasterize(_ image: NSImage) throws -> Data {
         let width = Int(ceil(image.size.width)), height = Int(ceil(image.size.height))
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0),
               let context = NSGraphicsContext(bitmapImageRep: rep) else { throw CocoaError(.fileWriteUnknown) }
         NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
         image.draw(in: NSRect(origin: .zero, size: image.size))

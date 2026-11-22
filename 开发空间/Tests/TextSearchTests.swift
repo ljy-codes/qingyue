@@ -62,6 +62,36 @@ struct TextSearchTests {
         let largeMatches = try TextSearch.matches(in: largeText, query: "needle", options: insensitive)
         checks += largeMatches.count == 1 ? 1 : 0
         if largeMatches.count != 1 { fatalError("Large text search must find the literal tail") }
+        let boundaryText = String(repeating: "x", count: 1_048_575) + "É"
+        let boundaryProgress = try TextSearch.matches(in: boundaryText, query: "é", options: insensitive,
+                                                       progress: { progress in
+                                                           expect(progress.completedUTF16 <= progress.totalUTF16, "Progress never exceeds the source")
+                                                       })
+        expect(boundaryProgress.map(\.range) == [NSRange(location: 1_048_575, length: 1)],
+                   "Case-insensitive non-ASCII search crosses a chunk boundary")
+        let unicodeLarge = String(repeating: "中文😀", count: 350_000) + "尾针"
+        var progressEvents = 0
+        let unicodeMatches = try TextSearch.matches(in: unicodeLarge, query: "尾针", options: sensitive,
+                                                     progress: { progress in
+                                                         progressEvents += 1
+                                                         expect(progress.fraction >= 0 && progress.fraction <= 1, "Progress fraction stays bounded")
+                                                     })
+        expect(unicodeMatches.count == 1 && progressEvents > 1, "Large UTF-16 search reports chunked progress")
+        let cancellation = TextSearchCancellation()
+        var cancelledProgress = false
+        do {
+            _ = try TextSearch.matches(in: String(repeating: "中文😀", count: 1_000_000), query: "尾针",
+                                       options: sensitive,
+                                       progress: { progress in
+                                           if progress.completedUTF16 >= 1_048_576 {
+                                               cancelledProgress = true
+                                               cancellation.cancel()
+                                           }
+                                       }, cancellation: cancellation)
+            fatalError("Expected cooperative search cancellation")
+        } catch TextSearchError.cancelled {
+            expect(cancelledProgress, "Cancellation can interrupt a running large search")
+        }
         do { _ = try TextSearch.matches(in: "x", query: String(repeating: "x", count: 4_097), options: insensitive); fatalError("Expected query limit") }
         catch TextSearchError.queryTooLong { checks += 1 }
         do { _ = try TextSearch.matches(in: "x", query: "x", replacement: String(repeating: "x", count: 1_000_001), options: insensitive); fatalError("Expected replacement limit") }

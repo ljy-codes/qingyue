@@ -106,6 +106,7 @@ final class ThemeCardButton: NSButton {
 
 private final class ThemePreviewPanel: NSView {
     let textView = NSTextView()
+    private let scrollView = NSScrollView()
     private let titleField: NSTextField
     private var theme = ReaderTheme(id: .classic, dark: false)
 
@@ -118,18 +119,36 @@ private final class ThemePreviewPanel: NSView {
         textView.isSelectable = true
         textView.setAccessibilityLabel(title + "预览")
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 0, height: 0)
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(textView)
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
+        scrollView.setAccessibilityLabel(title + "预览滚动区域")
+        addSubview(scrollView)
         titleField.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             titleField.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            textView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            textView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            textView.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 6),
-            textView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            scrollView.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 6),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
         ])
+        // Keep a useful viewport in the settings window while allowing long
+        // samples and large fonts to scroll inside each preview independently.
+        heightAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:)") }
 
@@ -251,8 +270,6 @@ final class PreferencesWindowController: NSWindowController {
         previews.alignment = .top
         previews.distribution = .fillEqually
         previews.spacing = 12
-        readingPreview.heightAnchor.constraint(equalToConstant: 158).isActive = true
-        codePreview.heightAnchor.constraint(equalToConstant: 158).isActive = true
         stack.addArrangedSubview(previews)
 
         for check in [lineNumbersCheck, wrappingCheck, followSystemCheck, darkCheck] {
