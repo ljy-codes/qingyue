@@ -3,12 +3,13 @@ set -euo pipefail
 
 reader_script_dir="$(cd "$(dirname "$0")" && pwd)"
 reader_project_dir="$(cd "$reader_script_dir/.." && pwd)"
-reader_product_dir="$(cd "$reader_project_dir/.." && pwd)/交付产品"
+reader_product_root="$(cd "$reader_project_dir/.." && pwd)/交付产品"
 reader_build_dir="$reader_project_dir/build"
-reader_app_dir="$reader_product_dir/轻阅.app"
 reader_info_plist="$reader_project_dir/Resources/Info.plist"
 reader_version="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$reader_info_plist")"
 reader_build_number="$(/usr/bin/plutil -extract CFBundleVersion raw "$reader_info_plist")"
+reader_product_dir="$reader_product_root/轻阅-macOS-$reader_version"
+reader_app_dir="$reader_product_dir/轻阅.app"
 
 mkdir -p "$reader_build_dir/ModuleCache" "$reader_product_dir"
 reader_sources=("$reader_project_dir"/Sources/*.swift)
@@ -32,18 +33,28 @@ echo "正在编译轻阅 $reader_version（Mac 构建 $reader_build_number）· 
     -module-cache-path "$reader_build_dir/ModuleCache" \
     "$reader_script_dir/make-icon.swift" "$reader_build_dir/AppIcon.icns"
 
-mkdir -p "$reader_app_dir/Contents/MacOS" "$reader_app_dir/Contents/Resources"
+# Rebuild the delivery app from scratch so stale resources cannot survive a
+# version or icon-theme change.
+/bin/rm -rf "$reader_app_dir"
+mkdir -p "$reader_app_dir/Contents/MacOS" "$reader_app_dir/Contents/Resources/IconThemes"
 /bin/cp "$reader_build_dir/LightReader" "$reader_app_dir/Contents/MacOS/LightReader"
 /bin/cp "$reader_info_plist" "$reader_app_dir/Contents/Info.plist"
 /bin/cp "$reader_build_dir/AppIcon.icns" "$reader_app_dir/Contents/Resources/AppIcon.icns"
-mkdir -p "$reader_app_dir/Contents/Resources/IconThemes"
 /bin/cp "$reader_project_dir"/Resources/IconThemes/*.png "$reader_app_dir/Contents/Resources/IconThemes/"
 /bin/cp "$reader_project_dir/../操作指导/使用说明.md" "$reader_app_dir/Contents/Resources/使用说明.md"
 /bin/cp "$reader_project_dir/Samples/示例.md" "$reader_app_dir/Contents/Resources/示例.md"
+/bin/cp "$reader_project_dir/../操作指导/使用说明.md" "$reader_product_dir/使用说明.md"
 /usr/bin/plutil -lint "$reader_app_dir/Contents/Info.plist"
 /usr/bin/codesign --force --sign - "$reader_app_dir"
 /usr/bin/codesign --verify --deep --strict "$reader_app_dir"
+(cd "$reader_product_dir" && shasum -a 256 \
+    "轻阅.app/Contents/MacOS/LightReader" \
+    "轻阅.app/Contents/Info.plist" \
+    "轻阅.app/Contents/Resources/AppIcon.icns" \
+    "使用说明.md" > SHA256SUMS.txt)
+/bin/rm -f "$reader_product_root/轻阅-macOS-$reader_version-交付.zip"
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$reader_product_dir" "$reader_product_root/轻阅-macOS-$reader_version-交付.zip"
 
 echo "构建完成：轻阅 $reader_version（Mac 构建 $reader_build_number）"
-echo "$reader_app_dir"
-/usr/bin/du -sh "$reader_app_dir"
+echo "$reader_product_dir"
+/usr/bin/du -sh "$reader_product_dir" "$reader_product_root/轻阅-macOS-$reader_version-交付.zip"

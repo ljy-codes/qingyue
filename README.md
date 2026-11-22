@@ -1,121 +1,59 @@
 # 轻阅 Qingyue
 
-轻量的本地文本阅读与编辑工具：打开方便、阅读舒服、修改可靠。
+轻量的本地文本阅读与编辑工具，面向 Intel Mac / macOS 13+。
 
-A lightweight local text reader and editor for macOS and Windows.
+当前版本：**0.2.0 · Mac 构建 12**。
 
-macOS 当前为 **0.2.0 · Mac 构建 12**。本轮保留构建 10 的全部功能，新增 7 套外观主题、独立设置窗口、实时预览，并修复大文件查找、关闭窗口保留标签、深色强调色对比和图标留白。下载入口仍以已发布的 Mac 构建 10 为准；构建 12 为本地升级验证版。下载：[Mac 构建 10 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-10)；[Mac 构建 9](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)、[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+## 安装与交付
 
-macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
+- 本机安装：`/Applications/轻阅.app`
+- 交付目录：[轻阅-macOS-0.2.0](交付产品/轻阅-macOS-0.2.0/)
+- 交付压缩包：[轻阅-macOS-0.2.0-交付.zip](交付产品/轻阅-macOS-0.2.0-交付.zip)
+- 校验文件：[SHA256SUMS.txt](交付产品/轻阅-macOS-0.2.0/SHA256SUMS.txt)
 
-Windows 当前开发版为 **0.18.0 · 构建 1**，下载：[Windows 0.18.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.18.0)。
-使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
-应用内置天空蓝、樱花紫、薄荷珊瑚和蜜桃紫四套动漫风格图标，可在“视图 → 阅读外观”中切换并保存在本机；
-0.18.0 将顶部菜单与品牌区合并为一行，编辑操作移到右上角，并将深色编辑区调整为中性冷灰；
-Markdown 编辑工具条显示当前块与列表层级，输入 `-` 加空格显示圆点，预览继续保留嵌套圆点层次；
-0.17.0 默认延迟创建未展开标签的阅读控件，切换、关闭和批量打开时及时释放旧阅读文档，降低未展开文档场景的内存占用；
-顶部品牌栏、标签栏和编辑工具栏统一增加主体色层，形成窗口色 → 主体色 → 编辑器色的视觉层次；
-新增 Markdown 层次参考线、列表内部标题/引用/表格排版、表格单元格导航与增删行列，以及截图粘贴、选图和拖图插入；
-文件继续保存标准 Markdown，图片保存在文档旁的 `.assets` 文件夹，预览、阅读和富文本复制保留层次。
-已支持本机批注与阅读简报、阅读外观、本地工作区、全局搜索、阅读清单、TXT/Markdown 格式化、
-JSON 结构折叠、本地图片与有限 Mermaid 图形；保留安全保存、撤销、恢复和外部修改保护。
-操作与解析边界见 [Windows 使用说明](操作指导/Windows使用说明.md)。
-本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)。
-下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
+## 主要功能
 
-## Mac 构建 12 的外观与设置
+- TXT、Markdown、JSON/JSONC、YAML、INI/CONF、XML 文本阅读与编辑。
+- 多标签、最近文件、快速打开、拖入打开、标签排序、重命名、保存全部。
+- 阅读模式、源码编辑、Markdown 分屏预览、目录跳转和阅读位置返回。
+- 本地相对/绝对路径图片、内嵌 PNG、宽表阅读、有限离线 Mermaid 时序图/流程图。
+- 选区图文复制、全文复制、纯文本复制、Markdown 源文复制、自包含 HTML 导出。
+- 查找替换：大小写、全词、正则、捕获组、匹配高亮；字面查找支持 5000 万 UTF-16 单元。
+- 会话恢复、独立恢复草稿、外部修改检测、安全保存、编码与换行保留。
+- 工作区、全局搜索、阅读清单、书签、批注与阅读简报。
+- 7 套外观主题：经典、咖色暖读、青瓷古色、海盐蓝、烟雨紫、墨蓝深色、纸白极简。
+- 四款应用图标：天空蓝、樱花紫、薄荷珊瑚、蜜桃紫。
 
-在构建 10 的完整功能集上新增 7 套外观主题：经典、咖色暖读、青瓷古色、海盐蓝、烟雨紫、墨蓝深色、纸白极简。主题覆盖窗口、侧栏、主体层、编辑器、文字、边框、强调、选区、语法高亮、修改行标记等 token；`ReaderTheme(dark:)` 和暖纸模式保持兼容。设置改为独立窗口，主题卡与阅读/编辑预览实时更新；主窗口右上角和“视图”菜单都提供“设置 / 阅读外观与设置…”入口。
+## 设置入口
 
-设置中的“外观主题”可选择 7 套主题，“明暗外观”切换深浅；原有四款应用图标继续保留。独立配色资料见 [配色方案参考库](docs/配色方案.md)。
+- 主窗口右上角 **“设置”**
+- 顶部菜单 **轻阅 → 设置…**（`⌘,`）
+- **视图 → 阅读外观与设置…**
 
-## Mac 构建 9 的换行修复
+设置窗口会实时预览阅读与编辑效果，并保存主题、明暗、图标、字体、行距、段距和版心。
 
-Markdown 表格可用 `<br>`、`<br/>`、`<br />` 在同一单元格内换行，代码内的标签保持字面文字。复制、RTF 和 HTML 导出同时保留换行；不修改原文件。验证见 [Mac 构建 9 换行修复](docs/Mac构建9换行修复.md)。
-
-## Mac 构建 8 的 Windows 功能对齐
-
-Mac 主窗口改为与 Windows 0.3.0 相同的信息层级：窗口菜单、品牌操作栏、全宽标签、跨窗口搜索、左侧最近文件/目录、右侧上下文工具栏与正文、底部状态及类型/编码/换行选项。深浅主题使用同一组色值，常用按钮的位置、名称和显隐规则对齐。系统标题栏、Mac 快捷键和文件面板保留平台行为。
-
-构建 8 在构建 7 的 Markdown 表格和图片能力基础上，加入工作区扫描、全局搜索、阅读清单、批注与阅读简报菜单、Markdown 列表快捷写作和 Mermaid 流程图。完整版本对照见 [Mac / Windows 功能对照](docs/Mac-Windows功能对照-v0.18.md)，验收见 [Mac 构建 8](docs/Mac构建8验收.md)。
-
-Windows 0.1–0.18 的完整功能点、Mac 对齐状态和后续验收顺序见 [Mac / Windows 功能对照](docs/Mac-Windows功能对照-v0.18.md)。
-
-## Mac 构建 5 的功能对齐
-
-保留 Mac 原生 AppKit 和当前 0.1.0 产品版本，新增 Markdown 默认预览与可调分屏、本地/内嵌图片、目录与返回位置、图文复制及自包含 HTML、JSON 结构与格式化、橙绿修改行和有限离线时序图。Mac 图标由 Windows 同一份蓝青书页 PNG 生成，不再使用另一套书页外观。
-
-逐项实现、资源边界与本机验证见 [Mac 构建 5 功能对齐](docs/Mac构建5功能对齐.md)。Windows 的 0.3.0 版本、安装器、运行时和验收记录仍独立维护；不能把 Windows 测试结果视为 Mac 已通过。
-
-## 当前功能
-
-- TXT、Markdown、JSON/JSONC、YAML、INI/CONF/CONFIG 和 XML 文本编辑。
-- 普通布局中显示“文件、编辑、搜索、视图、标签、帮助”窗口菜单条，直接点击即可打开常用操作。
-- 多标签、最近文件菜单、快速打开、拖入编辑区、行号、自动换行、跳转行、撤销与重做。
-- 顶部侧栏开关在收起侧栏后仍可使用；标签支持双击或右键重命名。
-- 会话恢复标签顺序、当前标签、阅读模式和内容位置；已保存文件重新读取磁盘，未保存草稿独立恢复。
-- 草稿管理提供全局开关、当前文档排除与清理；不可变快照在后台串行写入。
-- 保存全部、关闭全部，以及标签移动与排序。
-- 查找替换支持大小写、正则、全词、匹配计数与高亮，以及正则捕获组替换。
-- 阅读模式内查找和目录导航，保持阅读模式；源文与阅读视图采用块级对应，便于切换时继续处理同一段内容。
-- 正文版心和专注布局；TXT/Markdown 侧重正文排版，JSON/YAML/配置等文本保留等宽缩进与高亮。
-- Markdown 默认预览，可切源码或左右分屏；标题、列表、任务、删除线、代码、链接和真实表格原生排版。
-- 本地相对/绝对路径位图和内嵌 PNG 异步加载，图片查看缩放、宽表横向阅读；网络图片不自动加载。
-- 选区图文、全文、纯文本、源文、当前代码块和表格复制，以及自包含 HTML 导出。
-- 有限 Mermaid sequenceDiagram 离线预览，未知或超限语法保留完整源码。
-- 阅读与编辑外观设置、系统外观跟随、位置记忆；每个文件可保留自己的阅读/编辑模式。
-- 标签切换快捷键与右键文件操作，复制路径、在 Finder 中显示；窗口位置记忆，关闭窗口与退出应用分开。
-- Tab / Shift+Tab 整行缩进，换行继承缩进。
-- TXT/Markdown/JSON/JSONC/XML 保守格式化，JSON 数字原始词法和重复字段保留；原生 JSON 只读结构可展开/折叠。
-- 行号旁橙色提示未保存修改、绿色提示本次会话已保存的修改；更多常见语言类型识别。
-- UTF-8/BOM、UTF-16 LE/BE、GB18030，保留编码与换行；安全保存、外部修改冲突提示、本机恢复草稿。
-
-完整操作和边界见[使用说明](操作指导/使用说明.md)，本轮变化见[变更记录](CHANGELOG.md)。
-
-已保存文件重命名会修改同目录的磁盘文件名，保留当前未保存的编辑内容；新建文档可以先起名，首次保存时再选位置。同名目标不会被重命名操作覆盖。
-
-常用入口：`⌘F` 阅读内查找，`⌘⇧O` 文档目录，`⌘⇧F` 专注，`⌘⇧[` / `⌘⇧]` 切换标签。`⌘⇧P` 快速定位已打开与最近文件，`⌘⌥S` 保存全部。关闭窗口后应用仍在运行，重启的标签恢复与未保存草稿分别管理，详见使用说明。
-
-![macOS 原生阅读与表格](docs/screenshots/macos-reading.png)
-
-## 平台安排
-
-| 平台 | 当前状态 |
-| --- | --- |
-| Intel Mac，macOS 13+ | 当前客户端和构建目标 |
-| Apple Silicon Mac | 尚未交付原生 ARM 包，也未做实机验收 |
-| Windows x64 | 已实现 WPF 客户端、自包含便携包与深色安装/卸载向导；[实施记录](docs/Windows后续实现.md) |
-| Linux | 后续方向，尚未实施 |
-
-Windows 已在独立目录实现，测试与发布产物按平台记录。Mac 工程与历史验收保持原样。
+![外观主题设置](docs/screenshots/macos-build12-settings.png)
 
 ## 构建与测试
 
-Windows：在 Windows / PowerShell 7 中执行 `pwsh -File 开发空间/Windows/scripts/test.ps1`，
-再用 `pwsh -File 开发空间/Windows/scripts/publish.ps1` 生成 `交付产品/轻阅-Windows-x64/Qingyue.exe` 与 ZIP。
-再用 `pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish` 生成安装 EXE。
-需要 .NET 10 SDK；安装器另需 NSIS 与 MSVC x86 工具链。自包含发布包含运行时。
-安装可选位置，卸载默认保留用户信息，彻底清理需二次确认。Windows 验收见 [docs/test.md](docs/test.md)。
-
-安装 Xcode Command Line Tools 后，在仓库根目录运行：
+依赖 Xcode Command Line Tools。
 
 ```bash
 bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
 ```
 
-应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `10`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
+构建输出到 `交付产品/轻阅-macOS-0.2.0/轻阅.app`，同时生成 SHA256SUMS 和交付 ZIP。当前为 Intel macOS 13+、x86_64、ad-hoc 本机签名；未做 Developer ID、公证和 Apple Silicon 实机验收。
 
-当前脚本编译 Intel macOS 13 目标，执行 ad-hoc 本机签名；正式 Developer ID 签名、公证及自动更新仍待后续处理。构建不会自动替换 `/Applications` 中已安装的副本。
+## 文档
 
-## 范围与性能
+- [Mac 构建 12 验收](docs/Mac构建12验收.md)
+- [Mac 构建 12 挑刺记录](docs/Mac构建12挑刺记录.md)
+- [配色方案参考库](docs/配色方案.md)
+- [使用说明](操作指导/使用说明.md)
 
-优先保证轻量与可靠读写。单文件上限 50 MiB；Mac 与 Windows 的 Markdown 富预览上限分别见各平台说明，本轮 Mac 为 500,000 个 UTF-16 单元；源码高亮与实时诊断仍有独立预算，内嵌图片负载另计资源限制；搜索上限 5,000,000 单元，复杂正则有时间预算。安装体积与占用应以每个构建的实际验收为准，历史小文件快照不是大文档性能保证。
+## 平台说明
 
-Markdown 仍为轻量原生排版。Mac 与 Windows 均支持受限的本地位图及内嵌 Base64 PNG；不执行脚本或自动下载远程图片。原文与阅读内容的定位是块级近似，不承诺任意字符选区都精确互转。完整 CommonMark/GFM、完整 YAML 校验、多窗口、目录全局搜索、超大日志、Office 文档、云同步与插件尚未实现。
-
-文件写回仍由用户明确保存；恢复草稿存放在本机应用支持目录，不等同于保存原文。会话只记录文件引用、标签与显示状态；草稿单独记录未写回内容，是否保留由恢复策略与关闭时的选择决定。
-
-![Mac 构建2的专注阅读](docs/screenshots/macos-focus-build2.png)
-
-本轮验证见[Mac 构建 8 验收](docs/Mac构建8验收.md)，[Mac 构建 5 功能对齐](docs/Mac构建5功能对齐.md)保留，此前的[构建 4 验收](docs/Mac构建4验收.md)、[构建 3 验收](docs/Mac构建3验收.md)和[构建 2 验收](docs/Mac构建2验收.md)保留；Windows 的独立处理记录见[Windows后续实现](docs/Windows后续实现.md)。
+- Intel Mac：当前客户端与构建目标。
+- Apple Silicon：尚未交付原生 ARM 包，未做实机验收。
+- Windows：独立 WPF 实现保留在 `开发空间/Windows`，版本 0.18.0；Windows 构建、安装器和验收需在 Windows 环境单独进行，不计入本轮 Mac 交付。

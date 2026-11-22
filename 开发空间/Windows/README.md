@@ -50,7 +50,7 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 默认使用天空蓝，用户可在“视图 → 阅读外观”中切换，选择保存到本机 `Settings.json`，
 重启后继续使用；安装包、EXE 和资源管理器固定使用天空蓝。
 构建 2 在 WPF 启动阶段启用软件渲染，规避部分显卡驱动路径造成的异常 native render memory
-占用；本机完整窗口验证约 62–75 MB 私有内存，具体结果见 `docs/test.md`。
+占用；本机完整窗口验证约 62–75 MB 私有内存，具体结果需在 Windows 环境重新验收；历史记录保留在 Git 历史。
 0.14.0 增加 Markdown 层次参考线、嵌套容器排版、表格编辑和截图插图。
 输入和保存仍使用原生 TextBox 与标准 Markdown，预览和复制使用真实嵌套列表。
 批注、书签、设置、阅读清单和恢复数据默认写入
@@ -58,7 +58,7 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 本版本只支持本机数据，不提供账号、云同步或历史数据迁移。
 
 测试产物在 `artifacts`，不纳入 Git。GUI 流程测试需要可用的 Windows 交互桌面。
-手工验收范围与结果见仓库 `docs/test.md`，用户操作见 `操作指导/Windows使用说明.md`。
+手工验收需在 Windows 环境单独执行，用户操作见 `操作指导/Windows使用说明.md`。
 
 安装器使用自定义 NSIS 对话框和原生深色控件，提供可选路径、快捷方式、系统卸载入口。
 正式安装以管理员权限写入 `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall`，
@@ -71,6 +71,6 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 继续运行 `scripts/test-installer-purge.ps1`，可通过共用生产删除宏验证彻底清理并移除测试安装；
 运行 `scripts/build-wizard-preview.ps1` 生成卸载页面预览，预览不包含文件、注册、安装或删除动作。
 危险路径只通过不含安装操作的校验程序检查。最终安装/清理测试分别通过 25/10 项；
-正式本机安装另有 12 项验收，记录见 `docs/test.md`。原生图标可用
+正式本机安装验收需在 Windows 环境单独执行。原生图标可用
 `powershell.exe -NoProfile -STA -File 开发空间/Windows/scripts/build-brand-assets.ps1` 离线重建。
 安装器第三方来源和许可见 `installer/UPSTREAM.md`。

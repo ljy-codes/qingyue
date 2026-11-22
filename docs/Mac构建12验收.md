@@ -53,7 +53,7 @@
 
 ## 构建与安装
 
-- `bash 开发空间/scripts/build.sh` 通过，输出 `交付产品/轻阅.app`，约 3.1 MB。
+- `bash 开发空间/scripts/build.sh` 通过，输出 `交付产品/轻阅-macOS-0.2.0/轻阅.app`，并生成 `SHA256SUMS.txt` 与 `轻阅-macOS-0.2.0-交付.zip`。
 - 安装到 `/Applications/轻阅.app`，读取 `0.2.0` / `CFBundleVersion=12`；`codesign --verify --deep --strict` 通过；安装版与交付版 `LightReader` SHA-256 一致。
 - “关于轻阅”显示“版本 0.2.0 · Mac 构建 12 (12)”。
 - 设置窗口实测：7 张主题卡、阅读/编辑预览、主题/图标/字号/字体/行距/段距/版心控件均存在；切换“咖色暖读”后预览与 `readerThemeID` 即时更新，再切回“墨蓝深色”恢复。
