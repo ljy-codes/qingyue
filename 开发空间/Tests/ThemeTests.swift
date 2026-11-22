@@ -20,7 +20,7 @@ struct ThemeTests {
                 let accentForeground = theme.accentForeground.readerContrastRatio(with: theme.accent)
                 try expect(body >= 4.5, "\(id.rawValue) \(mode) body contrast \(body)")
                 try expect(muted >= 4.5, "\(id.rawValue) \(mode) muted contrast \(muted)")
-                try expect(accent >= 2.5, "\(id.rawValue) \(mode) accent contrast \(accent)")
+                try expect(accent >= 3.0, "\(id.rawValue) \(mode) accent contrast \(accent)")
                 try expect(accentText >= 4.5, "\(id.rawValue) \(mode) accentText contrast \(accentText)")
                 try expect(accentForeground >= 4.5, "\(id.rawValue) \(mode) accentForeground contrast \(accentForeground)")
                 try expect(theme.window != theme.panel && theme.window != theme.editor, "\(id.rawValue) \(mode) surface hierarchy")

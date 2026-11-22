@@ -12,7 +12,7 @@ struct AppearanceParityTests {
         let expectedDark: [(NSColor, UInt32)] = [
             (dark.window, 0x191B1F), (dark.panel, 0x23262B), (dark.main, 0x24354A), (dark.editor, 0x30343A),
             (dark.text, 0xE8E2D8), (dark.muted, 0xBEB8AE), (dark.border, 0x4B4D52),
-            (dark.accent, 0x2F6FDB), (dark.selection, 0x355A91), (dark.hover, 0x34383F),
+            (dark.accent, 0x4F86F7), (dark.selection, 0x355A91), (dark.hover, 0x34383F),
             (dark.accentText, 0x8DC5FF), (dark.palette.key, 0x8DC5FF),
             (dark.palette.string, 0xFFD39A), (dark.palette.number, 0x82DFC9),
             (dark.palette.comment, 0xC3C9BF), (dark.unsaved, 0xFFC078), (dark.saved, 0x7BDEB3)

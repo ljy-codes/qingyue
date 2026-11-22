@@ -68,7 +68,7 @@ struct LayoutParityTests {
         try expect(frame(tools, root).minX >= frame(sidebar, root).maxX - 1, "context toolbar belongs only to the right document area")
         let headerButtons = visibleButtons(header)
         let mainActions = headerButtons.filter { !$0.title.isEmpty }.map { $0.title }
-        try expect(mainActions.count == 4 && mainActions[0] == "打开文件" && mainActions[1] == "保存" && mainActions[3] == "专注", "header contains only the Windows four primary actions")
+        try expect(mainActions.count == 5 && mainActions[0] == "打开文件" && mainActions[1] == "保存" && mainActions[3] == "专注" && mainActions[4] == "设置", "header contains the Windows primary actions plus settings")
         let sidebarToggle = try required(headerButtons.first { $0.accessibilityLabel() == "显示或隐藏侧栏" || $0.title.isEmpty }, "sidebar icon remains in the brand header")
         try expect(abs(sidebarToggle.frame.width - 30) <= 1, "sidebar control uses the compact 30-point icon layout")
         let branding = descendants(header).compactMap { $0 as? NSTextField }
@@ -79,7 +79,7 @@ struct LayoutParityTests {
         let plus = try required(visibleButtons(tabs).first { $0.title == "+" }, "tab-row plus is directly clickable")
         let plusFrame = frame(plus, root)
         try expect(plusFrame.maxX >= root.bounds.width - 20 && plusFrame.minY >= frame(tabs, root).minY, "new-document plus belongs to the far right of the full-width tab row")
-        try expect(!headerButtons.contains { $0.title == "新建" || $0.title == "设置" || $0.title.contains("导出") }, "legacy extra header actions are absent")
+        try expect(!headerButtons.contains { $0.title == "新建" || $0.title.contains("导出") }, "legacy extra header actions are absent")
         try expect(visibleButtons(sidebar).prefix(2).map { $0.title } == ["最近打开", "文档目录"], "sidebar categories follow Windows ordering")
         try checkFooter(footer, root: root)
         try expect(sidebar as? ColorView != nil && (sidebar as! ColorView).radius == 0, "workspace sidebar does not retain the old rounded-card shape")

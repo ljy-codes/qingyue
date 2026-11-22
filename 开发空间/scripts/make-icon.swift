@@ -29,7 +29,14 @@ func paintIcon(pixels: Int) throws -> Data {
         .appendingPathComponent("Resources/IconThemes/Qingyue-sky.png")
     guard let image = NSImage(contentsOf: source) else { throw NSError(domain: "QingyueSharedIcon", code: 1) }
     context.imageInterpolation = .high
-    image.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels), from: .zero, operation: .copy, fraction: 1)
+    // The source PNG already carries a small transparent margin. Draw it at
+    // 90% of the canvas so the visible artwork lands near the macOS optical
+    // icon grid instead of looking oversized beside system apps.
+    let margin = CGFloat(pixels) * 0.05
+    image.draw(in: NSRect(x: margin, y: margin,
+                         width: CGFloat(pixels) - margin * 2,
+                         height: CGFloat(pixels) - margin * 2),
+               from: .zero, operation: .copy, fraction: 1)
     NSGraphicsContext.restoreGraphicsState()
     guard let png = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "LightReaderIcon", code: 2)

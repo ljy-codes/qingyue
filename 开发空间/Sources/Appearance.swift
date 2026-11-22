@@ -121,7 +121,7 @@ enum ReaderThemeCatalog {
             return dark
                 ? ReaderThemeDefinition(window: 0x191B1F, panel: 0x23262B, editor: 0x30343A,
                                         text: 0xE8E2D8, muted: 0xBEB8AE, border: 0x4B4D52,
-                                        accent: 0x2F6FDB, selection: 0x355A91,
+                                        accent: 0x4F86F7, selection: 0x355A91,
                                         string: 0xFFD39A, number: 0x82DFC9, key: 0x8DC5FF, comment: 0xC3C9BF,
                                         main: 0x24354A, hover: 0x34383F, accentText: 0x8DC5FF,
                                         unsaved: 0xFFC078, saved: 0x7BDEB3)

@@ -1,6 +1,6 @@
 # 轻阅 · 开发空间
 
-产品版本为 **0.2.0**，本轮 **Mac 构建 11**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
+产品版本为 **0.2.0**，本轮 **Mac 构建 12**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
 
 本机只维护 Mac 客户端。Windows 的独立实现要求记录在上一级 `docs/Windows后续实现.md`，没有 Windows 工程、客户端或安装包。
 

@@ -126,6 +126,7 @@ final class ReaderMenus {
         item(view, "显示 / 隐藏侧栏", #selector(ReaderWindow.toggleSidebar(_:)), "b", target: reader)
         item(view, "自动折行（仅显示，不改文件）", #selector(ReaderWindow.toggleWrap(_:)), target: reader)
         item(view, "显示 / 隐藏行号", #selector(ReaderWindow.toggleLineNumbers(_:)), target: reader)
+        item(view, "阅读外观与设置…", #selector(ReaderWindow.showPreferences(_:)), target: reader)
         item(view, "阅读清单…", #selector(ReaderWindow.showReadingList(_:)), target: reader)
         item(view, "加入当前文档到阅读清单", #selector(ReaderWindow.addCurrentToReadingList(_:)), target: reader)
         item(view, "标记当前文档已读", #selector(ReaderWindow.markCurrentRead(_:)), target: reader)

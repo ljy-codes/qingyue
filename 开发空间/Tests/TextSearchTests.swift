@@ -54,8 +54,14 @@ struct TextSearchTests {
         do { _ = try TextSearch.matches(in: "abc", query: "[", options: regex); fatalError("Expected invalid regex") }
         catch let error as TextSearchError { expect(error.localizedDescription.contains("正则表达式无效"), "Regex error is readable") }
         try expect(TextSearch.matches(in: "[", query: "[", options: insensitive).count == 1, "Invalid regex syntax is valid literal query")
-        do { _ = try TextSearch.matches(in: String(repeating: "x", count: TextSearch.maximumTextLength + 1), query: "x", options: insensitive); fatalError("Expected text limit") }
+        do { try TextSearch.validateTextLength(TextSearch.maximumTextLength + 1); fatalError("Expected text limit") }
         catch TextSearchError.textTooLarge { checks += 1 }
+        do { try TextSearch.validateTextLength(TextSearch.maximumTextLength); checks += 1 }
+        catch { fatalError("The maximum supported length must be accepted") }
+        let largeText = String(repeating: "a", count: 6_000_000) + "needle"
+        let largeMatches = try TextSearch.matches(in: largeText, query: "needle", options: insensitive)
+        checks += largeMatches.count == 1 ? 1 : 0
+        if largeMatches.count != 1 { fatalError("Large text search must find the literal tail") }
         do { _ = try TextSearch.matches(in: "x", query: String(repeating: "x", count: 4_097), options: insensitive); fatalError("Expected query limit") }
         catch TextSearchError.queryTooLong { checks += 1 }
         do { _ = try TextSearch.matches(in: "x", query: "x", replacement: String(repeating: "x", count: 1_000_001), options: insensitive); fatalError("Expected replacement limit") }

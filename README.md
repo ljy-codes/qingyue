@@ -4,7 +4,7 @@
 
 A lightweight local text reader and editor for macOS and Windows.
 
-macOS 当前为 **0.2.0 · Mac 构建 11**。本轮保留构建 10 的全部功能，新增 7 套外观主题、主题 token 与配色资料。下载入口仍以已发布的 Mac 构建 10 为准；构建 11 为本地升级验证版。下载：[Mac 构建 10 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-10)；[Mac 构建 9](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)、[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+macOS 当前为 **0.2.0 · Mac 构建 12**。本轮保留构建 10 的全部功能，新增 7 套外观主题、独立设置窗口、实时预览，并修复大文件查找、关闭窗口保留标签、深色强调色对比和图标留白。下载入口仍以已发布的 Mac 构建 10 为准；构建 12 为本地升级验证版。下载：[Mac 构建 10 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-10)；[Mac 构建 9](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-9)、[Mac 构建 8](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-8)、[Mac 构建 7](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-7)、[Mac 构建 6](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-6)、[Mac 构建 5](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-5)、[Mac 构建 4](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)、[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
 
 macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
 
@@ -23,9 +23,9 @@ JSON 结构折叠、本地图片与有限 Mermaid 图形；保留安全保存、
 本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)。
 下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
 
-## Mac 构建 11 的外观主题
+## Mac 构建 12 的外观与设置
 
-在构建 10 的完整功能集上新增 7 套外观主题：经典、咖色暖读、青瓷古色、海盐蓝、烟雨紫、墨蓝深色、纸白极简。主题覆盖窗口、侧栏、主体层、编辑器、文字、边框、强调、选区、语法高亮、修改行标记等 token；`ReaderTheme(dark:)` 和暖纸模式保持兼容。
+在构建 10 的完整功能集上新增 7 套外观主题：经典、咖色暖读、青瓷古色、海盐蓝、烟雨紫、墨蓝深色、纸白极简。主题覆盖窗口、侧栏、主体层、编辑器、文字、边框、强调、选区、语法高亮、修改行标记等 token；`ReaderTheme(dark:)` 和暖纸模式保持兼容。设置改为独立窗口，主题卡与阅读/编辑预览实时更新；主窗口右上角和“视图”菜单都提供“设置 / 阅读外观与设置…”入口。
 
 设置中的“外观主题”可选择 7 套主题，“明暗外观”切换深浅；原有四款应用图标继续保留。独立配色资料见 [配色方案参考库](docs/配色方案.md)。
 
