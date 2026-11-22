@@ -27,6 +27,9 @@ struct ThemeTests {
             }
         }
         try expect(ReaderTheme(dark: false, warmPaper: true).id == .coffee, "warm paper migrates to coffee")
+        let legacyWarm = ReaderTheme(dark: true, warmPaper: true)
+        try expect(legacyWarm.id == .coffee && legacyWarm.dark == false, "legacy warm paper stays light regardless of stored dark flag")
+        try expect(legacyWarm.editor.readerContrastRatio(with: legacyWarm.text) >= 4.5, "legacy warm paper keeps readable text")
         try expect(ReaderTheme(dark: true).id == .classic, "legacy dark stays classic")
         try expect(ReaderThemeID.stored("coffee") == .coffee, "theme identifier restores")
         try expect(ReaderThemeID.stored(nil, legacy: "WarmPaper") == .coffee, "legacy warm paper setting migrates")

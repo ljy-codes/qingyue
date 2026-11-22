@@ -221,6 +221,18 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
         bookmarkStore = BookmarkStore(root: dataDirectory)
         restoreNotices.append(contentsOf: bookmarkStore.load())
         if let path = UserDefaults.standard.string(forKey: "workspaceRoot") { workspaceRoot = URL(fileURLWithPath: path) }
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: "readerThemeID") == nil, defaults.string(forKey: "readerTheme") == "WarmPaper" {
+            if defaults.object(forKey: "followSystemAppearance") as? Bool ?? true {
+                // Build 10 only applied warm paper while system following was off.
+                themeID = .classic
+            } else {
+                themeID = .coffee
+                dark = false
+                defaults.set(ReaderThemeID.coffee.rawValue, forKey: "readerThemeID")
+                defaults.set(false, forKey: "dark")
+            }
+        }
         buildInterface()
         applyTheme()
         if !win.setFrameUsingName("QingyueMainWindow") { win.center() }

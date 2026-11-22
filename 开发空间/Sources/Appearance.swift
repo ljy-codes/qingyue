@@ -204,7 +204,7 @@ struct ReaderTheme {
     let dark: Bool
 
     init(dark: Bool) { self.init(id: .classic, dark: dark) }
-    init(dark: Bool, warmPaper: Bool) { self.init(id: warmPaper ? .coffee : .classic, dark: dark) }
+    init(dark: Bool, warmPaper: Bool) { self.init(id: warmPaper ? .coffee : .classic, dark: warmPaper ? false : dark) }
     init(id: ReaderThemeID, dark: Bool) { self.id = id; self.dark = dark }
 
     var warmPaper: Bool { id == .coffee }

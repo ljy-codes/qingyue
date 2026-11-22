@@ -7,7 +7,7 @@
 - 保留构建 10 的分屏编辑、本地/内嵌图片、Markdown 表格编辑、Mermaid 时序图/流程图、图文复制与 HTML 导出、工作区、全局搜索、阅读清单、书签、批注、JSON 结构、格式化、修改行标记、四款应用图标等能力。
 - 新增 7 套主题：经典、咖色暖读、青瓷古色、海盐蓝、烟雨紫、墨蓝深色、纸白极简。
 - `ReaderTheme` 增加 `ReaderThemeID` 和 `ReaderThemeCatalog`，覆盖窗口、侧栏、主体层、编辑器、文字、次要文字、边框、强调、选区、hover、语法高亮、修改/保存标记。
-- 旧 `readerTheme`（Dark/Light/WarmPaper）自动迁移到 `readerThemeID`；`ReaderTheme(dark:)` 与暖纸兼容构造保留。
+- 旧 `readerTheme`（Dark/Light/WarmPaper）自动迁移到 `readerThemeID`；暖纸只在构建 10 原本启用暖纸且未跟随系统时迁移为咖色暖读浅色，避免深浅反转。`ReaderTheme(dark:)` 与暖纸兼容构造保留。
 - 设置增加外观主题和明暗外观，保留四款图标、阅读字体、行距、段距、版心、跟随系统。
 
 ## 自动检查
@@ -19,7 +19,7 @@
 - ReadingDocumentTests：331
 - LineIndexTests：6147
 - TextSearchTests：1038
-- ThemeTests：105（7 套主题 × 明暗 token 与对比度）
+- ThemeTests：107（7 套主题 × 明暗 token、对比度与旧暖纸兼容）
 - TextAnchorMapperTests：5
 - BookmarkStoreTests：15
 - AnnotationStoreTests：31
@@ -37,7 +37,7 @@
 - QuickOpenTests：35
 - MermaidSequenceTests：74
 - FormattingParityTests：192
-- RichReadingTests：92（CLI 环境无专用粘贴板服务，其余检查通过）
+- RichReadingTests：93（CLI 环境无专用粘贴板服务，其余检查通过）
 - MarkdownBreakTests：58
 - UIWorkflowTests：87
 - WindowMenuBarTests：27
