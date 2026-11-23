@@ -34,10 +34,16 @@
 构建产物 SHA256（交付目录内 `SHA256SUMS.txt`）：
 
 ```text
-efe05c107bb4ebc5a9635d8a1ac14d6558c2aeb6faeb6ae3fa63f2ff20fd64bb  轻阅.app/Contents/MacOS/LightReader
+b2d2e71787b0e6563bfc94ce1c779b11b8a1cf257e99e0b509752f4ebe1ae611  轻阅.app/Contents/MacOS/LightReader
 6e2e3be658d7a9b0427dc0ea77f227c45a619a382f8fa2c6aac4275bfcea5d19  轻阅.app/Contents/Info.plist
 998884b9da9c6c4e77118dd88656c3669e90a5ce9617ba68b92aa7859697da83  轻阅.app/Contents/Resources/AppIcon.icns
-be14fcc835bbeba4a709006c66d066d5597da1f97b516b5017574478937edf6a  使用说明.md
+95a240812d77d105405a937e00cfed8a22064845fd9ab6c0a38841695adbbd72  使用说明.md
 ```
 
 失败或延期项应记录复现命令、日志位置和后续负责人；不要用手工截图或历史构建结果代替本构建的检查结果。
+
+## GitHub 整理复核（2026-11-23）
+
+- 更新检查支持 `vX.Y.Z-macos`，保留旧 Mac 构建标签兼容，忽略 Windows 标签；新增针对性回归 `UpdateServiceTests: 37 checks passed`。
+- 先推送 Mac 源码，再统一 main / macos / windows 分支和 Mac 平台标签；新包校验通过后清理旧 Mac 发布项。Windows 分支内容保持历史提交。
+- CI 目前以 `docs/ci/macos.yml.template` 提供，尚未启用，云端测试没有宣称通过。

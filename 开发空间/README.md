@@ -1,6 +1,6 @@
 # 轻阅 · 开发空间
 
-当前版本：**0.4.0 · Mac 构建 14（发布准备）**。目标为 Intel 与 Apple Silicon Mac / macOS 13+，使用 Swift、AppKit 和系统文本组件，无第三方运行时。
+当前版本：**0.4.0 · Mac 构建 14（预览版）**。目标为 Intel 与 Apple Silicon Mac / macOS 13+，使用 Swift、AppKit 和系统文本组件，无第三方运行时。
 
 ## 目录
 

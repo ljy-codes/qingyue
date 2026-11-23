@@ -1293,12 +1293,14 @@ final class ReaderWindow: NSWindowController, NSWindowDelegate, NSTextViewDelega
     @objc func checkForUpdates(_ sender: Any?) {
         updateRequest?.cancel(); updateStatus("正在检查 Mac 更新…")
         let build = Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "8") ?? 8
-        updateRequest = QingyueUpdateService.checkMac(currentBuild: build) { [weak self] result in
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.4.0"
+        updateRequest = QingyueUpdateService.checkMac(currentBuild: build, currentVersion: version) { [weak self] result in
             guard let self else { return }; self.updateRequest = nil
             switch result {
             case .success(let release?):
-                if self.alert("发现 Mac 构建 \(release.build)", "打开 GitHub 发布页下载 Mac 更新。", buttons: ["打开发布页", "稍后"]) == .alertFirstButtonReturn { NSWorkspace.shared.open(release.url) }
-            case .success(nil): self.updateStatus("没有比当前构建更新的 Mac 发布包")
+                let title = release.version.map { "发现 Mac \($0.stringValue)" } ?? "发现 Mac 构建 \(release.build ?? build)"
+                if self.alert(title, "打开 GitHub 发布页下载 Mac 更新。", buttons: ["打开发布页", "稍后"]) == .alertFirstButtonReturn { NSWorkspace.shared.open(release.url) }
+            case .success(nil): self.updateStatus("没有比当前版本更新的 Mac 发布包")
             case .failure(let error): self.updateStatus("更新检查未完成 · \(error.localizedDescription)")
             }
         }
