@@ -18,7 +18,7 @@ public sealed partial class RenderedReading
         double fontSize, double readingWidth)
     {
         return Markdown(model, text, sourcePath,
-            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth);
     }
 
     internal static RenderedReading Markdown(ReadingModel model, string text, string? sourcePath,
@@ -38,7 +38,7 @@ public sealed partial class RenderedReading
     public static async Task<RenderedReading> MarkdownAsync(ReadingModel model, string original,
         string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
         => await MarkdownAsync(model, original, sourcePath,
-            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth, token);
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth, token);
 
     public static async Task<RenderedReading> MarkdownAsync(ReadingModel model, string original,
         string? sourcePath, ReadingPresentation presentation, double readingWidth, CancellationToken token)

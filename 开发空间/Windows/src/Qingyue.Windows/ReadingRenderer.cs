@@ -20,7 +20,7 @@ public sealed partial class RenderedReading
     {
         PagePadding = new Thickness(36, 28, 36, 60), ColumnWidth = double.PositiveInfinity,
         FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"), FontSize = 16,
-        LineHeight = 27, TextAlignment = TextAlignment.Left
+        LineHeight = ReadingPresentation.Default.LineHeightPixels, TextAlignment = TextAlignment.Left
     };
 
     public RenderedReading(ReadingModel model, bool renderMermaid = true, string? sourcePath = null,
@@ -29,7 +29,7 @@ public sealed partial class RenderedReading
         var normalized = (presentation ?? ReadingPresentation.Default).Normalize();
         Document.FontFamily = new FontFamily(normalized.FontFamily);
         Document.FontSize = normalized.FontSize;
-        Document.LineHeight = normalized.FontSize * normalized.LineHeight;
+        Document.LineHeight = normalized.LineHeightPixels;
         Document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
         var diagramBudget = new MermaidBlock.Budget();
         // Core intentionally exposes only visible image labels. The host can supply the
@@ -79,7 +79,7 @@ public sealed partial class RenderedReading
     // Style only: the single Run and its text must stay intact for PointerAt/OffsetAt.
     internal static void StyleBlock(Paragraph paragraph, ReadingBlock block, double fontSize) =>
         StyleBlock(paragraph, block, new ReadingPresentation(
-            "Microsoft YaHei UI", fontSize, 1.75, 13));
+            "Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13));
 
     internal static void StyleBlock(Paragraph paragraph, ReadingBlock block,
         ReadingPresentation presentation)
@@ -96,13 +96,13 @@ public sealed partial class RenderedReading
                 paragraph.SetResourceReference(Paragraph.ForegroundProperty,
                     level == 1 ? "AccentTextBrush" : level == 2 ? "SyntaxKeyBrush" : "TextBrush");
                 paragraph.Margin = new Thickness(0, fontSize * (level switch { 1 => 1.75, 2 => 1.5, _ => 1.25 }), 0, fontSize * .75);
-                paragraph.LineHeight = paragraph.FontSize * Math.Min(1.75, presentation.LineHeight);
+                paragraph.LineHeight = presentation.LineHeightFor(paragraph.FontSize);
                 paragraph.KeepWithNext = true;
                 break;
             case ReadingBlockKind.Code:
                 paragraph.FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI");
                 paragraph.FontSize = fontSize * .9;
-                paragraph.LineHeight = fontSize * 1.6;
+                paragraph.LineHeight = presentation.LineHeightFor(paragraph.FontSize);
                 paragraph.Padding = new Thickness(16, 12, 16, 12);
                 paragraph.Margin = new Thickness(0, 8, 0, 18);
                 paragraph.BorderThickness = new Thickness(1);
@@ -157,7 +157,7 @@ public sealed partial class RenderedReading
     /// </summary>
     public void UpdatePresentation(RichTextBox host, double fontSize, double readingWidth)
         => UpdatePresentation(host, new ReadingPresentation(
-            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+            "Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth);
 
     public void UpdatePresentation(RichTextBox host, ReadingPresentation presentation, double readingWidth)
     {
@@ -169,7 +169,7 @@ public sealed partial class RenderedReading
 
     internal static void ApplyPresentation(RichTextBox host, double fontSize, double readingWidth)
         => ApplyPresentation(host, new ReadingPresentation(
-            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+            "Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth);
 
     internal static void ApplyPresentation(RichTextBox host, ReadingPresentation value, double readingWidth)
     {
@@ -183,7 +183,7 @@ public sealed partial class RenderedReading
         var document = host.Document;
         double oldFontSize = document.FontSize;
         bool fontChanged = oldFontSize != fontSize
-            || document.LineHeight != fontSize * presentation.LineHeight
+            || document.LineHeight != presentation.LineHeightPixels
             || !string.Equals(document.FontFamily.Source, presentation.FontFamily, StringComparison.OrdinalIgnoreCase);
         var oldPadding = document.PagePadding;
         double vertical = host.VerticalOffset, horizontal = host.HorizontalOffset;
@@ -191,7 +191,7 @@ public sealed partial class RenderedReading
         {
             document.FontFamily = new FontFamily(presentation.FontFamily);
             document.FontSize = fontSize;
-            document.LineHeight = fontSize * presentation.LineHeight;
+            document.LineHeight = presentation.LineHeightPixels;
             foreach (var block in document.Blocks)
                 UpdateBlockPresentation(block, presentation, fontSize / oldFontSize);
         }

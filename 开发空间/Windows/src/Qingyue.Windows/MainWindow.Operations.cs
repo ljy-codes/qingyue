@@ -199,7 +199,8 @@ public partial class MainWindow
             Kind = kind;
             FontSize = fontSize;
             ReadingWidth = readingWidth;
-            Presentation = new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13);
+            Presentation = new ReadingPresentation(
+                "Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13);
             Generation = generation;
             Cancellation = cancellation;
         }

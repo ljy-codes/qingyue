@@ -10,6 +10,7 @@ internal static partial class Program
     private static void PresentationChecks()
     {
         Test("presentation synchronizes existing heading code table and image caption styles", PresentationStyles);
+        Test("reading line height uses pixel spacing contract", ReadingLineHeightPixels);
         Test("split presentation keeps the document selection scroll and decoded image", SplitPresentation);
         Test("full and single Run presentation keep selection scroll and search mapping", ReadingPresentation);
         Test("presentation settings remain active for later text updates", PresentationThenText);
@@ -63,11 +64,15 @@ internal static partial class Program
                 double factor = level switch { 1 => 2, 2 => 1.6, 3 => 1.35, 4 => 1.2, 5 => 1.1, _ => 1 };
                 Check(Math.Abs(heading.FontSize - fontSize * factor) < .001,
                     $"字号 {fontSize} 时 H{level} 仍为 {heading.FontSize}，应为 {fontSize * factor}");
-                Check(Math.Abs(heading.LineHeight - heading.FontSize * 1.75) < .001, "标题行高未跟随当前阅读外观的默认行距");
+                Check(Math.Abs(heading.LineHeight - new ReadingPresentation(
+                    "Microsoft YaHei UI", fontSize, 6, 13).LineHeightFor(heading.FontSize)) < .001,
+                    "标题行高未使用阅读像素行高契约");
             }
             var code = paragraphs.First(p => p.Tag is ReadingBlock { Kind: ReadingBlockKind.Code });
             Check(Math.Abs(code.FontSize - fontSize * .9) < .001 &&
-                Math.Abs(code.LineHeight - fontSize * 1.6) < .001, "代码字号或行高没有更新");
+                Math.Abs(code.LineHeight - new ReadingPresentation(
+                    "Microsoft YaHei UI", fontSize, 6, 13).LineHeightFor(code.FontSize)) < .001,
+                "代码字号或行高没有更新");
             Check(Math.Abs(document.Blocks.OfType<Table>().Single().FontSize - fontSize * .9) < .001,
                 "表格字号没有更新");
             Check(Math.Abs(caption.FontSize - Math.Max(11, fontSize * .8)) < .001, "图注字号或小字号下限错误");
@@ -78,6 +83,30 @@ internal static partial class Program
             Check(ReferenceEquals(document, preview.Document) && document.Blocks.SequenceEqual(blocks) &&
                 paragraphs.SelectMany(p => p.Inlines.OfType<Run>()).SequenceEqual(runs), "呈现设置重建了文档或 Run");
         }
+    }
+
+    private static void ReadingLineHeightPixels()
+    {
+        var fourteen = new ReadingPresentation("Microsoft YaHei UI", 14, 6, 13);
+        var thirty = new ReadingPresentation("Microsoft YaHei UI", 30, 11, 13);
+        var preview = new MarkdownPreview("# 标题\n\n正文", fourteen, 680);
+        var heading = (Paragraph)preview.Document.Blocks.FirstBlock;
+        var body = (Paragraph)preview.Document.Blocks.Skip(1).First();
+
+        Check(Math.Abs(fourteen.LineHeightPixels - 24.62) < .001,
+            $"14 / 6 应得到 24.62 像素，实际为 {fourteen.LineHeightPixels}");
+        Check(Math.Abs(thirty.LineHeightPixels - 50.9) < .001,
+            $"30 / 11 应得到 50.9 像素，实际为 {thirty.LineHeightPixels}");
+        Check(Math.Abs(preview.Document.LineHeight - fourteen.LineHeightPixels) < .001 &&
+            Math.Abs(body.LineHeight - fourteen.LineHeightPixels) < .001,
+            "正文渲染不应把像素行距再次乘以字号");
+        Check(Math.Abs(heading.LineHeight - fourteen.LineHeightFor(heading.FontSize)) < .001,
+            "标题渲染应按标题字号计算像素行高");
+        Check(Math.Abs(new MarkdownPreview("# 标题\n\n正文", thirty, 680).Document.LineHeight -
+            thirty.LineHeightPixels) < .001,
+            "大字号正文未使用 30 / 11 像素行高契约");
+        Check(Math.Abs(fourteen.LineHeightFor(14) - 14 * 1.75) > .001,
+            "旧 1.75 倍率误用仍可能伪装成像素行高");
     }
 
     private static void AssertPositionPreserved(RichTextBox host, Action update, string context)

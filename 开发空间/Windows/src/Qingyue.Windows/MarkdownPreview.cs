@@ -29,7 +29,7 @@ public sealed class MarkdownPreview : RichTextBox
 
     public MarkdownPreview(string text, double fontSize, double readingWidth, string? sourcePath = null,
         bool includeDiagramSource = false)
-        : this(new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13),
+        : this(new ReadingPresentation("Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13),
             readingWidth, sourcePath, includeDiagramSource)
     {
         Update(text);
@@ -100,7 +100,7 @@ public sealed class MarkdownPreview : RichTextBox
     /// </summary>
     public void UpdatePresentation(double fontSize, double readingWidth)
         => UpdatePresentation(new ReadingPresentation(
-            "Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth);
+            "Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth);
 
     public void UpdatePresentation(ReadingPresentation value, double readingWidth)
     {
@@ -132,7 +132,7 @@ public sealed class MarkdownPreview : RichTextBox
             string safeText = MarkdownImages.Extract(text).FallbackText(text);
             document = new FlowDocument(new Paragraph(new Run(safeText)) { Margin = new Thickness(0) })
             {
-                FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
+                FontFamily = FontFamily, FontSize = FontSize, LineHeight = presentation.LineHeightPixels,
                 ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left
             };
             document.SetResourceReference(FlowDocument.ForegroundProperty, "TextBrush");
@@ -155,7 +155,7 @@ public sealed class MarkdownPreview : RichTextBox
     internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
         string? sourcePath, double fontSize, double readingWidth, CancellationToken token)
         => await BuildDocumentAsync(model, text, sourcePath,
-            new ReadingPresentation("Microsoft YaHei UI", fontSize, 1.75, 13), readingWidth, token);
+            new ReadingPresentation("Microsoft YaHei UI", fontSize, ReadingPresentation.Default.LineSpacing, 13), readingWidth, token);
 
     internal static async Task<FlowDocument> BuildDocumentAsync(ReadingModel model, string text,
         string? sourcePath, ReadingPresentation presentation, double readingWidth, CancellationToken token)
@@ -209,7 +209,7 @@ public sealed class MarkdownPreview : RichTextBox
     {
         var document = new FlowDocument
         {
-            FontFamily = FontFamily, FontSize = FontSize, LineHeight = FontSize * presentation.LineHeight,
+            FontFamily = FontFamily, FontSize = FontSize, LineHeight = presentation.LineHeightPixels,
             ColumnWidth = double.PositiveInfinity, TextAlignment = TextAlignment.Left,
             PagePadding = new Thickness(36, 28, 36, 60)
         };
