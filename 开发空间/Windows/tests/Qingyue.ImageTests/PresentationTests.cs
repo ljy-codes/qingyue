@@ -97,6 +97,10 @@ internal static partial class Program
             $"14 / 6 应得到 24.62 像素，实际为 {fourteen.LineHeightPixels}");
         Check(Math.Abs(thirty.LineHeightPixels - 50.9) < .001,
             $"30 / 11 应得到 50.9 像素，实际为 {thirty.LineHeightPixels}");
+        Check(Math.Abs(fourteen.LineHeight -
+            (Qingyue.Core.ReadingPresentation.NaturalLineHeightFactor +
+                fourteen.LineSpacing / fourteen.FontSize)) < .001,
+            $"兼容 LineHeight 别名应保留倍率语义，实际为 {fourteen.LineHeight}");
         Check(Math.Abs(preview.Document.LineHeight - fourteen.LineHeightPixels) < .001 &&
             Math.Abs(body.LineHeight - fourteen.LineHeightPixels) < .001,
             "正文渲染不应把像素行距再次乘以字号");
@@ -107,6 +111,20 @@ internal static partial class Program
             "大字号正文未使用 30 / 11 像素行高契约");
         Check(Math.Abs(fourteen.LineHeightFor(14) - 14 * 1.75) > .001,
             "旧 1.75 倍率误用仍可能伪装成像素行高");
+
+        var model = ReadingModel.Build("# 标题\n\n正文", TextKind.Markdown);
+        var reading = new RenderedReading(model, presentation: fourteen);
+        var readingBody = Paragraphs(reading.Document.Blocks).Skip(1).First();
+        Check(Math.Abs(reading.Document.LineHeight - fourteen.LineHeightPixels) < .001 &&
+            Math.Abs(readingBody.LineHeight - fourteen.LineHeightPixels) < .001,
+            "RenderedReading 构造后的正文未使用像素行高契约");
+
+        var host = new RichTextBox { Document = reading.Document };
+        reading.UpdatePresentation(host, thirty, 680);
+        readingBody = Paragraphs(reading.Document.Blocks).Skip(1).First();
+        Check(Math.Abs(reading.Document.LineHeight - thirty.LineHeightPixels) < .001 &&
+            Math.Abs(readingBody.LineHeight - thirty.LineHeightPixels) < .001,
+            "RenderedReading.UpdatePresentation 后的正文未使用像素行高契约");
     }
 
     private static void AssertPositionPreserved(RichTextBox host, Action update, string context)

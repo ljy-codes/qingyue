@@ -13,7 +13,8 @@ public sealed record ReadingPresentation(
 
     // Compatibility alias for callers compiled against the multiplier-era
     // property. New code must use LineSpacing / LineHeightPixels.
-    public double LineHeight => LineSpacing;
+    public double LineHeight =>
+        NaturalLineHeightFactor + LineSpacing / FontSize;
 
     public double LineHeightPixels => FontSize * NaturalLineHeightFactor + LineSpacing;
 
