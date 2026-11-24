@@ -2,6 +2,13 @@
 
 .NET 10 + WPF 原生 Windows 客户端。Core 不依赖第三方 NuGet 包，文件、文本、阅读模型和界面流程分别测试。
 
+## 与 Mac 0.4.0 的源码对齐
+
+2026-11-24 已同步 Mac 的 Markdown 段内 `<br>` 行为：正文和表格预览换行、编辑器高亮、纯文本、RTF/XamlPackage、HTML 导出及源位置映射保持一致；反引号代码跨度保持字面内容。
+本次只覆盖 `<br>` 受控子集，不代表 Windows 已完整对齐 Mac 0.4.0；Windows 大文件搜索、独立设置窗口、7 套主题和 1024px 图标等差异仍在功能对照表中保留。
+目录版本仍为 0.18.0 · Windows 构建 1；本轮已重新生成 ZIP 和 NSIS 安装包，并安装到本机 `D:\Program Files\Qingyue`。未创建新 Release，安装包未签名。
+`scripts/test.ps1` 全量回归已执行并以退出码 0 完成；这不替代 Word、Excel 和浏览器等目标软件中的人工粘贴验收。
+
 在仓库根目录用 PowerShell 7 执行：
 
 ```powershell
@@ -14,7 +21,7 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 开发需要 .NET 10 SDK 及 Windows Desktop targeting pack。首次自包含发布需要下载 win-x64 运行时包，
 有完整 NuGet 缓存时可以离线构建。构建脚本遇到失败会抛出异常并停止。
 安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
-这些构建命令生成产物，不自动安装或签名。
+这些构建命令生成产物，不自动安装或签名；本机上述安装由单独执行安装器完成。
 
 输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
 `交付产品/轻阅-0.18.0-Windows构建1-x64.zip` 和
@@ -30,11 +37,12 @@ pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
 - `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。
 - `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序、恢复、Markdown 结构命令、输入法与分屏定位。
 - `tests/Qingyue.MarkdownTests`：Markdown 分色、嵌套列表、预览与阅读映射兼容。
+- `tests/Qingyue.ClipboardTests`：`<br>` 在纯文本、RTF/XamlPackage 和 HTML 中的选区与导出行为。
 - `tests/Qingyue.SequenceTests`：有限 Mermaid 时序语法、错误与资源限制。
 - `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
 - `tests/Qingyue.ReadingTests`：默认全宽预览、富文本导航、自动查找与实际刷新钩子。
 - `tests/Qingyue.ImageTests`：本地与内嵌图片、路径、资源限制及实际样本（`--samples 文档目录`）。
-- `tests/Qingyue.ClipboardTests`：结构化富文本、UTF-8 剪贴板偏移、局部选区及内嵌图片；使用合成数据，不读取系统剪贴板。
+- `tests/Qingyue.ClipboardTests`：结构化富文本、UTF-8 剪贴板偏移、局部选区、内嵌图片和 `<br>` 导出；使用合成数据，不读取系统剪贴板。
 - `tests/Qingyue.InstanceTests`：真实多进程启动转发、激活和单实例通信。
 - `tests/Qingyue.ExternalChangesTests`：磁盘刷新、未保存保护、异步竞态和视图状态。
 - `tests/Qingyue.NavigationTests`：打开取消、真实视口、查找返回与目录跳转。

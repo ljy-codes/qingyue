@@ -69,10 +69,12 @@ public static class ReadingClipboard
     {
         ArgumentNullException.ThrowIfNull(preview);
         preview.VerifyAccess();
-        string text = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text;
+        string text = DisplayText(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text);
         if (text.Length > MaximumText) throw new IOException("阅读正文超过 50 万字符复制上限。");
         return TextData(text);
     }
+
+    private static string DisplayText(string text) => text.Replace("\u2028", Environment.NewLine, StringComparison.Ordinal);
 
     private static DataObject TextData(string text)
     {
@@ -575,6 +577,7 @@ public static class ReadingClipboard
 
         internal string PlainText(string text)
         {
+            text = DisplayText(text);
             foreach (string source in mermaidSources.Where(source => !text.Contains(source, StringComparison.Ordinal)))
                 text = string.IsNullOrWhiteSpace(text)
                     ? source
@@ -603,7 +606,8 @@ public static class ReadingClipboard
         {
             foreach (Block block in document.Blocks)
                 if (Block(block, 0) is { } element) Elements.Add(element);
-            string fragment = "<div>" + string.Concat(Elements.Select(e => e.ToString(SaveOptions.DisableFormatting))) + "</div>";
+            string fragment = "<div>" + string.Concat(Elements.Select(e =>
+                e.ToString(SaveOptions.DisableFormatting).Replace("<br />", "<br>", StringComparison.Ordinal))) + "</div>";
             if (Encoding.UTF8.GetByteCount(fragment) > MaximumHtmlBytes) throw new ExportLimitException();
             return fragment;
         }
@@ -772,12 +776,16 @@ public static class ReadingClipboard
                     int length = start.GetOffsetToPosition(end);
                     if ((textLength += length) > MaximumText) throw new ExportLimitException();
                     string text = run.Text.Substring(offset, length);
-                    object content = new XText(text);
+                    var nodes = TextNodes(text);
+                    XElement? content = null;
                     if (run.TextDecorations.Any(d => d.Location == TextDecorationLocation.Strikethrough))
-                        content = new XElement("s", content);
-                    if (run.FontStyle == FontStyles.Italic) content = new XElement("em", content);
-                    if (run.FontWeight.ToOpenTypeWeight() >= 600) content = new XElement("strong", content);
-                    parent.Add(content);
+                        content = new XElement("s", content ?? (object)nodes);
+                    if (run.FontStyle == FontStyles.Italic)
+                        content = new XElement("em", content ?? (object)nodes);
+                    if (run.FontWeight.ToOpenTypeWeight() >= 600)
+                        content = new XElement("strong", content ?? (object)nodes);
+                    if (content is null) parent.Add(nodes);
+                    else parent.Add(content);
                     break;
                 case LineBreak br when SelectedObject(br):
                     hasVisibleNonImageContent = true;
@@ -792,6 +800,22 @@ public static class ReadingClipboard
                     parent.Add(ImageContent(ui.Child, depth + 1));
                     break;
             }
+        }
+
+        private static List<XNode> TextNodes(string text)
+        {
+            var nodes = new List<XNode>();
+            int start = 0;
+            for (int index = 0; index < text.Length; index++)
+            {
+                if (text[index] != '\u2028') continue;
+                if (index > start) nodes.Add(new XText(text[start..index]));
+                nodes.Add(new XElement("br"));
+                start = index + 1;
+            }
+            if (start < text.Length) nodes.Add(new XText(text[start..]));
+            if (nodes.Count == 0) nodes.Add(new XText(text));
+            return nodes;
         }
 
         private XElement? ImageContent(UIElement? child, int depth, ReadingBlock? sourceBlock = null)

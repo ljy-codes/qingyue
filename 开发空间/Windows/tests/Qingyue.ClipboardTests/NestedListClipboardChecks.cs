@@ -70,7 +70,8 @@ internal static class NestedListClipboardChecks
         string cf = (string)data.GetData(DataFormats.Html, false);
         int Offset(string key) => int.Parse(cf.AsSpan(cf.IndexOf(key + ":", StringComparison.Ordinal) + key.Length + 1, 10));
         byte[] bytes = Encoding.UTF8.GetBytes(cf);
-        return XElement.Parse(Encoding.UTF8.GetString(bytes, Offset("StartFragment"), Offset("EndFragment") - Offset("StartFragment")));
+        return HtmlTestParser.ParseElement(
+            Encoding.UTF8.GetString(bytes, Offset("StartFragment"), Offset("EndFragment") - Offset("StartFragment")));
     }
 
     private static void Check(bool condition, string message)

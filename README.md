@@ -2,11 +2,18 @@
 
 轻量的本地文本阅读与编辑工具，面向 Intel 与 Apple Silicon Mac / macOS 13+。
 
-当前 Mac 版本：**0.4.0 · 构建 14（预览版）**。Windows 历史版本为 0.18.0，本轮未重新验收。
+当前 Mac 版本：**0.4.0 · 构建 14（预览版）**。Windows 历史版本为 0.18.0。
+2026-11-24 已将 Windows 源码中的 Markdown `<br>` 行为与 Mac 对齐，并重新生成 Windows ZIP/NSIS 安装包后安装到本机 `D:\Program Files\Qingyue`；全量自动回归退出码为 0，目标软件人工粘贴验收仍待完成。
 
 ## GitHub 分支与版本
 
 长期分支为 `main`、`macos`、`windows`：`main` 保存项目基线、功能约定和说明，两个平台分支分别维护原生实现和发布记录。Mac 使用偶数版本，Windows 后续使用奇数版本；新标签格式为 `v<X.Y.Z>-macos` / `v<X.Y.Z>-windows`。Windows 历史版本保持原编号。详见[跨平台版本与功能对齐规则](docs/跨平台版本与功能对齐规则.md)。
+
+## 本轮跨平台同步
+
+- Windows 已同步 Mac 的 Markdown 段内 `<br>` 行为：正文、表格、预览、编辑器高亮、纯文本、RTF/XamlPackage 和 HTML 导出均保留实际换行；反引号代码跨度中的标签保持字面内容。
+- 该同步只覆盖已验收的 `<br>` 子集，不代表 Windows 已完整对齐 Mac 0.4.0。Windows 大文件搜索、独立设置窗口、7 套主题和 1024px 图标等差异仍未移植。
+- Windows 仍使用历史身份 **0.18.0 · Windows 构建 1**，但本轮已重新生成 ZIP 和 NSIS 安装包，并安装到 `D:\Program Files\Qingyue`；安装包未签名，未创建新 Release，Windows 人工验收仍待完成。
 
 ## 安装与交付
 
@@ -68,4 +75,4 @@ CI 配置保存在 `docs/ci/macos.yml.template`，目前未启用；本地完整
 
 - Intel Mac：universal 包包含 x86_64 架构。
 - Apple Silicon：universal 包包含 arm64 架构，尚未做实机启动和性能验收。
-- Windows：独立 WPF 实现保留在 `开发空间/Windows`，版本 0.18.0；Windows 构建、安装器和验收需在 Windows 环境单独进行，不计入本轮 Mac 交付。
+- Windows：独立 WPF 实现保留在 `开发空间/Windows`，版本 0.18.0；本轮已完成 Markdown `<br>` 源码对齐、全量自动回归和安装包重建，并安装到 `D:\Program Files\Qingyue`；目标软件人工粘贴验收及完整 Mac 0.4.0 功能移植仍待完成。

@@ -410,7 +410,10 @@ public sealed class MarkdownPreview : RichTextBox
         {
             if (match.Index > cursor) output.Add(new(text[cursor..match.Index], format));
             cursor = match.Index + match.Length;
-            if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
+            if (MarkdownCodeSpan.Protects(text, match.Index, match.Length))
+                output.Add(new(match.Value, format));
+            else if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
+            else if (match.Groups["br"].Success) output.Add(new("\u2028", format));
             else if (match.Groups[9].Success)
                 output.Add(new(match.Groups[9].Value, format | InlineFormat.Link));
             else if (match.Groups[10].Success)

@@ -24,3 +24,10 @@
 - 项目只保留 0.4.0 交付目录及 ZIP。删除旧 0.2.0/0.3.0 ZIP 和可重建的 `开发空间/build`，清理约 810 MB 文件。
 - 本地仅保留 `main`、`macos`、`windows` 三条分支及最新 Mac 平台标签；Windows 历史标签未删除。
 - 删除过时的构建 12 文档与截图，并修复 README 引用。旧主题实验独有提交已在 `.git/qingyue-maintenance` 保留可恢复 bundle，普通工作目录不保留旧副本。
+
+## 2026-11-24 最新规则复核
+
+- 已执行 `git fetch origin --prune --tags`。远端 `main` 与 `macos` 当前同为 `a0d3a852d7aea1498a8e6e7324692d12bc8a5bc8`；`windows` 为历史 `0869803047bbff82a1c38b1bf61ee1fe53a3e60e`，对应 0.18.0。
+- 本地主工作树已切换到跟踪 `origin/macos` 的 `macos` 分支；本地 `main` 快进到与远端相同提交。远端旧 `feat/macos-030-parity`、`feat/windows-client` 引用已不存在；删除两个旧本地分支前已确认均为 `macos` 祖先，提交历史仍可追溯。
+- Windows 源码新增 Markdown `<br>` 对齐及对应测试。`开发空间/Windows/scripts/test.ps1` 全量回归退出码为 0；Windows 版本仍为 0.18.0 · 构建 1，已重新生成 ZIP 和 NSIS 安装包并安装到本机 `D:\Program Files\Qingyue`。未创建新 Release，安装包未签名，目标软件人工验收仍待完成。
+- 文档清理删除已全部处理且引用失效的 `WPF-review.md`，并同步修正退出阅读后不再复用渲染文档的旧说明。

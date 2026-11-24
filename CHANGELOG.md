@@ -1,5 +1,11 @@
 # 变更记录
 
+## Windows 源码对齐与本机构建（2026-11-24，未发布）
+
+- Windows 源码同步 Mac 的 Markdown 段内 `<br>` 行为：正文、表格、预览、编辑器高亮、纯文本、RTF/XamlPackage 和 HTML 导出保留实际换行，代码跨度保持字面内容。
+- 补充 Windows Markdown/Clipboard 回归、ComboBox 焦点测试稳定性和“退出阅读释放渲染文档”的导航断言。
+- Windows 仍为 0.18.0 · Windows 构建 1；已重新生成 ZIP 和 NSIS 安装包，并安装到本机 `D:\Program Files\Qingyue`。安装包未签名，未创建新 Release，目标软件人工粘贴验收仍待完成。该同步不表示 Windows 已完整对齐 Mac 0.4.0。
+
 ## 0.4.0 · Mac 构建 14（预览版）
 
 - GitHub 使用 main / macos / windows 三条长期分支和 vX.Y.Z-macos 平台标签；检查更新兼容新旧标签，保留 Windows 历史内容。

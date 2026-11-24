@@ -126,7 +126,7 @@ public sealed class ReadingModel
     private static readonly Regex Chapter = Pattern(@"^(?:第[零〇一二三四五六七八九十百千万两0-9０-９]+[章节卷部篇回](?:.*)|[序终尾]章(?:.*)|Chapter[ \t]+[0-9]+(?:.*))$");
     private static readonly Regex IniSection = Pattern(@"^\[([^\]\r\n]+)\](?:[ \t]*[;#].*)?$");
     private static readonly Regex InlineToken = Pattern(
-        @"\\[\\`*{}\[\]()#+\-.!_>|~]|!\[([^\]\r\n]*)\]\([^)\r\n]*\)|\[([^\]\r\n]*)\]\([^)\r\n]*\)|`([^`\r\n]+)`|\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|\*([^*\r\n]+)\*|_([^_\r\n]+)_|~~([^~\r\n]+)~~|<((?:https?://|mailto:)[^<>\s]+)>|\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]");
+        @"\\[\\`*{}\[\]()#+\-.!_<>|~]|!\[([^\]\r\n]*)\]\([^)\r\n]*\)|\[([^\]\r\n]*)\]\([^)\r\n]*\)|`([^`\r\n]+)`|\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|\*([^*\r\n]+)\*|_([^_\r\n]+)_|~~([^~\r\n]+)~~|<((?:https?://|mailto:)[^<>\s]+)>|\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]|(?<br>(?i:<br[ \t]*/?>))");
     private static readonly Regex ReferenceDefinition = Pattern(
         @"^ {0,3}\[([^\]\r\n]+)\]:[ \t]*(?:<([^>\r\n]+)>|(\S+))(?:[ \t]+(?:""([^""\r\n]*)""|'([^'\r\n]*)'|\(([^)\r\n]*)\)))?[ \t]*$");
 
@@ -201,6 +201,17 @@ public sealed class ReadingModel
                     : Inline(value, references);
                 Add(ReadingBlockKind.ListItem, value, i, i, listParents.Count - 1);
                 i++;
+                continue;
+            }
+            // A top-level line indented by four columns is literal code, matching
+            // the macOS renderer. List markers are excluded so nested list editing
+            // keeps its existing marker semantics.
+            if (owner < 0 && IsIndentedCodeLine(line))
+            {
+                var content = new List<string>();
+                while (i < lines.Count && IsIndentedCodeLine(lines[i].Text))
+                    content.Add(StripIndent(lines[i++].Text, 4));
+                Add(ReadingBlockKind.Code, string.Join("\n", content), first, i - 1);
                 continue;
             }
             // Indentation selects the nearest owning ancestor, not necessarily
@@ -289,6 +300,10 @@ public sealed class ReadingModel
         }
         return new(text, false, blocks, headings, references, listContainerLevels);
     }
+
+    private static bool IsIndentedCodeLine(string line) =>
+        !string.IsNullOrWhiteSpace(line) && !List.IsMatch(line) &&
+        (line.StartsWith("    ", StringComparison.Ordinal) || line[0] == '\t');
 
     private static int Indentation(string line)
     {
@@ -419,7 +434,9 @@ public sealed class ReadingModel
         if (depth >= 8) return text;
         return InlineToken.Replace(text, match =>
         {
+            if (MarkdownCodeSpan.Protects(text, match.Index, match.Length)) return match.Value;
             if (match.Value[0] == '\\') return match.Value[1..];
+            if (match.Groups["br"].Success) return "\u2028";
             if (match.Groups[9].Success) return match.Groups[9].Value;
             if (match.Groups[10].Success)
             {

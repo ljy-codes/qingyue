@@ -66,9 +66,11 @@ internal static class Program
                 var rendered = tab.Rendered;
                 window.ToggleReading();
                 Check(!tab.IsReading && tab.Editor.CaretIndex > 100, "切换编辑定位到实际阅读段落");
+                Check(tab.Rendered is null, "退出阅读后释放内存中的渲染文档");
                 window.ToggleReading();
                 await Idle(window);
-                Check(ReferenceEquals(rendered, tab.Rendered), "未变正文往返复用阅读文档");
+                Check(tab.Rendered is not null && !ReferenceEquals(rendered, tab.Rendered),
+                    "重新进入阅读按当前正文生成渲染文档");
                 Check(Math.Abs(before - tab.Preview.VerticalOffset) < 80, "编辑预览往返保持屏幕位置");
                 Invoke(window, "ShowSearch", false);
                 ((TextBox)window.FindName("SearchQuery")).Text = "Chapter 100";
