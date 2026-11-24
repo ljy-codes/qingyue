@@ -52,7 +52,8 @@ public partial class MainWindow : Window
         annotations = new AnnotationStore(dataDirectory);
         InitializeComponent();
         ApplyAppIconTheme();
-        SourceInitialized += (_, _) => ApplyNativeTitleBarTheme(settings.Dark);
+        SourceInitialized += (_, _) =>
+            ApplyNativeTitleBarTheme(ReaderTheme.GetPalette(settings.ThemeKind, settings.Dark));
         InitializeEditingInteractions();
         InitializeMarkdownPreview();
         InitializeMarkdownWriting();

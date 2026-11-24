@@ -129,7 +129,7 @@
         <StackPanel Grid.Column="1" Margin="20,0,0,0" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Right">
           <Button x:Name="OpenButton" Style="{StaticResource CompactButton}" Content="打开文件" Tag="open" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+O"/>
           <Button x:Name="SaveButton" Style="{StaticResource CompactButton}" Content="保存" Tag="save" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+S"/>
-          <Button x:Name="ReadingButton" Style="{StaticResource CompactButton}" Content="阅读模式" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0" ToolTip="Ctrl+R"/>
+          <Button x:Name="ReadingButton" Style="{StaticResource CompactButton}" Content="阅读模式" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0" ToolTip="Ctrl+R"/>
           <Button x:Name="FocusButton" Style="{StaticResource CompactButton}" Content="专注" Tag="focus" Click="MenuAction" ToolTip="Ctrl+Shift+F"/>
         </StackPanel>
       </Grid>
@@ -167,7 +167,7 @@
           <Button x:Name="ReadingCopyButton" Style="{StaticResource CompactButton}" Content="复制全文" Tag="copyReading" Click="MenuAction"
                   Visibility="Collapsed" Margin="0,0,6,0" ToolTip="复制富文本、表格和图片"/>
           <Button Style="{StaticResource CompactButton}" Content="编辑原文" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}"
-                  Foreground="White" ToolTip="进入原文编辑 · Ctrl+R"/>
+                  Foreground="{DynamicResource AccentForegroundBrush}" ToolTip="进入原文编辑 · Ctrl+R"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -405,7 +405,7 @@
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}"
                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
             <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
-              <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"/>
+              <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0"/>
               <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,8,0"
                       ToolTip="摘录选中文本 · Ctrl+Shift+A"/>
               <Button x:Name="StructureButton" Style="{StaticResource CompactButton}" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
@@ -515,7 +515,7 @@
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button x:Name="ExternalAcceptButton" Content="接纳磁盘版本" Tag="externalAccept" Click="MenuAction"
-                        Background="{DynamicResource AccentBrush}" Foreground="White" Margin="0,0,8,0"
+                        Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0"
                         ToolTip="放弃当前未保存编辑并读取磁盘版本"/>
                 <Button x:Name="ExternalKeepButton" Content="保留当前编辑" Tag="externalKeep" Click="MenuAction" Margin="0,0,8,0"
                         ToolTip="保留当前正文，稍后可再次检查"/>

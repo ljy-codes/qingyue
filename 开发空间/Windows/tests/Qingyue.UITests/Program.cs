@@ -42,6 +42,7 @@ internal static class Program
                 await window.InitializeAsync();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 IconThemeChecks.Run(Check, window, root);
+                ThemeChecks.Run(window, Check);
                 var topChrome = (FrameworkElement)window.FindName("TopChrome");
                 var mainMenu = (FrameworkElement)window.FindName("MainMenu");
                 var brandHeader = (Border)window.FindName("BrandHeader");

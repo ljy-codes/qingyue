@@ -212,7 +212,7 @@ internal static class Dialogs
     {
         var button = new Button { Content = text, IsDefault = true, HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 110 };
         button.SetResourceReference(Control.BackgroundProperty, "AccentBrush");
-        button.Foreground = Brushes.White;
+        button.SetResourceReference(Control.ForegroundProperty, "AccentForegroundBrush");
         return button;
     }
 }

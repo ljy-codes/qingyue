@@ -196,7 +196,7 @@ public static class ReadingAppearanceDialog
             MinWidth = 92
         };
         apply.SetResourceReference(Control.BackgroundProperty, "AccentBrush");
-        apply.Foreground = Brushes.White;
+        apply.SetResourceReference(Control.ForegroundProperty, "AccentForegroundBrush");
         apply.Click += (_, _) =>
         {
             result = new ReadingAppearanceSelection(

@@ -224,20 +224,25 @@ public partial class MainWindow
     }
 
     public void ApplyTheme(bool dark) =>
-        ApplyTheme(dark ? ReaderThemeKind.Dark : ReaderThemeKind.Light);
+        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark), dark);
 
     public void ApplyTheme(ReaderThemeKind theme)
     {
-        settings.Theme = ReaderTheme.NormalizeName(theme.ToString(), theme == ReaderThemeKind.Dark);
-        settings.Dark = theme == ReaderThemeKind.Dark;
-        ReaderTheme.Apply(Resources, theme);
-        ApplyNativeTitleBarTheme(settings.Dark);
-        var accents = new[] { "AccentTextBrush", "SyntaxKeyBrush", "SyntaxStringBrush", "SyntaxValueBrush", "SyntaxCommentBrush", "UnsavedBrush", "SavedBrush" };
-        var accentColors = settings.Dark
-            ? new[] { "#88C8FF", "#88C8FF", "#FFD096", "#74DEC7", "#BAC5BA", "#FFBE72", "#74D6AD" }
-            : new[] { "#1F60BD", "#175BB5", "#A64A0A", "#087563", "#5C6D59", "#A95A00", "#19764E" };
-        for (int i = 0; i < accents.Length; i++)
-            Resources[accents[i]] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(accentColors[i]));
+        bool dark = theme switch
+        {
+            ReaderThemeKind.Dark => true,
+            ReaderThemeKind.Light or ReaderThemeKind.WarmPaper => false,
+            _ => settings.Dark
+        };
+        ApplyTheme(ReaderTheme.Parse(theme.ToString(), dark), dark);
+    }
+
+    private void ApplyTheme(ReaderThemeKind theme, bool dark)
+    {
+        settings.Theme = ReaderTheme.NormalizeName(theme.ToString(), dark);
+        settings.Dark = dark;
+        var palette = ReaderTheme.Apply(Resources, theme, dark);
+        ApplyNativeTitleBarTheme(palette);
         foreach (var tab in tabs) RefreshSyntax(tab);
         SchedulePersist();
     }

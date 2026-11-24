@@ -4,6 +4,18 @@ using System.Windows.Media;
 
 namespace Qingyue.Windows;
 
+public readonly record struct NativeTitleBarColors(
+    string Caption,
+    string Text,
+    string Border,
+    bool Dark);
+
+public static class NativeTitleBarTheme
+{
+    public static NativeTitleBarColors GetColors(ThemePalette palette) =>
+        new(palette.Panel, palette.Text, palette.Border, palette.Dark);
+}
+
 public partial class MainWindow
 {
     private const int DwmBorderColorAttribute = 34;
@@ -12,24 +24,24 @@ public partial class MainWindow
     private const int DwmUseImmersiveDarkModeAttribute = 20;
     private const int DwmUseImmersiveDarkModeLegacyAttribute = 19;
 
-    private void ApplyNativeTitleBarTheme(bool dark)
+    private void ApplyNativeTitleBarTheme(ThemePalette palette)
     {
         var handle = new WindowInteropHelper(this).Handle;
         if (handle == IntPtr.Zero) return;
 
         try
         {
-            int captionColor = ToColorRef((Color)ColorConverter.ConvertFromString(
-                dark ? "#23262B" : "#EFEAE2"));
-            int textColor = ToColorRef((Color)ColorConverter.ConvertFromString(
-                dark ? "#E8E2D8" : "#262A2F"));
+            var colors = NativeTitleBarTheme.GetColors(palette);
+            int captionColor = ToColorRef(ParseColor(colors.Caption));
+            int textColor = ToColorRef(ParseColor(colors.Text));
+            int borderColor = ToColorRef(ParseColor(colors.Border));
 
-            int immersiveDarkMode = dark ? 1 : 0;
+            int immersiveDarkMode = colors.Dark ? 1 : 0;
             SetDwmColor(handle, DwmUseImmersiveDarkModeAttribute, immersiveDarkMode);
             SetDwmColor(handle, DwmUseImmersiveDarkModeLegacyAttribute, immersiveDarkMode);
             SetDwmColor(handle, DwmCaptionColorAttribute, captionColor);
             SetDwmColor(handle, DwmTextColorAttribute, textColor);
-            SetDwmColor(handle, DwmBorderColorAttribute, captionColor);
+            SetDwmColor(handle, DwmBorderColorAttribute, borderColor);
         }
         catch (DllNotFoundException)
         {
@@ -48,6 +60,9 @@ public partial class MainWindow
 
     private static int ToColorRef(Color color) =>
         color.R | (color.G << 8) | (color.B << 16);
+
+    private static Color ParseColor(string value) =>
+        (Color)ColorConverter.ConvertFromString(value);
 
     [DllImport("dwmapi.dll", ExactSpelling = true)]
     private static extern int DwmSetWindowAttribute(
