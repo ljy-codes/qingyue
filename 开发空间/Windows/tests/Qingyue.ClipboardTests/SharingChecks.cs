@@ -41,6 +41,8 @@ internal static class SharingChecks
         test("v030 atomic HTML writer rejects trailing-dot source aliases", () => Pump(TrailingDot));
         test("v030 portable HTML enforces existing text and image budgets", Budgets);
         test("v080 CF_HTML fragment is browser-safe and self-contained", BrowserFragment);
+        test("v018 Markdown br export preserves table breaks in HTML plain RTF and Xaml", BrExport);
+        test("v018 Markdown br copy stays within the selected paragraph", BrSelection);
         test("v030 block context menu is installed once and uses current selection", ContextMenu);
     }
 
@@ -150,7 +152,7 @@ internal static class SharingChecks
         selected = box.Selection.Start;
         var result = Export("CreateDocument", box, @"C:\private\报告😀.md")!;
         string html = Property<string>(result, "Html");
-        var document = XDocument.Parse(html);
+        var document = HtmlTestParser.ParseDocument(html);
         Check(document.Root!.Element("head")!.Element("title")!.Value == "报告😀.md", "title leaked a path or lost Unicode");
         Check(document.Descendants("style").Any() && document.Descendants("meta").Any(), "portable document lacks style/metadata");
         Check(!document.Descendants("script").Any() && !document.Descendants("a").Any(), "executable or remote markup escaped whitelist");
@@ -184,7 +186,7 @@ internal static class SharingChecks
         Check(text.Contains("sequenceDiagram", StringComparison.Ordinal) &&
             text.Contains("A->>B: 请求😀", StringComparison.Ordinal),
             "Mermaid source text was not retained");
-        var image = XDocument.Parse("<root>" + HtmlFragment(result.Data) + "</root>").Descendants("img").Single();
+        var image = HtmlTestParser.ParseDocument("<root>" + HtmlFragment(result.Data) + "</root>").Descendants("img").Single();
         using var stream = new MemoryStream(Convert.FromBase64String(
             ((string)image.Attribute("src")!).Split(',', 2)[1]));
         var bitmap = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
@@ -274,7 +276,7 @@ internal static class SharingChecks
         var report = Property<object>(result, "Images");
         Check(html.Contains("本篇图片超过 32 张") && html.Contains("export-warning"),
             "the renderer's image-limit notice disappeared from portable HTML");
-        Check(XDocument.Parse(html).Descendants("p").Single(p => (string?)p.Attribute("class") == "export-warning")
+        Check(HtmlTestParser.ParseDocument(html).Descendants("p").Single(p => (string?)p.Attribute("class") == "export-warning")
             .Value.Contains("部分图片因资源限制未加载，未包含在本次内容中"),
             "the image-limit summary does not explain the omission to the reader");
         Check(Property<bool>(report, "Incomplete") && Property<int>(report, "Omitted") == 0,
@@ -454,7 +456,7 @@ internal static class SharingChecks
         for (int i = 0; i < 33; i++) paragraph.Inlines.Add(new InlineUIContainer(Image()));
         var result = Export("CreateDocument", Box(paragraph), "合成")!;
         string html = Property<string>(result, "Html");
-        Check(XDocument.Parse(html).Descendants("img").Count() == 32, "portable export ignored image count budget");
+        Check(HtmlTestParser.ParseDocument(html).Descendants("img").Count() == 32, "portable export ignored image count budget");
         Check(Property<int>(Property<object>(result, "Images"), "Limited") == 1 && html.Contains("图片未"),
             "portable export silently omitted excessive image");
     }
@@ -475,7 +477,7 @@ internal static class SharingChecks
         int end = FieldOffset(cfHtml, "EndFragment");
         Check(start >= 0 && end > start && end <= bytes.Length, "CF_HTML fragment offsets are invalid");
         string fragment = Encoding.UTF8.GetString(bytes, start, end - start);
-        var root = XDocument.Parse("<root>" + fragment + "</root>").Root!;
+        var root = HtmlTestParser.ParseDocument("<root>" + fragment + "</root>").Root!;
         Check(root.Descendants("h1").Any() && root.Descendants("table").Any() &&
             root.Descendants("pre").Any() && root.Descendants("img").Any(),
             "browser fragment lost heading, table, code, or Mermaid image");
@@ -485,6 +487,72 @@ internal static class SharingChecks
             "StartHTML does not point to the HTML document");
         Check(Encoding.UTF8.GetString(bytes, FieldOffset(cfHtml, "EndHTML") - 7, 7) == "</html>",
             "EndHTML does not point after the closing HTML tag");
+    }
+
+    private static void BrExport()
+    {
+        const string source =
+            "| 问题 | 参考范围 | 推荐项 |\n| --- | :---: | ---: |\n" +
+            "| 计划口径 | A. 报单金额😀<br>B. 出库金额<br/>C. 销售数量 | 推荐A<BR />分析 |\n\n" +
+            "| 内容 |\n| --- |\n| `A<br>B` |";
+        var preview = new MarkdownPreview(source, 16, 680);
+        var result = ReadingClipboard.CreateFullDocumentData(preview);
+        Check(result is not null, "br document export returned null");
+        string html = HtmlFragment(result!.Data);
+        var root = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!;
+        Check(root.Descendants("tr").Count() == 4, "HTML br export changed table row count");
+        Check(root.Descendants("td").Count() == 4, "HTML br export changed table cell count");
+        Check(html.Contains("A. 报单金额😀<br>B. 出库金额<br>C. 销售数量", StringComparison.Ordinal),
+            "HTML table cell did not emit real br elements");
+        Check(html.Contains("A&lt;br&gt;B", StringComparison.Ordinal),
+            "HTML code span did not keep br escaped as literal text");
+
+        string plain = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(plain.Contains("A. 报单金额😀\r\nB. 出库金额\r\nC. 销售数量", StringComparison.Ordinal),
+            "plain text did not convert the paragraph break to a real line break");
+        Check(!plain.Contains('\u2028'), "plain text leaked U+2028");
+
+        using var rtf = new MemoryStream(Encoding.ASCII.GetBytes(
+            (string)result.Data.GetData(DataFormats.Rtf, false)!));
+        var restoredRtf = new FlowDocument();
+        new TextRange(restoredRtf.ContentStart, restoredRtf.ContentEnd).Load(rtf, DataFormats.Rtf);
+        Check(restoredRtf.Blocks.OfType<Table>().Any(), "RTF lost the table");
+        string rtfText = new TextRange(restoredRtf.ContentStart, restoredRtf.ContentEnd).Text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\u2028', '\n');
+        Check(rtfText.Contains("A. 报单金额😀\nB. 出库金额\nC. 销售数量", StringComparison.Ordinal),
+            "RTF round trip lost the in-cell breaks");
+
+        using var package = new MemoryStream(
+            ((MemoryStream)result.Data.GetData(DataFormats.XamlPackage, false)!).ToArray());
+        var restoredXaml = new FlowDocument();
+        new TextRange(restoredXaml.ContentStart, restoredXaml.ContentEnd).Load(package, DataFormats.XamlPackage);
+        string xamlText = new TextRange(restoredXaml.ContentStart, restoredXaml.ContentEnd).Text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\u2028', '\n');
+        Check(xamlText.Contains("推荐A\n分析", StringComparison.Ordinal), "XamlPackage round trip lost the in-cell break");
+    }
+
+    private static void BrSelection()
+    {
+        var preview = new MarkdownPreview("选中A<br>选中B\n\n未选C", 16, 680);
+        var paragraph = preview.Document.Blocks.OfType<Paragraph>().First();
+        preview.Selection.Select(paragraph.ContentStart, paragraph.ContentEnd);
+        var prepare = typeof(ReadingClipboard).GetMethod("PrepareSelection",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Check(prepare is not null, "selection snapshot API is missing");
+        var payload = prepare!.Invoke(null, [preview])!;
+        var result = Property<ReadingClipboardResult>(payload, "Result");
+        string html = HtmlFragment(result.Data);
+        string plain = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
+        Check(html.Contains("选中A<br>选中B", StringComparison.Ordinal),
+            "partial HTML copy lost the selected br");
+        Check(!html.Contains("未选C", StringComparison.Ordinal),
+            "partial HTML copy included the following paragraph");
+        Check(plain.Contains("选中A" + Environment.NewLine + "选中B", StringComparison.Ordinal) &&
+            !plain.Contains("未选C", StringComparison.Ordinal),
+            "partial plain copy included unrelated text");
+        Check(!plain.Contains('\u2028'), "partial plain copy leaked U+2028");
     }
 
     private static int FieldOffset(string cfHtml, string field)

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Qingyue.Core;
@@ -209,6 +210,7 @@ internal static class Program
                 ((TextBox)window.FindName("SearchQuery")).Text = "中文";
                 await WaitFor(() => ((TextBlock)window.FindName("SearchCount")).Text == "1 / 1");
                 ClickAction(window, "next");
+                await WaitFor(() => markdown.Preview.Selection.Text == "中文");
                 Check(markdown.IsReading && markdown.Preview.Selection.Text == "中文", "阅读查找选中实际可见文字");
                 ClickAction(window, "hideFind");
 
@@ -357,7 +359,10 @@ internal static class Program
             var selection = combo.SelectedItem;
             combo.Focus();
             combo.IsDropDownOpen = true;
-            await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            await WaitFor(() => combo.Template.FindName("PART_Popup", combo) is Popup
+            {
+                IsOpen: true, Child: FrameworkElement { ActualHeight: > 0 }
+            });
             var popup = (Popup)combo.Template.FindName("PART_Popup", combo);
             check(popup is { IsOpen: true, Child: FrameworkElement { ActualHeight: > 0 } },
                 $"{theme} {name} 可展开且列表已排版");
@@ -365,13 +370,17 @@ internal static class Program
             check(ItemsHaveContrast(combo), $"{theme} {name} 所有选项文字对比度至少 4.5:1");
             var item = (ComboBoxItem)combo.ItemContainerGenerator.ContainerFromIndex((combo.SelectedIndex + 1) % combo.Items.Count);
             item.Focus();
-            await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-            check(item.IsKeyboardFocusWithin && Contrast(item.Foreground, BackgroundAt(item)) >= 4.5,
-                $"{theme} {name} 键盘焦点选项清晰");
+            await WaitFor(() => Keyboard.FocusedElement is ComboBoxItem { IsKeyboardFocusWithin: true });
+            var focusedItem = (ComboBoxItem)Keyboard.FocusedElement;
+            check(focusedItem.IsKeyboardFocusWithin,
+                $"{theme} {name} 键盘焦点进入选项");
+            check(Contrast(focusedItem.Foreground, BackgroundAt(focusedItem)) >= 4.5,
+                $"{theme} {name} 键盘焦点选项对比度至少 4.5:1");
             combo.SelectedItem = item.Content;
             check(Equals(combo.SelectedItem, item.Content), $"{theme} {name} 仍可选择选项");
             combo.SelectedItem = selection;
             combo.IsDropDownOpen = false;
+            await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             check(!popup.IsOpen, $"{theme} {name} 可关闭列表");
             var toggle = combo.Template.FindName("DropDownToggle", combo) as Control;
             check(Contrast(combo.Foreground, BackgroundAt(toggle ?? combo)) >= 4.5,

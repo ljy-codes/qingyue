@@ -1,4 +1,7 @@
-param([ValidateSet('win-x64')][string]$Runtime = 'win-x64')
+param(
+    [ValidateSet('win-x64')][string]$Runtime = 'win-x64',
+    [switch]$NoRestore
+)
 $ErrorActionPreference = 'Stop'
 $totalClock = [Diagnostics.Stopwatch]::StartNew()
 $windowsRoot = Split-Path -Parent $PSScriptRoot
@@ -17,11 +20,16 @@ $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 $env:MSBuildEnableWorkloadResolver = 'false'
 $publishClock = [Diagnostics.Stopwatch]::StartNew()
-dotnet publish (Join-Path $windowsRoot 'src/Qingyue.Windows/Qingyue.Windows.csproj') `
-    -c Release -r $Runtime --self-contained true -o $stage --nologo --disable-build-servers `
-    -p:UseSharedCompilation=false -p:MSBuildEnableWorkloadResolver=false -p:ImportWorkloads=false `
-    -p:PublishSingleFile=false -p:PublishTrimmed=false `
-    -p:DebugType=None -p:DebugSymbols=false -m:1
+$publishArguments = @(
+    (Join-Path $windowsRoot 'src/Qingyue.Windows/Qingyue.Windows.csproj'),
+    '-c', 'Release', '-r', $Runtime, '--self-contained', 'true', '-o', $stage,
+    '--nologo', '--disable-build-servers',
+    '-p:UseSharedCompilation=false', '-p:MSBuildEnableWorkloadResolver=false', '-p:ImportWorkloads=false',
+    '-p:PublishSingleFile=false', '-p:PublishTrimmed=false',
+    '-p:DebugType=None', '-p:DebugSymbols=false', '-m:1'
+)
+if ($NoRestore) { $publishArguments += '--no-restore' }
+dotnet publish @publishArguments
 if ($LASTEXITCODE -ne 0) { throw "发布失败：$LASTEXITCODE；原发布目录保留。" }
 $publishSeconds = $publishClock.Elapsed.TotalSeconds
 # Filter satellites in the staged output instead of passing an escaped MSBuild list:

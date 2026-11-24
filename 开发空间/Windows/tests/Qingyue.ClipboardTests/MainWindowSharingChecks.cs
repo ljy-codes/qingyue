@@ -92,7 +92,7 @@ internal static class MainWindowSharingChecks
         Check(File.Exists(output), "window export failed: " + Status(window));
         byte[] bytes = await File.ReadAllBytesAsync(output);
         string html = Encoding.UTF8.GetString(bytes);
-        var exported = XDocument.Parse(html);
+        var exported = HtmlTestParser.ParseDocument(html);
         Check(exported.Descendants("h1").Single().Value == "合成分享标题" &&
             exported.Descendants("img").Single().Attribute("src")!.Value.StartsWith("data:image/png;base64,"),
             "the hosted export lost heading or cached pixels");
@@ -142,7 +142,7 @@ internal static class MainWindowSharingChecks
         // No Dispatcher yield: the debounce timer must not refresh the fixture first.
         await window.ExportReadingHtmlToPathAsync(output);
         Check(File.Exists(output), "immediate split export failed: " + Status(window));
-        Check(XDocument.Parse(await File.ReadAllTextAsync(output)).Descendants("body").Single().Value
+        Check(HtmlTestParser.ParseDocument(await File.ReadAllTextAsync(output)).Descendants("body").Single().Value
             .Contains("异步导出必须立即包含的新正文。"), "async export used the previous split content");
         Check(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text
             .Contains("异步导出必须立即包含的新正文。"), "async export did not refresh the pending split");

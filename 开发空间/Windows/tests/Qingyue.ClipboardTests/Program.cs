@@ -198,7 +198,7 @@ internal static class Program
         int fragmentStart = FieldOffset(html, "StartFragment");
         int fragmentEnd = FieldOffset(html, "EndFragment");
         string fragment = Encoding.UTF8.GetString(htmlBytes, fragmentStart, fragmentEnd - fragmentStart);
-        var htmlImage = XDocument.Parse("<root>" + fragment + "</root>").Descendants("img").Single();
+        var htmlImage = HtmlTestParser.ParseDocument("<root>" + fragment + "</root>").Descendants("img").Single();
         using var htmlStream = new MemoryStream(Convert.FromBase64String(
             htmlImage.Attribute("src")!.Value["data:image/png;base64,".Length..]));
         Check(BitmapFrame.Create(htmlStream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).PixelWidth == 2,
@@ -260,7 +260,7 @@ internal static class Program
         box.SelectAll();
         var data = Copy(box);
         string html = Fragment(data);
-        var root = XDocument.Parse("<root>" + html + "</root>").Root!;
+        var root = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!;
         Check(root.Element("h2")?.Value == "标题😀 & <合成>", "heading structure/text missing");
         var table = root.Element("table")!;
         Check(table.Descendants("tr").Count() == 2, "table row structure missing");
@@ -284,7 +284,7 @@ internal static class Program
             run.ContentStart.GetPositionAtOffset(offset + "选中😀&<>".Length)!);
         var start = box.Selection.Start;
         string html = Fragment(Copy(box));
-        Check(XDocument.Parse("<root>" + html + "</root>").Root!.Value == "选中😀&<>", "partial text escaped incorrectly");
+        Check(HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!.Value == "选中😀&<>", "partial text escaped incorrectly");
         Check(!html.Contains("不可复制"), "unselected text leaked");
         Check(box.Selection.Start.CompareTo(start) == 0 && box.Selection.Text == "选中😀&<>", "selection mutated");
     }
@@ -295,7 +295,7 @@ internal static class Program
         var selected = (Run)((Paragraph)table.RowGroups[0].Rows[1].Cells[1].Blocks.FirstBlock).Inlines.FirstInline!;
         box.Selection.Select(selected.ContentStart, selected.ContentEnd);
         string html = Fragment(Copy(box));
-        var root = XDocument.Parse("<root>" + html + "</root>").Root!;
+        var root = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!;
         Check(root.Descendants("td").Single().Value == "值二", "selected cell missing");
         Check(root.Value == "值二", "unselected cells or surrounding paragraphs leaked");
     }
@@ -315,7 +315,7 @@ internal static class Program
         box.Selection.Select(group.Rows[0].Cells[1].ContentStart, group.Rows[1].Cells[1].ContentEnd);
         Check(box.Selection.Text.Replace("\t", "").Trim() == "B1B2", "fixture is not a rectangular WPF selection");
         string html = Fragment(Copy(box));
-        var cells = XDocument.Parse("<root>" + html + "</root>").Descendants()
+        var cells = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Descendants()
             .Where(e => e.Name.LocalName is "td" or "th").Select(e => e.Value).ToArray();
         Check(cells.SequenceEqual(["B1", "B2"]), "rectangular selection leaked neighboring cells: " + string.Join(",", cells));
     }
@@ -325,7 +325,7 @@ internal static class Program
         var (box, _, _, inline) = Fixture();
         box.Selection.Select(inline.ElementStart, inline.ElementEnd);
         string html = Fragment(Copy(box));
-        var image = XDocument.Parse("<root>" + html + "</root>").Descendants("img").Single();
+        var image = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Descendants("img").Single();
         Check(!html.Contains("标题") && !html.Contains("图注") && !html.Contains("列一"), "image selection leaked neighbors");
         Check(image.Attribute("alt")?.Value == "合成红蓝图", "image alt missing");
         byte[] png = Convert.FromBase64String(image.Attribute("src")!.Value["data:image/png;base64,".Length..]);
@@ -477,7 +477,7 @@ internal static class Program
         list.ListItems.Add(new ListItem(new Paragraph(new Run("六"))));
         var box = Box(paragraph, code, quote, list);
         box.SelectAll();
-        var root = XElement.Parse("<root>" + Fragment(Copy(box)) + "</root>");
+        var root = HtmlTestParser.ParseElement("<root>" + Fragment(Copy(box)) + "</root>");
         Check(root.Descendants("br").Count() == 1, "explicit line break lost");
         Check(root.Descendants("strong").Single().Value == "粗" && root.Descendants("em").Single().Value == "斜", "emphasis lost");
         Check(root.Element("pre")?.Element("code")?.Value == "if (a < b)\n  保留空格", "code changed");
@@ -526,7 +526,7 @@ internal static class Program
         }
         var box = Box(table);
         box.SelectAll();
-        var root = XElement.Parse("<root>" + Fragment(Copy(box)) + "</root>");
+        var root = HtmlTestParser.ParseElement("<root>" + Fragment(Copy(box)) + "</root>");
         Check(root.Descendants("tr").Last().Elements("td").Select(e => e.Value).SequenceEqual(["", "值", ""]),
             "empty selected cells disappeared and moved data into the wrong column");
         var result = ReadingClipboard.CreateFullDocumentData(box)!;
@@ -555,7 +555,7 @@ internal static class Program
             }
             var box = Box(new Paragraph(new InlineUIContainer(image)));
             var result = ReadingClipboard.CreateFullDocumentData(box)!;
-            var img = XElement.Parse("<root>" + Fragment(result.Data) + "</root>").Descendants("img").Single();
+            var img = HtmlTestParser.ParseElement("<root>" + Fragment(result.Data) + "</root>").Descendants("img").Single();
             int width = (int)img.Attribute("width")!, height = (int)img.Attribute("height")!;
             Check(width == (measured ? 320 : 720) && height == width / 2, "HTML uses raw bitmap dimensions or changes aspect");
             var png = Convert.FromBase64String(img.Attribute("src")!.Value["data:image/png;base64,".Length..]);
@@ -586,7 +586,7 @@ internal static class Program
         }
         var box = Box(table);
         box.Selection.Select(group.Rows[0].Cells[1].ContentStart, group.Rows[1].Cells[1].ContentEnd);
-        var root = XElement.Parse("<root>" + Fragment(Copy(box)) + "</root>");
+        var root = HtmlTestParser.ParseElement("<root>" + Fragment(Copy(box)) + "</root>");
         Check(root.Descendants("tr").Count() == 2 && root.Descendants("tr").All(r => r.Elements().Count() == 1),
             "empty rectangular copy included an unselected adjacent column or lost selected empty cells: " + root);
     }
@@ -649,7 +649,7 @@ internal static class Program
         var box = Box(paragraph);
         box.SelectAll();
         string html = Fragment(Copy(box));
-        var root = XDocument.Parse("<root>" + html + "</root>").Root!;
+        var root = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!;
         Check(root.Descendants("img").Count() == 32, "image count budget not enforced");
         Check(root.Value.Contains("图片未") && !html.Contains("unreachable"), "omitted images have no explicit boundary");
     }
@@ -699,7 +699,7 @@ internal static class Program
         Check(Encoding.UTF8.GetString(bytes, htmlEnd - 7, 7) == "</html>", "EndHTML incorrect");
         Check(Encoding.UTF8.GetString(bytes, start - 20, 20) == "<!--StartFragment-->", "StartFragment marker incorrect");
         Check(Encoding.UTF8.GetString(bytes, end, 18) == "<!--EndFragment-->", "EndFragment marker incorrect");
-        var fragment = XElement.Parse(Encoding.UTF8.GetString(bytes, start, end - start));
+        var fragment = HtmlTestParser.ParseElement(Encoding.UTF8.GetString(bytes, start, end - start));
         Check(fragment.Name == "div", "CF_HTML fragment must have a single outer div");
         return string.Concat(fragment.Nodes().Select(n => n.ToString(SaveOptions.DisableFormatting)));
     }

@@ -42,6 +42,7 @@ internal static class Program
             ("existing mapping and visible text", Mapping),
             ("block hierarchy and literal code", Blocks),
             ("preview inline styles and inert content", InlinePreview),
+            ("Markdown br tags use in-paragraph breaks like macOS build 9", BrBreaks),
             ("preview GFM autolinks and reference links", GfmPreview),
             ("preview lists and table grid", ListsAndTables),
             ("nested list levels and original CRLF ranges", NestedListChecks.Model),
@@ -185,6 +186,90 @@ internal static class Program
         string text = new TextRange(literal.Document.ContentStart, literal.Document.ContentEnd).Text;
         Check(text.Contains("<script>bad()</script>") && text.Contains("[图片：远程]") && !text.Contains("https://"), "inert text/image");
         Check(!AllParagraphs(literal.Document.Blocks).Any(p => p.Inlines.Any(i => i is Hyperlink or InlineUIContainer)), "no navigation/media");
+    }
+
+    private static void BrBreaks()
+    {
+        const char separator = '\u2028';
+        foreach (string tag in new[] { "<br>", "<br/>", "<br />", "<BR>", "<Br/>", "<BR  />", "<br\t/>" })
+        {
+            string source = "上😀" + tag + "下文";
+            var model = ReadingModel.Build(source, TextKind.Markdown);
+            Equal("上😀\u2028下文", model.VisibleText, $"ReadingModel br break: {tag}");
+            var preview = new MarkdownPreview(source, 16, 680);
+            var paragraph = preview.Document.Blocks.OfType<Paragraph>().Single();
+            Equal("上😀\u2028下文", string.Concat(Runs(paragraph.Inlines).Select(run => run.Text)),
+                $"preview paragraph reuses U+2028: {tag}");
+            Check(!paragraph.Inlines.OfType<LineBreak>().Any(),
+                $"preview inserted a block-level LineBreak instead of U+2028: {tag}");
+            Check(MarkdownSyntax.Tokens(source).Any(token =>
+                token.Start == 3 && token.Length == tag.Length), $"editor highlights the br tag: {tag}");
+        }
+
+        foreach (string literal in new[]
+                 {
+                     "`a<br>b`", "``a`<br>b``", "``a`**b<br>c**`d``", "``a`*b<br>c*`d``",
+                     "``a`~~b<br>c~~`d``", "\\<br>", "&lt;br&gt;", "<bravo>",
+                     "<br onclick=\"x\">", "<br / >", "<br x>"
+                 })
+        {
+            var preview = new MarkdownPreview(literal, 16, 680);
+            Check(!Runs(preview.Document.Blocks.OfType<Paragraph>().Single().Inlines)
+                .Any(run => run.Text.Contains(separator)), $"literal or code text was interpreted: {literal}");
+        }
+
+        var styled = new MarkdownPreview("**重点<br/>下一行** 与 [链接<br>文字](https://example.invalid)", 16, 680);
+        var styledRuns = Runs(styled.Document.Blocks.OfType<Paragraph>().Single().Inlines).ToArray();
+        var strong = styledRuns.Where(run => run.Text is "重点" or "下一行").ToArray();
+        Equal(2, strong.Length, "strong text is split only at the paragraph break");
+        Check(strong.All(run => run.FontWeight == FontWeights.Bold), "text on both sides of br keeps strong style");
+        var link = styledRuns.Where(run => run.Text is "链接" or "文字").ToArray();
+        Equal(2, link.Length, "link label is split only at the paragraph break");
+        Check(link.All(run => run.TextDecorations.Count > 0), "text on both sides of br keeps link style");
+
+        const string tableSource =
+            "| 问题 | 参考范围 | 推荐项 |\n| --- | :---: | ---: |\n" +
+            "| 计划口径 | A. 报单金额😀<br>B. 出库金额<br/>C. 销售数量 | 推荐A<BR />分析 |\n\n## 后续标题";
+        var tablePreview = new MarkdownPreview(tableSource, 16, 680);
+        var table = tablePreview.Document.Blocks.OfType<Table>().Single();
+        Equal(2, table.RowGroups.Single().Rows.Count, "br does not create extra table rows");
+        Equal(3, table.RowGroups.Single().Rows[1].Cells.Count, "br does not create extra table cells");
+        var cells = table.RowGroups.Single().Rows[1].Cells;
+        Equal("A. 报单金额😀\u2028B. 出库金额\u2028C. 销售数量",
+            string.Concat(Runs(cells[1].Blocks.OfType<Paragraph>().Single().Inlines).Select(run => run.Text)),
+            "table cell keeps both br breaks");
+        Equal("推荐A\u2028分析",
+            string.Concat(Runs(cells[2].Blocks.OfType<Paragraph>().Single().Inlines).Select(run => run.Text)),
+            "second table cell keeps its br");
+
+        var tableModel = ReadingModel.Build(tableSource, TextKind.Markdown);
+        var tableReading = RenderedReading.Markdown(tableModel, tableSource, null, 16, 680);
+        int separatorAt = tableModel.VisibleText.IndexOf(separator);
+        Check(separatorAt >= 0, "table model contains the in-paragraph break");
+        Equal(separatorAt, tableReading.OffsetAt(tableReading.PointerAt(separatorAt)),
+            "decorated table mapping keeps the br offset");
+        var followingHeading = tableModel.Headings.Last();
+        Equal(followingHeading.SourceStart, tableModel.DisplayToSource(followingHeading.DisplayStart),
+            "heading source mapping after a table br");
+        Equal(followingHeading.DisplayStart, tableModel.SourceToDisplay(followingHeading.SourceStart),
+            "heading display mapping after a table br");
+        Equal(followingHeading.DisplayStart,
+            tableReading.OffsetAt(tableReading.PointerAt(followingHeading.DisplayStart)),
+            "decorated heading mapping after a table br");
+
+        foreach (string fenced in new[]
+                 {
+                     "```html\nA<br>B\n```", "~~~\nA<BR/>B\n~~~", "    A<br>B"
+                 })
+        {
+            var model = ReadingModel.Build(fenced, TextKind.Markdown);
+            var preview = new MarkdownPreview(fenced, 16, 680);
+            Check(!AllParagraphs(preview.Document.Blocks).SelectMany(paragraph => Runs(paragraph.Inlines))
+                .Any(run => run.Text.Contains(separator)), "block code keeps br literal");
+            if (fenced.StartsWith("    ", StringComparison.Ordinal))
+                Equal("A<br>B", model.Blocks.Single(block => block.Kind == ReadingBlockKind.Code).Text,
+                    "indented code strips only its four-column marker");
+        }
     }
 
     private static void ListsAndTables()
