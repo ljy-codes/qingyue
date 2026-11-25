@@ -24,7 +24,10 @@ public sealed record AnnotationDraft(
     int SourceEnd,
     string Quote,
     string ContextBefore,
-    string ContextAfter);
+    string ContextAfter,
+    string? Note = null,
+    IReadOnlyList<string>? Tags = null,
+    AnnotationColor Color = AnnotationColor.Amber);
 
 public sealed record DocumentAnnotation(
     Guid Id,

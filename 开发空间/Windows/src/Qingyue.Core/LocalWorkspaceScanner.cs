@@ -5,7 +5,18 @@ namespace Qingyue.Core;
 public sealed class LocalWorkspaceScanner
 {
     public static IReadOnlySet<string> DefaultIgnoredDirectories { get; } =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "bin", "obj", ".git", ".vs" };
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", ".vs", "bin", "obj", "node_modules", ".build"
+        };
+
+    public static IReadOnlySet<string> DefaultExtensions { get; } =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "txt", "md", "markdown", "json", "jsonc", "yaml", "yml", "ini", "conf",
+            "config", "cfg", "toml", "log", "xml", "env", "js", "ts", "py", "java",
+            "cs", "sql", "html", "css", "go", "rs", "sh", "ps1", "csv"
+        };
 
     public Task<WorkspaceScanResult> ScanAsync(
         string root, WorkspaceScanOptions? options = null, CancellationToken cancellationToken = default) =>
@@ -19,17 +30,28 @@ public sealed class LocalWorkspaceScanner
         if (!Directory.Exists(fullRoot)) throw new DirectoryNotFoundException("工作区目录不存在：" + fullRoot);
         if (new DirectoryInfo(fullRoot).Attributes.HasFlag(FileAttributes.ReparsePoint))
             throw new IOException("工作区目录不能是重解析点。");
-        if (options.MaximumEntries is < 1 or > 100_000)
-            throw new ArgumentOutOfRangeException(nameof(options), "工作区条目上限必须在 1 到 100000 之间。");
+        if (options.MaximumEntries < 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "工作区文件上限不能小于 0。");
+        if (options.MaximumBytes < 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "工作区容量上限不能小于 0。");
 
         var ignored = options.IgnoredDirectories is null
             ? DefaultIgnoredDirectories
             : DefaultIgnoredDirectories.Concat(options.IgnoredDirectories)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var nameMatcher = Glob(options.FileNamePattern);
+        var extensions = (string.IsNullOrWhiteSpace(options.ExtensionFilter)
+                ? DefaultExtensions
+                : options.ExtensionFilter
+                    .Split([',', ';', ' ', '\t', '\r', '\n'],
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(value => value.Trim('.'))
+                    .Where(value => value.Length > 0)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase));
         var entries = new List<WorkspaceFileEntry>();
         var warnings = new List<string>();
         var pending = new Stack<string>();
+        long totalBytes = 0;
         pending.Push(fullRoot);
 
         while (pending.Count > 0)
@@ -47,12 +69,6 @@ public sealed class LocalWorkspaceScanner
             foreach (string child in children.OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (entries.Count >= options.MaximumEntries)
-                {
-                    warnings.Add($"工作区条目达到上限 {options.MaximumEntries:N0}，后续内容已忽略。");
-                    return new(fullRoot, entries, warnings);
-                }
-
                 FileAttributes attributes;
                 try { attributes = File.GetAttributes(child); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -63,24 +79,33 @@ public sealed class LocalWorkspaceScanner
                 if (attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
 
                 string name = Path.GetFileName(child);
+                bool hidden = name.StartsWith('.') || attributes.HasFlag(FileAttributes.Hidden);
+                if (!options.IncludeHidden && hidden) continue;
                 if (attributes.HasFlag(FileAttributes.Directory))
                 {
-                    if (ignored.Contains(name)) continue;
-                    entries.Add(new(child, Relative(fullRoot, child), true, 0, LastWrite(child), null));
-                    pending.Push(child);
+                    if (!ignored.Contains(name)) pending.Push(child);
                     continue;
                 }
-                if (!nameMatcher(name)) continue;
 
+                if (!nameMatcher(name)) continue;
+                string extension = Path.GetExtension(name).TrimStart('.');
+                if (!extensions.Contains(extension)) continue;
                 TextKind kind = TextServices.DetectKind(child, "");
                 if (!MatchesFilter(kind, options.FileFilter)) continue;
-                entries.Add(new(child, Relative(fullRoot, child), false, Length(child), LastWrite(child), kind));
+
+                long length = Length(child);
+                if (length < 0) continue;
+                if (entries.Count >= options.MaximumEntries)
+                    throw new WorkspaceScanLimitException("工作区文件数量超过上限。");
+                if (length > options.MaximumBytes - totalBytes)
+                    throw new WorkspaceScanLimitException("工作区扫描容量超过上限。");
+                totalBytes += length;
+                entries.Add(new(child, Relative(fullRoot, child), false, length, LastWrite(child), kind));
             }
         }
 
         return new(fullRoot, entries
-            .OrderBy(entry => entry.IsDirectory ? 0 : 1)
-            .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(entry => entry.RelativePath, NaturalOrder.Instance)
             .ToArray(), warnings);
     }
 
@@ -113,7 +138,7 @@ public sealed class LocalWorkspaceScanner
     private static long Length(string path)
     {
         try { return new FileInfo(path).Length; }
-        catch { return 0; }
+        catch { return -1; }
     }
 
     private static DateTimeOffset LastWrite(string path)

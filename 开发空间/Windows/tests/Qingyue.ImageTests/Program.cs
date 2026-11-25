@@ -48,6 +48,11 @@ internal static partial class Program
         File.WriteAllBytes(Path.Combine(FixtureDirectory, "本地 图 (1).png"), Png);
         Test("embedded PNG becomes a real frozen WPF bitmap", Embedded);
         Test("repeated image loads reuse the frozen bitmap cache", CacheReuse);
+        Test("decoded image cache keeps at most 32 entries", CacheCountLimit);
+        Test("decoded image cache trims to 24 MiB cost", CacheCostLimit);
+        Test("image cache identity follows bytes instead of path metadata", CacheContentIdentity);
+        Test("image cache cost uses decoded PNG bytes and decoded pixels", CacheDecodedPngCost);
+        Test("document image budget counts original pixels", OriginalPixelBudget);
         Test("code and escaped image syntax stay literal", LiteralCode);
         Test("mapped reading keeps one Run and UTF16 pointer roundtrips", Mapping);
         Test("relative absolute file URI Chinese spaces and URL escapes in both renderers", LocalPaths);
@@ -63,10 +68,17 @@ internal static partial class Program
         Test("parser fallback never renders embedded image data as body text", SafeFallback);
         Test("discarded bitmap results release the document decode budget", DiscardedBitmap);
         Test("missing corrupt invalid base64 and missing source path show reasons", Failures);
+        Test("embedded PNG tolerates decorations and omitted base64 padding", EmbeddedTolerance);
+        Test("embedded data URI enforces the macOS length and signature contract", EmbeddedLimits);
         Test("HTTP UNC encoded UNC and nonlocal file URIs never load", NoNetwork);
         Test("image byte pixel dimension and document count limits", Limits);
+        Test("decoded PNG larger than 32 MiB is rejected after real image encoding", DecodedPngLimit);
         Test("wide images decode to a bounded frozen bitmap", Downsample);
         Test("image layout scales with viewport and keeps its aspect ratio", Responsive);
+        Test("reading media starts all 32 document images in order and shares the retryable deadline",
+            ReadingMediaScheduler);
+        Test("real RichTextBox host starts document images that remain far below the viewport",
+            RealRichTextBoxHostScheduling);
         Test("preview replacement unload cancellation and recovery", Replacement);
         ResizeChecks();
         TableLayoutChecks();
@@ -117,6 +129,109 @@ internal static partial class Program
         second.Accept();
         Check(firstBitmap is { IsFrozen: true } && ReferenceEquals(firstBitmap, secondBitmap),
             "相同图片没有复用冻结位图");
+    }
+
+    private static void CacheCountLimit()
+    {
+        MarkdownImageCache.Clear();
+        for (int i = 0; i < MarkdownImageCache.MaximumCount + 1; i++)
+            MarkdownImageCache.Add(new MarkdownImageCacheKey("count-" + i),
+                CacheEntry(cost: 1));
+        Check(MarkdownImageCache.Count == MarkdownImageCache.MaximumCount,
+            "解码缓存没有遵守 macOS 的 32 项上限");
+        Check(!MarkdownImageCache.TryGet(new MarkdownImageCacheKey("count-0"), out _),
+            "最久未使用的第 33 项没有淘汰");
+    }
+
+    private static void CacheCostLimit()
+    {
+        MarkdownImageCache.Clear();
+        long share = MarkdownImageCache.MaximumCost / 4 + 1;
+        for (int i = 0; i < 4; i++)
+            MarkdownImageCache.Add(new MarkdownImageCacheKey("cost-" + i),
+                CacheEntry(cost: share));
+        Check(MarkdownImageCache.Cost <= MarkdownImageCache.MaximumCost &&
+            MarkdownImageCache.Count == 3,
+            "解码缓存没有按 macOS 的 24 MiB 总成本裁剪");
+    }
+
+    private static void CacheContentIdentity()
+    {
+        MarkdownImageCache.Clear();
+        string root = Path.Combine(AppContext.BaseDirectory, "artifacts", "cache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "same-metadata.png");
+        byte[] firstBytes = [.. Png, 0];
+        byte[] secondBytes = [.. Png, 1];
+        Check(firstBytes.Length == secondBytes.Length, "缓存回归素材长度不一致");
+        File.WriteAllBytes(path, firstBytes);
+        DateTime writeTime = File.GetLastWriteTimeUtc(path);
+        var first = Load(path);
+        Check(first.Bitmap is not null, "首张图片加载失败");
+        first.Accept();
+
+        File.WriteAllBytes(path, secondBytes);
+        File.SetLastWriteTimeUtc(path, writeTime);
+        Check(new FileInfo(path).Length == firstBytes.Length, "回归素材长度被改变");
+        var second = Load(path);
+        Check(second.Bitmap is not null && !ReferenceEquals(first.Bitmap, second.Bitmap),
+            "同长度同时间但内容变化时错误命中旧缓存");
+        second.Accept();
+    }
+
+    private static void OriginalPixelBudget()
+    {
+        const int width = 5000, height = 3200;
+        var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Gray8,
+            null, new byte[width * height], width);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        string target = "data:image/png;base64," + Convert.ToBase64String(stream.ToArray());
+        var budget = new MarkdownImageBudget();
+        for (int i = 0; i < 3; i++)
+        {
+            var task = MarkdownImageLoader.LoadAsync(target, null, budget, CancellationToken.None);
+            PumpUntil(() => task.IsCompleted, "原图像素预算加载未完成");
+            var result = task.GetAwaiter().GetResult();
+            Check(result.Bitmap is { PixelWidth: 4096 }, "边界图片未按 4096 最长边解码");
+            result.Accept();
+        }
+        var over = MarkdownImageLoader.LoadAsync(target, null, budget, CancellationToken.None);
+        PumpUntil(() => over.IsCompleted, "原图像素超限加载未完成");
+        Check(over.GetAwaiter().GetResult().Error!.Contains("原图像素"),
+            "单篇预算错误使用了解码后像素，而不是 macOS 的原图像素");
+    }
+
+    private static void CacheDecodedPngCost()
+    {
+        MarkdownImageCache.Clear();
+        var result = Load(DataUri);
+        try
+        {
+            Check(result.Bitmap is { PixelWidth: 640, PixelHeight: 320 } && result.DecodedPng is not null,
+                "真实图片加载未产生解码 PNG");
+            Check(MarkdownImageCache.TryGet(MarkdownImageCacheKey.FromBytes(Convert.FromBase64String(
+                    DataUri["data:image/png;base64,".Length..])), out var entry),
+                "真实图片加载结果未进入解码缓存");
+            Check(entry.DecodedPng.AsSpan().SequenceEqual(result.DecodedPng),
+                "缓存没有保留图片装载时实际生成的解码 PNG");
+            Check(entry.DecodedPixels == 640L * 320 &&
+                entry.Cost == entry.DecodedPngBytes + entry.DecodedPixels * 4,
+                "缓存成本未按解码 PNG 字节数加解码像素×4 计算");
+            Check(entry.DecodedPngBytes <= MarkdownImageLoader.MaximumDecodedPngBytes,
+                "缓存接受了超过 32 MiB 的解码 PNG");
+        }
+        finally { result.Dispose(); }
+    }
+
+    private static MarkdownImageCacheEntry CacheEntry(long cost)
+    {
+        var bitmap = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32,
+            null, new byte[4], 4);
+        bitmap.Freeze();
+        return new MarkdownImageCacheEntry(bitmap, [1], 1, 1, 1, cost);
     }
 
     private static void LiteralCode()
@@ -303,7 +418,7 @@ internal static partial class Program
             (Target: "不存在.png", Path: (string?)SourcePath, Reason: "找不到"),
             (Target: "损坏.png", Path: (string?)SourcePath, Reason: "损坏"),
             (Target: "本地 图 (1).png", Path: (string?)null, Reason: "文档路径"),
-            (Target: "data:image/png;base64,!!!", Path: (string?)null, Reason: "损坏"),
+            (Target: "data:image/png;base64,!!!", Path: (string?)null, Reason: "仅支持有界"),
             (Target: "data:image/svg+xml;base64,PHN2Zy8+", Path: (string?)null, Reason: "仅支持")
         })
         {
@@ -313,6 +428,29 @@ internal static partial class Program
             Check(Images(preview.Document).All(i => i.Source is null) && Text(preview.Document).Contains("后文保留"),
                 "错误图片破坏后续正文");
         }
+    }
+
+    private static void EmbeddedTolerance()
+    {
+        string encoded = Convert.ToBase64String(Png.Concat(new byte[] { 0 }).ToArray());
+        Check(encoded.EndsWith('='), "内嵌 PNG 测试素材必须包含 Base64 填充");
+        string decorated = encoded[..24] + "\r\n *** " + encoded[24..];
+        Check(Load("data:image/png;base64," + decorated).Bitmap is not null,
+            "Base64 中夹带的换行、空格和装饰字符应被忽略");
+        Check(Load("data:image/png;base64," + encoded.TrimEnd('=')).Bitmap is not null,
+            "省略末尾 Base64 填充时应与 macOS 一样继续加载");
+    }
+
+    private static void EmbeddedLimits()
+    {
+        int maximumChars = MarkdownImageLoader.MaximumBytes * 4 / 3 + 128;
+        const string header = "data:image/png;base64,";
+        string over = header + new string('A', maximumChars - header.Length + 1);
+        Check(Load(over).Error?.Contains("仅支持有界的内嵌 PNG", StringComparison.Ordinal) == true,
+            "超长内嵌数据应使用 macOS 的有界 PNG 错误");
+        string nonPng = Convert.ToBase64String("not a png"u8);
+        Check(Load(header + nonPng).Error?.Contains("仅支持有界的内嵌 PNG", StringComparison.Ordinal) == true,
+            "非 PNG 签名必须被拒绝");
     }
 
     private static void CaptionMapping()
@@ -439,8 +577,9 @@ internal static partial class Program
             Check((object)result is IDisposable, "未被 UI 接收的位图没有释放预算的方法");
             ((IDisposable)(object)result).Dispose();
         }
-        Check(budget.Reserve(64L * 1024 * 1024, 48_000_000), "丢弃解码结果耗尽文档预算");
-        budget.Release(64L * 1024 * 1024, 48_000_000);
+        Check(!budget.Reserve(32L * 1024 * 1024 + 1, 0), "单篇图片数据预算超过 32 MiB 仍被接受");
+        Check(budget.Reserve(32L * 1024 * 1024, 48_000_000), "丢弃解码结果耗尽文档预算");
+        budget.Release(32L * 1024 * 1024, 48_000_000);
     }
 
     private static void SelectFragment(RichDocumentMap map, string text, string fragment)
@@ -484,7 +623,19 @@ internal static partial class Program
     {
         string large = Path.Combine(FixtureDirectory, "超大.png");
         using (var file = File.Create(large)) file.SetLength(MarkdownImageLoader.MaximumBytes + 1L);
-        Check(Load(large).Error!.Contains("16 MiB"), "没有拒绝超大文件");
+        Check(MarkdownImageLoader.MaximumBytes == 8 * 1024 * 1024,
+            "单图数据上限未与 macOS 的 8 MiB 对齐");
+        Check(MarkdownImageLoader.MaximumPixels == 16_000_000,
+            "单图像素上限未与 macOS 的 1600 万对齐");
+        Check(MarkdownImageLoader.MaximumDecodedPngBytes == 32 * 1024 * 1024,
+            "解码 PNG 上限未与 macOS 的 32 MiB 对齐");
+        Check(MarkdownImageLoader.MaximumDecodedSide == 4096,
+            "解码最长边未与 macOS 的 4096 对齐");
+        Check(MarkdownImageBudget.MaximumImages == 32 &&
+            MarkdownImageBudget.MaximumBytes == 32L * 1024 * 1024 &&
+            MarkdownImageBudget.MaximumPixels == 48_000_000,
+            "单篇图片数量、原始字节或原图像素预算未与 macOS 对齐");
+        Check(Load(large).Error!.Contains("8 MiB"), "没有拒绝超大文件");
         var header = (byte[])Png.Clone();
         BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(16, 4), 8000);
         BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(20, 4), 8000);
@@ -510,6 +661,34 @@ internal static partial class Program
         var task = MarkdownImageLoader.LoadAsync(DataUri, null, new MarkdownImageBudget(), canceled.Token);
         PumpUntil(() => task.IsCompleted, "取消任务未完成");
         Check(task.IsCanceled, "取消未生效");
+    }
+
+    private static void DecodedPngLimit()
+    {
+        const int width = 4000, height = 3000;
+        var pixels = new byte[width * height * 3];
+        uint state = 0x9e3779b9;
+        for (int index = 0; index < pixels.Length; index++)
+        {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            pixels[index] = (byte)state;
+        }
+        var source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgr24,
+            null, pixels, width * 3);
+        source.Freeze();
+        var encoder = new JpegBitmapEncoder { QualityLevel = 60 };
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using var jpeg = new MemoryStream();
+        encoder.Save(jpeg);
+        Check(jpeg.Length <= MarkdownImageLoader.MaximumBytes,
+            $"超限回归素材 JPEG 为 {jpeg.Length} 字节，超过 8 MiB 输入上限");
+        string path = Path.Combine(FixtureDirectory, "解码后超限.jpg");
+        File.WriteAllBytes(path, jpeg.ToArray());
+        var result = Load(path);
+        Check(result.Bitmap is null && result.Error!.Contains("解码图片超过 32 MiB"),
+            "真实 JPEG 解码后 PNG 超过 32 MiB 时未被拒绝");
     }
 
     private static uint Crc32(ReadOnlySpan<byte> bytes)
@@ -560,6 +739,102 @@ internal static partial class Program
         for (int i = 0; i < pixels.Length; i += 4)
             if (Math.Abs(pixels[i] - pixels[i + 2]) > 100 && pixels[i + 3] > 0) colorful++;
         Check(colorful > 20_000, "离屏预览没有真实彩色图片像素");
+    }
+
+    private static void ReadingMediaScheduler()
+    {
+        string source = string.Join("\n\n",
+            Enumerable.Range(0, MarkdownImageScheduler.MaximumImages)
+                .Select(index => $"![图 {index}]({DataUri})"));
+        var model = ReadingModel.Build(source, TextKind.Markdown);
+        var reading = RenderedReading.Markdown(model, source, null, 16, 680);
+        var views = Controls(reading.Document.Blocks).OfType<MarkdownImageView>().ToArray();
+        Check(views.Length == MarkdownImageScheduler.MaximumImages, "图片调度回归素材不足 32 个控件");
+
+        // Only the first realized control is activated. The scheduler must still
+        // start the whole document rather than waiting for each viewport row.
+        views[0].RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        PumpUntil(() => views.All(view => view.IsReady),
+            "未实现到视口的文档图片没有按全文顺序启动");
+        Check(views.Select(view => view.SourceStart).SequenceEqual(
+            views.Select(view => view.SourceStart).Order()),
+            "图片控件没有保持源文顺序");
+
+        TimeSpan originalDeadline = MarkdownImageScheduler.Deadline;
+        try
+        {
+            MarkdownImageScheduler.Deadline = TimeSpan.Zero;
+            var timedOut = new MarkdownPreview("![超时图](" + DataUri + ")", 16, 680);
+            var view = Controls(timedOut.Document.Blocks).OfType<MarkdownImageView>().Single();
+            view.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+            PumpUntil(() => view.IsFailed &&
+                Status(timedOut.Document).Any(text => text.Contains("超过 5 秒", StringComparison.Ordinal)),
+                "图片共享时限没有留下可重试说明");
+            Check(RetryMenu(view).IsEnabled, "超时图片没有开放单独重试");
+
+            MarkdownImageScheduler.Deadline = originalDeadline;
+            view.Retry();
+            PumpUntil(() => view.IsReady, "超时图片恢复时限后无法重试成功");
+        }
+        finally
+        {
+            MarkdownImageScheduler.Deadline = originalDeadline;
+        }
+    }
+
+    private static void RealRichTextBoxHostScheduling()
+    {
+        string spacer = string.Join("\n\n",
+            Enumerable.Range(0, 24).Select(index => $"填充段落 {index}，用于把后续图片推离当前视口。"));
+        string source = string.Join("\n\n", Enumerable.Range(0, MarkdownImageScheduler.MaximumImages)
+            .Select(index => $"![远图 {index}]({DataUri})\n\n{spacer}"));
+        var model = ReadingModel.Build(source, TextKind.Markdown);
+        var reading = RenderedReading.Markdown(model, source, null, 16, 680);
+        var views = Controls(reading.Document.Blocks).OfType<MarkdownImageView>().ToArray();
+        Check(views.Length == MarkdownImageScheduler.MaximumImages, "真实宿主图片素材不足 32 个控件");
+
+        var host = new RichTextBox
+        {
+            Document = reading.Document,
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
+        var window = new Window
+        {
+            Width = 560,
+            Height = 260,
+            Left = -10_000,
+            Top = -10_000,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None,
+            Content = host
+        };
+        try
+        {
+            window.Show();
+            PumpUntil(() => views[0].IsReady,
+                "真实 RichTextBox 宿主中的首张图片没有触发全文加载");
+            PumpUntil(() => views.All(view => view.IsReady),
+                "真实 RichTextBox 宿主中的远端图片没有完成全文加载");
+            bool lastImageOutsideViewport;
+            try
+            {
+                lastImageOutsideViewport =
+                    views[^1].TranslatePoint(new Point(0, 0), host).Y >= host.ActualHeight;
+            }
+            catch (InvalidOperationException)
+            {
+                lastImageOutsideViewport = true;
+            }
+            Check(lastImageOutsideViewport, "真实宿主最后一张图片并未位于当前视口之外");
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     private static void Replacement()

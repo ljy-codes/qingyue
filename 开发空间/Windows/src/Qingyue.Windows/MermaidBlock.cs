@@ -97,7 +97,7 @@ internal static class MermaidBlock
             expander.SetResourceReference(Control.ForegroundProperty, "MutedBrush");
             content.Children.Add(expander);
         }
-        var panel = new Border
+        var panel = new MermaidBlockPanel(block)
         {
             Child = content, Padding = new Thickness(16), BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Stretch
@@ -134,4 +134,9 @@ internal static class MermaidBlock
             return notice;
         }
     }
+}
+
+internal sealed class MermaidBlockPanel(ReadingBlock source) : Border
+{
+    internal ReadingBlock Source { get; } = source;
 }

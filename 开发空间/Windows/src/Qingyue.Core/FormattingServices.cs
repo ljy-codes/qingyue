@@ -7,8 +7,11 @@ namespace Qingyue.Core;
 
 internal static class FormattingServices
 {
-    private const int MaxCharacters = 50_000_000;
-    private const int MaxDepth = 256;
+    private const int MaxCharacters = 500_000;
+    private const int MaxOutputCharacters = 4_000_000;
+    private const int JsoncMaxDepth = 128;
+    private const int JsoncMaxNodes = 100_000;
+    private const int XmlMaxDepth = 128;
 
     internal static string Format(string text, TextKind kind)
     {
@@ -213,7 +216,13 @@ internal static class FormattingServices
         {
             // Validate without dictionaries or numeric conversions. Emit original tokens below,
             // so even escaped/lone surrogate strings and duplicate keys retain their spelling.
-            using (JsonDocument.Parse(text, TextServices.JsonOptions(kind))) { }
+            using (var document = JsonDocument.Parse(text, kind == TextKind.Jsonc
+                ? TextServices.JsoncFormatOptions()
+                : TextServices.JsonOptions(kind)))
+            {
+                if (kind == TextKind.Jsonc && CountJsonNodes(document.RootElement) > JsoncMaxNodes)
+                    throw new FormatException("JSONC 格式化失败：值节点超过 100000 个上限，请分段处理。");
+            }
             var output = new Output();
             int depth = 0;
             bool lineStart = true;
@@ -276,6 +285,28 @@ internal static class FormattingServices
             string label = kind == TextKind.Jsonc ? "JSONC" : "JSON";
             throw new FormatException($"{label} 格式化失败：请先修复语法。{error.Message}", error);
         }
+    }
+
+    private static int CountJsonNodes(JsonElement element)
+    {
+        int count = 1;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                count = checked(count + CountJsonNodes(property.Value));
+                if (count > JsoncMaxNodes) return count;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray())
+            {
+                count = checked(count + CountJsonNodes(child));
+                if (count > JsoncMaxNodes) return count;
+            }
+        }
+        return count;
     }
 
     private static IEnumerable<(int Start, int Length, char Kind)> Tokens(string text)
@@ -345,7 +376,7 @@ internal static class FormattingServices
 
             void Indent(XElement element, int depth)
             {
-                if (depth >= MaxDepth) throw new FormatException("XML 格式化失败：嵌套超过 256 层。");
+                if (depth > XmlMaxDepth) throw new FormatException("XML 格式化失败：嵌套超过 128 层。");
                 if ((string?)element.Attribute(XNamespace.Xml + "space") == "preserve") return;
                 var nodes = element.Nodes().ToArray();
                 // Whitespace adjacent to inline children may itself be text. Only treat
@@ -365,7 +396,7 @@ internal static class FormattingServices
             {
                 addedWhitespace += 1 + depth * 2;
                 if (text.Length + addedWhitespace > MaxCharacters)
-                    throw new FormatException("XML 格式化输出超过 5000 万字符上限，请缩小内容。");
+                    throw new FormatException("XML 格式化输出超过 400 万字符上限，请缩小内容。");
                 return "\n" + new string(' ', depth * 2);
             }
         }
@@ -381,7 +412,7 @@ internal static class FormattingServices
     {
         ArgumentNullException.ThrowIfNull(text);
         if (text.Length > MaxCharacters)
-            throw new FormatException("格式化输入超过 5000 万字符上限，请缩小内容。");
+            throw new FormatException("格式化最多处理 500000 个文本单元，请分段整理。");
     }
 
     private sealed class Output
@@ -399,8 +430,8 @@ internal static class FormattingServices
         }
         private void Ensure(int count)
         {
-            if (count > MaxCharacters - builder.Length)
-                throw new FormatException("格式化输出超过 5000 万字符上限，请缩小内容。");
+            if (count > MaxOutputCharacters - builder.Length)
+                throw new FormatException("格式化输出超过 400 万字符上限，请分段处理。");
         }
         public override string ToString() => builder.ToString();
     }

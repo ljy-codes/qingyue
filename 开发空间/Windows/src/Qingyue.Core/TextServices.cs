@@ -128,6 +128,13 @@ public static class TextServices
         MaxDepth = 256
     };
 
+    internal static JsonDocumentOptions JsoncFormatOptions() => new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip,
+        MaxDepth = 128
+    };
+
     /// <summary>Formats supported kinds, returning LF text. Use NormalizeWhitespace explicitly for other kinds.</summary>
     public static string Format(string text, TextKind kind) => FormattingServices.Format(text, kind);
 

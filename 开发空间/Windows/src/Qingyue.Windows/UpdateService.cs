@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Qingyue.Windows;
 
@@ -13,7 +14,15 @@ public sealed record UpdateCheckResult(
 
 public sealed class UpdateService
 {
+    private const string ReleasePrefix =
+        "https://github.com/ljy-codes/qingyue/releases/tag/";
+    private const int MaxResponseBytes = 2 * 1024 * 1024;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
+    // Windows releases used bare vX.Y.Z tags before the platform suffix was
+    // introduced. Both forms are Windows history; macOS tags remain excluded.
+    private static readonly Regex WindowsTagPattern = new(
+        @"^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?:-windows)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly Version currentVersion;
     private readonly HttpClient httpClient;
     private readonly Uri releasesUri;
@@ -23,7 +32,7 @@ public sealed class UpdateService
         this.currentVersion = currentVersion ?? throw new ArgumentNullException(nameof(currentVersion));
         this.httpClient = httpClient ?? new HttpClient();
         this.releasesUri = releasesUri ??
-            new Uri("https://api.github.com/repos/ljy-codes/qingyue/releases?per_page=20");
+            new Uri("https://api.github.com/repos/ljy-codes/qingyue/releases?per_page=100");
     }
 
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
@@ -37,8 +46,21 @@ public sealed class UpdateService
             using var response = await httpClient.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             response.EnsureSuccessStatusCode();
-            string json = await response.Content.ReadAsStringAsync(timeout.Token);
-            return CheckJson(json);
+            if (response.Content.Headers.ContentLength > MaxResponseBytes)
+                return Failed("更新服务返回的数据过大。");
+            await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+            var buffer = new byte[MaxResponseBytes + 1];
+            int length = 0;
+            while (length < buffer.Length)
+            {
+                int read = await stream.ReadAsync(
+                    buffer.AsMemory(length, buffer.Length - length), timeout.Token);
+                if (read == 0) break;
+                length += read;
+            }
+            if (length > MaxResponseBytes)
+                return Failed("更新服务返回的数据过大。");
+            return CheckJson(buffer.AsMemory(0, length));
         }
         catch (OperationCanceledException)
         {
@@ -58,7 +80,7 @@ public sealed class UpdateService
         }
     }
 
-    private UpdateCheckResult CheckJson(string json)
+    private UpdateCheckResult CheckJson(ReadOnlyMemory<byte> json)
     {
         using var document = JsonDocument.Parse(json);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
@@ -75,18 +97,22 @@ public sealed class UpdateService
 
             string? tag = GetString(item, "tag_name");
             if (string.IsNullOrWhiteSpace(tag)) continue;
-            if (!Version.TryParse(tag.Trim().TrimStart('v', 'V'), out var version)) continue;
+            var tagMatch = WindowsTagPattern.Match(tag);
+            if (!tagMatch.Success) continue;
+            if (!Version.TryParse(
+                    $"{tagMatch.Groups["major"].Value}.{tagMatch.Groups["minor"].Value}.{tagMatch.Groups["patch"].Value}",
+                    out var version))
+                continue;
             stableSeen = true;
 
             string? url = GetString(item, "html_url");
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var releaseUri) ||
-                releaseUri.Scheme is not ("http" or "https"))
+            if (url is null || !string.Equals(url, ReleasePrefix + tag, StringComparison.Ordinal))
                 continue;
 
             DateTimeOffset? publishedAt = null;
             if (DateTimeOffset.TryParse(GetString(item, "published_at"), out var published))
                 publishedAt = published;
-            var candidate = new Release(version, releaseUri.ToString(), publishedAt);
+            var candidate = new Release(version, url, publishedAt);
             if (latest is null || candidate.Version > latest.Version) latest = candidate;
         }
 

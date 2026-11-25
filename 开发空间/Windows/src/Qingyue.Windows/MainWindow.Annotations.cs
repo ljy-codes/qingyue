@@ -34,9 +34,12 @@ public partial class MainWindow
         if (values is null) return;
         try
         {
-            var item = annotations.Add(tab.File, draft);
-            if (!annotations.Update(item.Id, values.Note, values.Tags, values.Color))
-                throw new InvalidOperationException("批注创建后无法更新编辑内容。");
+            annotations.Add(tab.File, draft with
+            {
+                Note = values.Note,
+                Tags = values.Tags,
+                Color = values.Color
+            });
             annotationsDirty = true;
             RefreshAnnotations();
             RefreshAnnotationHighlights();
@@ -101,7 +104,7 @@ public partial class MainWindow
             {
                 draft = AnnotationSelection.FromReading(
                     tab.File.Id, tab.File.Path, tab.Reading, start, end - start);
-                return true;
+                return draft.SourceEnd > draft.SourceStart && draft.Quote.Length > 0;
             }
         }
         else if (tab.Editor.SelectionLength > 0)
@@ -123,15 +126,25 @@ public partial class MainWindow
         if (values is null) return;
         try
         {
+            ApplyAnnotationValues(annotation, values);
+            StatusText.Text = "批注已更新。";
+        }
+        catch (Exception ex) { Notify("批注更新失败：\n" + ex.Message); }
+    }
+
+    private void ApplyAnnotationValues(
+        DocumentAnnotation annotation, AnnotationEditorResult values)
+    {
+        try
+        {
             if (!annotations.Update(annotation.Id, values.Note, values.Tags, values.Color))
                 throw new InvalidOperationException("批注已不存在。");
             annotationsDirty = true;
             RefreshAnnotations();
             RefreshAnnotationHighlights();
             SchedulePersist();
-            StatusText.Text = "批注已更新。";
         }
-        catch (Exception ex) { Notify("批注更新失败：\n" + ex.Message); }
+        catch { throw; }
     }
 
     private void RemoveAnnotation(DocumentAnnotation annotation)
@@ -167,6 +180,7 @@ public partial class MainWindow
             .ToArray();
         AnnotationList.ItemsSource = values;
         AnnotationTab.Header = values.Length == 0 ? "批注" : $"批注 ({values.Length})";
+        RefreshCompanionWindows();
     }
 
     private void AnnotationDoubleClick(object sender, MouseButtonEventArgs e)
@@ -216,8 +230,8 @@ public partial class MainWindow
         }
         if (tab is null) return;
 
-        if (CurrentTab is { } current && current != tab) RememberReadingPosition(current);
         SelectTab(tab);
+        RememberReadingPosition(tab);
         int sourceStart = Math.Clamp(annotation.SourceStart, 0, tab.File.Text.Length);
         int sourceEnd = Math.Clamp(annotation.SourceEnd, sourceStart, tab.File.Text.Length);
         if (tab.Kind == TextKind.Markdown && !tab.IsReading)
@@ -346,6 +360,12 @@ public partial class MainWindow
                 annotationsDirty = true;
             }
         }
+        if (bookmarks.Repair(tab.File.Id, tab.File.Path, oldText, newText) > 0)
+        {
+            bookmarksDirty = true;
+            ScheduleBookmarkSave();
+            if (CurrentTab == tab) RefreshBookmarks();
+        }
         if (refresh && CurrentTab == tab)
         {
             RefreshAnnotations();
@@ -374,6 +394,16 @@ public partial class MainWindow
         finally { annotationSaveTask = null; }
     }
 
+    private async Task ReloadAnnotationsAfterFailedSaveAsync()
+    {
+        await annotations.LoadAsync();
+        annotationsDirty = false;
+        RefreshAnnotations();
+        RefreshAnnotationHighlights();
+        if (!string.IsNullOrWhiteSpace(annotations.LastWarning))
+            StatusText.Text = "批注文件已重新载入：" + annotations.LastWarning;
+    }
+
     private static int LineNumber(string text, int sourceOffset)
     {
         int line = 1;
@@ -395,15 +425,18 @@ public static class AnnotationSelection
         ArgumentNullException.ThrowIfNull(model);
         int start = Math.Clamp(displayStart, 0, model.VisibleText.Length);
         int end = Math.Clamp(start + Math.Max(0, displayLength), start, model.VisibleText.Length);
-        string quote = model.VisibleText[start..end];
-        int beforeStart = Math.Max(0, start - 160);
-        int afterEnd = Math.Min(model.VisibleText.Length, end + 160);
-        int sourceStart = model.DisplayToSource(start);
-        int sourceEnd = Math.Max(sourceStart, model.DisplayToSource(end));
+        var first = model.SourceRangeForDisplay(start);
+        var last = model.SourceRangeForDisplay(end);
+        int sourceStart = Math.Min(first.Start, last.Start);
+        int sourceEnd = Math.Max(first.Start + first.Length, last.Start + last.Length);
+        string source = model.SourceText;
+        string quote = source[sourceStart..sourceEnd];
+        int beforeStart = Math.Max(0, sourceStart - 160);
+        int afterEnd = Math.Min(source.Length, sourceEnd + 160);
         return new AnnotationDraft(
             documentId, sourcePath, sourceStart, sourceEnd, quote,
-            model.VisibleText[beforeStart..start],
-            model.VisibleText[end..afterEnd]);
+            source[beforeStart..sourceStart],
+            source[sourceEnd..afterEnd]);
     }
 
     public static AnnotationDraft FromEditor(

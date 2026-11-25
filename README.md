@@ -2,96 +2,88 @@
 
 轻量的本地文本阅读与编辑工具：打开方便、阅读舒服、修改可靠。
 
-A lightweight local text reader and editor for macOS and Windows.
+当前版本：
 
-macOS 当前为 **0.1.0 · Mac 构建 4**。下载：[Mac 构建 4 体验包](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-4)；[Mac 构建 3](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-3)、[Mac 构建 2](https://github.com/ljy-codes/qingyue/releases/tag/macos-build-2)和[首个 0.1.0 体验包](https://github.com/ljy-codes/qingyue/releases/tag/v0.1.0)作为历史版本保留。
+- macOS **0.4.0 · 构建 14**，Intel / Apple Silicon universal 预览包。
+- Windows **0.19.0 · 构建 1**，.NET 10 + WPF 自包含 x64 客户端。
 
-macOS 客户端使用 Swift、AppKit 与系统文本组件，日常文件读写在本机完成，无账号、后台服务、WebView 或第三方运行时。
+轻阅在本机完成文件读写，不要求账号或后台服务。Mac 使用 Swift、AppKit 与系统文本组件；Windows 使用 WPF 原生文本与排版组件。两端共享功能契约，界面、快捷键、文件系统、剪贴板和安装方式遵循各自平台规范。
 
-Windows 当前开发版为 **0.18.0 · 构建 1**，下载：[Windows 0.18.0](https://github.com/ljy-codes/qingyue/releases/tag/v0.18.0)。
-使用 .NET 10 + WPF，提供 x64 自包含便携目录、ZIP 与 NSIS 安装包；
-应用内置天空蓝、樱花紫、薄荷珊瑚和蜜桃紫四套动漫风格图标，可在“视图 → 阅读外观”中切换并保存在本机；
-0.18.0 将顶部菜单与品牌区合并为一行，编辑操作移到右上角，并将深色编辑区调整为中性冷灰；
-Markdown 编辑工具条显示当前块与列表层级，输入 `-` 加空格显示圆点，预览继续保留嵌套圆点层次；
-0.17.0 默认延迟创建未展开标签的阅读控件，切换、关闭和批量打开时及时释放旧阅读文档，降低未展开文档场景的内存占用；
-顶部品牌栏、标签栏和编辑工具栏统一增加主体色层，形成窗口色 → 主体色 → 编辑器色的视觉层次；
-新增 Markdown 层次参考线、列表内部标题/引用/表格排版、表格单元格导航与增删行列，以及截图粘贴、选图和拖图插入；
-文件继续保存标准 Markdown，图片保存在文档旁的 `.assets` 文件夹，预览、阅读和富文本复制保留层次。
-已支持本机批注与阅读简报、阅读外观、本地工作区、全局搜索、阅读清单、TXT/Markdown 格式化、
-JSON 结构折叠、本地图片与有限 Mermaid 图形；保留安全保存、撤销、恢复和外部修改保护。
-操作与解析边界见 [Windows 使用说明](操作指导/Windows使用说明.md)。
-本地构建、测试与打包命令见 [Windows 工程](开发空间/Windows/README.md)。
-下方原有功能列表主要描述 Mac 版本，Windows 的已实现范围以其独立说明为准。
+## GitHub 分支与版本
+
+长期分支为 `main`、`macos` 和 `windows`：
+
+- `main`：项目基线、公共说明、功能矩阵和对齐规则。
+- `macos`：Mac 原生实现、构建与验收。
+- `windows`：Windows 原生实现、安装器与验收。
+
+Mac 使用偶数次版本和偶数构建号，Windows 使用奇数次版本；标签分别为 `v<版本>-macos` 和 `v<版本>-windows`。详细规则见[跨平台版本与功能对齐规则](docs/跨平台版本与功能对齐规则.md)。
 
 ## 当前功能
 
 - TXT、Markdown、JSON/JSONC、YAML、INI/CONF/CONFIG 和 XML 文本编辑。
-- 普通布局中显示“文件、编辑、搜索、视图、标签、帮助”窗口菜单条，直接点击即可打开常用操作。
-- 多标签、最近文件菜单、快速打开、拖入编辑区、行号、自动换行、跳转行、撤销与重做。
-- 顶部侧栏开关在收起侧栏后仍可使用；标签支持双击或右键重命名。
-- 会话恢复标签顺序、当前标签、阅读模式和内容位置；已保存文件重新读取磁盘，未保存草稿独立恢复。
-- 草稿管理提供全局开关、当前文档排除与清理；不可变快照在后台串行写入。
-- 保存全部、关闭全部，以及标签移动与排序。
-- 查找替换支持大小写、正则、全词、匹配计数与高亮，以及正则捕获组替换。
-- 阅读模式内查找和目录导航，保持阅读模式；源文与阅读视图采用块级对应，便于切换时继续处理同一段内容。
-- Windows 工作区支持打开文件夹、树状浏览、类型和文件名过滤、收藏目录与全局搜索。
-- Windows 阅读清单支持固定、已读/未读、阅读进度和上次位置恢复，清单数据只保存在本机。
-- Windows 当前文档支持本机批注：摘录、备注、标签、颜色、锚点状态和独立高亮；批注保存在 `%LOCALAPPDATA%\\Qingyue\\Annotations.json`。
-- Windows 当前文档支持 Markdown/HTML 阅读简报导出，以及深色、浅色、暖纸主题和字体、行高、段距设置；批注高亮与搜索高亮相互独立。
-- 正文版心和专注布局；TXT/Markdown 侧重正文排版，JSON/YAML/配置等文本保留等宽缩进与高亮。
-- Markdown 标题、列表、任务列表、删除线、代码、链接和基础表格的原生阅读。
-- 阅读与编辑外观设置、系统外观跟随、位置记忆；每个文件可保留自己的阅读/编辑模式。
-- 标签切换快捷键与右键文件操作，复制路径、在 Finder 中显示；窗口位置记忆，关闭窗口与退出应用分开。
-- Tab / Shift+Tab 整行缩进，换行继承缩进。
-- JSON 检查与保留数字原始精度的格式化；JSONC 支持注释和尾逗号检查。
-- UTF-8/BOM、UTF-16 LE/BE、GB18030，保留编码与换行；安全保存、外部修改冲突提示、本机恢复草稿。
+- 多标签、最近文件、快速打开、拖入打开、标签排序、重命名和保存全部。
+- 阅读模式、源码编辑、Markdown 分屏预览、目录跳转、正文定位和阅读位置返回。
+- 本地相对/绝对路径图片、内嵌 PNG、图表窗口、宽表阅读和有限离线 Mermaid 时序图/流程图。
+- Markdown 段内 `<br>`、表格编辑、TSV 粘贴为表格、图片插入与资源预算保护。
+- 选区图文复制、全文复制、纯文本复制、Markdown 源文复制、代码块/表格复制和自包含 HTML 导出。
+- 查找替换：大小写、全词、正则、捕获组、匹配高亮、取消和替换预览；字面查找支持 5000 万 UTF-16 单元。
+- 工作区、跨文件全局搜索、阅读清单、书签、批注与 Markdown/HTML 阅读简报。
+- 独立设置窗口、七套外观主题、系统外观跟随、字体、行距、段距、版心和四款 1024px 应用图标。
+- 会话恢复、当前文件草稿开关、草稿清理、外部修改三路处理、安全保存、编码与换行保留。
+- 本地文件 ACL、只读、占用、硬链接、重解析点和原子替换保护；网络图片不下载，HTML 不执行。
 
-完整操作和边界见[Windows 使用说明](操作指导/Windows使用说明.md)，本轮变化见[变更记录](CHANGELOG.md)。
+完整 CommonMark/GFM、完整 YAML 校验、多窗口、Office 编辑、云同步、插件和程序内静默更新不属于当前共同交付范围。
 
-已保存文件重命名会修改同目录的磁盘文件名，保留当前未保存的编辑内容；新建文档可以先起名，首次保存时再选位置。同名目标不会被重命名操作覆盖。
+## Windows 0.19.0
 
-常用入口：`⌘F` 阅读内查找，`⌘⇧O` 文档目录，`⌘⇧F` 专注，`⌘⇧[` / `⌘⇧]` 切换标签。`⌘⇧P` 快速定位已打开与最近文件，`⌘⌥S` 保存全部。关闭窗口后应用仍在运行，重启的标签恢复与未保存草稿分别管理，详见使用说明。
+Windows 0.19.0 已按 Mac 0.4.0 的用户功能契约完成对齐，包括六组菜单、快捷键白名单、快速打开、独立设置、七套主题、全局搜索、工作区、阅读清单、批注/书签/阅读简报、图片、Mermaid、外部冲突处理、会话草稿恢复和 1024px 图标。Windows 采用平台原生设置窗口、文件对话框、资源管理器定位和 Ctrl 快捷键，不照搬 AppKit 控件。
 
-![macOS 原生阅读与表格](docs/screenshots/macos-reading.png)
+2026-11-25 的全量自动回归退出码为 0：Release 构建 0 警告、0 错误，WPF 流程检查 984 项通过；文件、文本、编辑、Markdown、图表、阅读、图片、剪贴板、实例、外部刷新、导航、恢复、阅读体验、批注和阅读成果测试均通过。3 个符号链接用例因当前 Windows 令牌缺少 `SeCreateSymbolicLinkPrivilege` 跳过，未计为通过。
 
-## 平台安排
+交付产物：
 
-| 平台 | 当前状态 |
-| --- | --- |
-| Intel Mac，macOS 13+ | 当前客户端和构建目标 |
-| Apple Silicon Mac | 尚未交付原生 ARM 包，也未做实机验收 |
-| Windows x64 | 已实现 WPF 客户端、自包含便携包与深色安装/卸载向导；[实施记录](docs/Windows后续实现.md) |
-| Linux | 后续方向，尚未实施 |
+- `交付产品/轻阅-0.19.0-Windows构建1-x64-setup.exe`
+- `交付产品/轻阅-0.19.0-Windows构建1-x64.zip`
+- 本机安装位置：`D:\Program Files\Qingyue`
 
-Windows 已在独立目录实现，测试与发布产物按平台记录。Mac 工程与历史验收保持原样。
+安装包未做 Authenticode 签名；正式外部分发前仍需代码签名。
 
-## 构建与测试
+## 安装与构建
 
-Windows：在 Windows / PowerShell 7 中执行 `pwsh -File 开发空间/Windows/scripts/test.ps1`，
-再用 `pwsh -File 开发空间/Windows/scripts/publish.ps1` 生成 `交付产品/轻阅-Windows-x64/Qingyue.exe` 与 ZIP，
-再用 `pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish` 生成安装 EXE。
-需要 .NET 10 SDK；安装器另需 NSIS 与 MSVC x86 工具链。自包含发布包含运行时。
-安装可选位置，卸载默认保留用户信息，彻底清理需二次确认。Windows 验收见 [docs/test.md](docs/test.md)。
+Windows 安装包支持可选目录、覆盖安装、系统卸载登记和可选桌面快捷方式。默认卸载保留用户数据，彻底清理需要明确确认。安装包包含 .NET 10 桌面运行时。
 
-安装 Xcode Command Line Tools 后，在仓库根目录运行：
+```powershell
+pwsh -File 开发空间/Windows/scripts/build.ps1
+pwsh -File 开发空间/Windows/scripts/test.ps1
+pwsh -File 开发空间/Windows/scripts/publish.ps1
+pwsh -File 开发空间/Windows/scripts/build-installer.ps1
+```
+
+Mac 构建：
 
 ```bash
 bash 开发空间/scripts/build.sh
 bash 开发空间/scripts/test.sh
+bash 开发空间/scripts/check-artifact.sh
 ```
 
-应用生成到 `交付产品/轻阅.app`。产品版本与构建编号读取自 `开发空间/Resources/Info.plist`：当前分别为 `0.1.0` 和 `4`。构建缓存与应用产物不提交到 Git，仓库保存源码、示例、测试与平台记录。
+## 资源边界
 
-当前脚本编译 Intel macOS 13 目标，执行 ad-hoc 本机签名；正式 Developer ID 签名、公证及自动更新仍待后续处理。构建不会自动替换 `/Applications` 中已安装的副本。
+单文件上限 50 MiB；字面搜索上限 5,000 万 UTF-16 单元；Markdown 富预览正文上限 50 万 UTF-16 单元，内嵌图片另行计限。单张图片最多 8 MiB、1600 万原始像素，单边不超过 32768；单篇最多 32 张图片、32 MiB 图片数据和 4800 万解码像素。复制、HTML 导出和 Mermaid 渲染均有独立资源预算。
 
-## 范围与性能
+源文与阅读内容采用块级近似定位，不承诺任意字符选区都精确互转。分析型错误会保留原文或源码并给出可恢复提示。
 
-优先保证轻量与可靠读写。单文件上限 50 MiB；Mac 超过 200,000 个 UTF-16 单元时暂停高亮与 Markdown 排版，Windows 富预览正文上限为 500,000，内嵌图片负载另计资源限制；搜索上限 5,000,000 单元，复杂正则有时间预算。安装体积与占用应以每个构建的实际验收为准，历史小文件快照不是大文档性能保证。
+## 文档
 
-Markdown 仍为轻量原生排版。Windows 支持本地位图及内嵌 Base64 PNG，Mac 图片仍显示文字占位；不执行脚本或自动下载远程图片。原文与阅读内容的定位是块级近似，不承诺任意字符选区都精确互转。完整 CommonMark/GFM、完整 YAML 校验、多窗口、超大日志、Office 文档、云同步与插件尚未实现。
+- [Windows 使用说明](操作指导/Windows使用说明.md)
+- [Mac / Windows 功能对照表](docs/功能对照表.md)
+- [跨平台版本与功能对齐规则](docs/跨平台版本与功能对齐规则.md)
+- [Windows 工程说明](开发空间/Windows/README.md)
+- [Windows 验收记录](docs/test.md)
+- [变更记录](CHANGELOG.md)
+- [Mac 0.4.0 方案与验收](docs/Mac0.4.0方案与验收.md)
+- [Mac 构建 14 验收](docs/Mac构建14验收.md)
+- [Mac 使用说明](操作指导/使用说明.md)
 
-文件写回仍由用户明确保存；恢复草稿和批注均存放在本机应用支持目录，不等同于保存原文。Windows 批注、设置、书签和会话数据默认位于 `%LOCALAPPDATA%\\Qingyue`，本版本不提供云同步、账号或跨设备合并。
-
-![Mac 构建2的专注阅读](docs/screenshots/macos-focus-build2.png)
-
-本轮验证细节见[Mac 构建 4 验收](docs/Mac构建4验收.md)，此前的[构建 3 验收](docs/Mac构建3验收.md)和[构建 2 验收](docs/Mac构建2验收.md)保留；Windows 的独立处理记录见[Windows后续实现](docs/Windows后续实现.md)。
+![macOS 原生阅读与表格](docs/screenshots/macos-reading.png)

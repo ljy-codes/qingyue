@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Windows;
@@ -93,7 +94,7 @@ internal static class MainWindowSharingChecks
         byte[] bytes = await File.ReadAllBytesAsync(output);
         string html = Encoding.UTF8.GetString(bytes);
         var exported = HtmlTestParser.ParseDocument(html);
-        Check(exported.Descendants("h1").Single().Value == "合成分享标题" &&
+        Check(exported.Descendants("h2").Single().Value == "合成分享标题" &&
             exported.Descendants("img").Single().Attribute("src")!.Value.StartsWith("data:image/png;base64,"),
             "the hosted export lost heading or cached pixels");
         Check(!html.Contains("file:", StringComparison.OrdinalIgnoreCase) && !html.Contains(root) &&
@@ -124,11 +125,11 @@ internal static class MainWindowSharingChecks
             "stale full-width preview was exported as current source");
     });
 
-    private static async Task<RichTextBox> Split(MainWindow window)
+    private static async Task<RichTextBox> Split(MainWindow window, bool waitForIdle = true)
     {
         typeof(MainWindow).GetMethod("ExecuteAction", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(window, ["markdownPreview"]);
-        await Idle(window);
+        if (waitForIdle) await Idle(window);
         Check(!window.CurrentTab!.IsReading, "fixture did not enter split editing");
         return (RichTextBox)typeof(MainWindow).GetField("markdownPreview", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(window)!;
@@ -150,26 +151,44 @@ internal static class MainWindowSharingChecks
 
     private static Task SplitCopyLatest() => WithWindow(async (window, _, _) =>
     {
-        var preview = await Split(window);
+        // Keep the first split render in flight so this reproduces the UI-refresh race
+        // deterministically instead of relying on the scheduler finishing at a certain time.
+        var preview = await Split(window, waitForIdle: false);
         window.CurrentTab!.Editor.AppendText("\n异步复制必须立即包含的新正文。");
+        string? beforeMarkdownText = MarkdownState(window, "markdownText");
+        string afterEditor = window.CurrentTab!.Editor.Text;
         using var request = new CancellationTokenSource();
         var copy = window.CopyReadingDocumentAsync(request.Token);
+        string? afterMarkdownText = MarkdownState(window, "markdownText");
+        string? renderedText = FieldValue(preview, "renderedText") as string;
         // Cancel before pumping the Dispatcher, so the real API never writes the system clipboard.
         request.Cancel();
         bool refreshed = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text
             .Contains("异步复制必须立即包含的新正文。");
         await copy;
-        Check(refreshed, "async copy refused pending split input instead of synchronously refreshing it");
+        Check(refreshed, "async copy refused pending split input instead of synchronously refreshing it" +
+            $"; status={Status(window)}; editor={Tail(window.CurrentTab!.Editor.Text, 40)}" +
+            $"; preview={Tail(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text, 80)}" +
+            $"; beforeMarkdownText={(beforeMarkdownText is null ? "<null>" : beforeMarkdownText.Length.ToString(CultureInfo.InvariantCulture))}" +
+            $"; afterMarkdownText={(afterMarkdownText is null ? "<null>" : afterMarkdownText.Length.ToString(CultureInfo.InvariantCulture))}" +
+            $"; editorMatchesAfter={afterEditor == afterMarkdownText}" +
+            $"; renderedText={(renderedText is null ? "<null>" : renderedText.Length.ToString(CultureInfo.InvariantCulture))}");
         Check(Status(window).Contains("已取消全文复制"), "async copy did not reach its cancellable image wait");
     });
 
     private static Task StableSplitSharing() => WithWindow(async (window, root, _) =>
     {
         var preview = await Split(window);
+        Paragraph? paragraph = null;
+        for (int attempt = 0; attempt < 100 && paragraph is null; attempt++)
+        {
+            paragraph = preview.Document.Blocks.OfType<Paragraph>().FirstOrDefault(p =>
+                new TextRange(p.ContentStart, p.ContentEnd).Text.Contains("正文第 3 段"));
+            if (paragraph is null) await Task.Delay(50);
+        }
+        Check(paragraph is not null, "fixture did not finish the asynchronous split preview");
         preview.Focus();
-        var paragraph = preview.Document.Blocks.OfType<Paragraph>().First(p =>
-            new TextRange(p.ContentStart, p.ContentEnd).Text.Contains("正文第 3 段"));
-        preview.Selection.Select(paragraph.ContentStart, paragraph.ContentEnd);
+        preview.Selection.Select(paragraph!.ContentStart, paragraph.ContentEnd);
         preview.ScrollToVerticalOffset(140);
         await Idle(window);
         var document = preview.Document;
@@ -234,6 +253,12 @@ internal static class MainWindowSharingChecks
     }
 
     private static string Status(MainWindow window) => ((TextBlock)window.FindName("StatusText")).Text;
+    private static string? MarkdownState(MainWindow window, string field) =>
+        FieldValue(window, field) as string;
+    private static object? FieldValue(object target, string field) =>
+        target.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    private static string Tail(string value, int length) =>
+        value.Length <= length ? value : value[^length..];
     private static Task Idle(MainWindow window) =>
         window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle).Task;
 

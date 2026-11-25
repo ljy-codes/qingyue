@@ -226,58 +226,12 @@ public partial class MainWindow
     {
         if (CurrentTab is not { } tab || tab.File.Path is null) return;
         var state = externalRefreshStates.GetOrCreateValue(tab);
-        CancelQueuedExternalRefresh();
-        ExternalChangeLabel.Text = "正在读取磁盘版本…";
-        StatusText.Text = "正在读取磁盘版本，请稍候…";
-        try
+        if (await ReloadDocumentAsync(tab))
         {
-            using var cancellation = new CancellationTokenSource();
-            var read = new ExternalFileRefresh(tab.File);
-            var result = await read.ReadAsync(cancellation.Token, includeLocalChanges: true);
-            if (externalChangesClosed || approvedShutdown || exitInProgress
-                || CurrentTab != tab || !tabs.Contains(tab) || !read.IsCurrent) return;
-            if (result.Status == ExternalRefreshStatus.Changed)
-            {
-                await ApplyExternalRefresh(tab, result, cancellation.Token, discardLocalChanges: true);
-                if (tab.File.IsDirty)
-                {
-                    state.RequiresAction = true;
-                    state.Notice = "接纳磁盘版本失败，当前编辑仍已保留。";
-                    ShowExternalChangePanel(state.Notice);
-                    StatusText.Text = state.Notice;
-                    return;
-                }
-                state.LastRead = new ExternalFileRefresh(tab.File);
-                state.Notice = "已接纳磁盘版本，当前未保存编辑已丢弃。";
-                state.RequiresAction = false;
-                state.SuppressConflictNotice = false;
-                state.SuppressedDiskText = null;
-                HideExternalChangePanel();
-                StatusText.Text = state.Notice;
-            }
-            else if (result.Status == ExternalRefreshStatus.Unavailable)
-            {
-                state.Notice = "磁盘版本仍无法读取，当前编辑已保留；可以稍后重新检查。"
-                    + (result.Error is null ? "" : " " + result.Error);
-                state.RequiresAction = true;
-                ShowExternalChangePanel(state.Notice);
-                StatusText.Text = state.Notice;
-            }
-            else
-            {
-                state.Notice = "磁盘版本没有新的可接纳内容，当前编辑已保留。";
-                state.RequiresAction = false;
-                HideExternalChangePanel();
-                StatusText.Text = state.Notice;
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException)
-        {
-            state.Notice = "接纳磁盘版本失败，当前编辑已保留。 " + ex.Message;
-            state.RequiresAction = true;
-            ShowExternalChangePanel(state.Notice);
-            StatusText.Text = state.Notice;
+            state.RequiresAction = false;
+            state.SuppressConflictNotice = false;
+            state.SuppressedDiskText = null;
+            HideExternalChangePanel();
         }
     }
 

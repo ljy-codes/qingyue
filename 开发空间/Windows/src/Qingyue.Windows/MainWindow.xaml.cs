@@ -28,15 +28,25 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer bookmarkSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly Queue<Action> pendingOpen = new();
     private bool initialized, updatingControls, approvedShutdown, exitInProgress, focusMode;
+    private bool closingToBackground;
+    private bool restoringWorkspace;
     private bool bookmarksDirty;
     private bool readingListDirty;
-    private Task? bookmarkSaveTask;
-    private Task? readingListSaveTask;
+    private readonly Dictionary<string, int> pendingFileAnchors =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> recoveryNotices = [];
+    private Task<BookmarkSaveResult>? bookmarkSaveTask;
+    private Task<ReadingListSaveResult>? readingListSaveTask;
+    private ReadingAppearanceWindow? readingAppearanceWindow;
     private int modalDepth;
     private long outlineGeneration;
     private readonly HashSet<Guid> discardedAtExit = [];
     public IReadOnlyList<EditorTab> Tabs => tabs;
     public EditorTab? CurrentTab => TabStrip.SelectedItem as EditorTab;
+    public bool IsHiddenToBackground { get; private set; }
+    public event EventHandler? QuitCompleted;
+    internal Func<string, CancellationToken, Task<DocumentFile>>? OpenDocumentForTest { get; set; }
+    internal Func<EditorTab, bool>? SaveBeforeCloseForTest { get; set; }
 
     public MainWindow(string dataDirectory, bool restoreSession = true,
         UpdateService? updateService = null, bool enableStartupUpdateCheck = true)
@@ -84,7 +94,33 @@ public partial class MainWindow : Window
         };
         Closing += WindowClosing;
         Closing += (_, _) => CancelLoading();
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible) IsHiddenToBackground = false;
+        };
+        Closed += (_, _) =>
+        {
+            SystemEvents.UserPreferenceChanged -= SystemPreferenceChanged;
+            readingAppearanceWindow?.Window.Close();
+            readingAppearanceWindow = null;
+        };
+        SystemEvents.UserPreferenceChanged += SystemPreferenceChanged;
         SizeChanged += (_, _) => UpdateReadingWidths();
+    }
+
+    private void SystemPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color
+            or UserPreferenceCategory.VisualStyle)) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!initialized || exitInProgress || !settings.FollowSystem) return;
+            bool dark = ReaderTheme.SystemIsDark();
+            if (dark == settings.Dark) return;
+            settings.Dark = dark;
+            ApplyTheme(ReaderTheme.Parse(settings.Theme, dark));
+            readingAppearanceWindow?.SyncFromSettings(settings);
+        });
     }
 
     public async Task InitializeAsync()
@@ -97,9 +133,13 @@ public partial class MainWindow : Window
         RefreshReadingList();
         if (restoreSession && settings.RestoreSession)
         {
+            restoringWorkspace = true;
+            RefreshMenuState();
             try
             {
                 var result = await workspace.LoadAsync();
+                recoveryNotices.Clear();
+                recoveryNotices.AddRange(result.Warnings);
                 foreach (var restored in result.Documents.Take(200))
                 {
                     var tab = AddDocument(restored.File);
@@ -107,16 +147,22 @@ public partial class MainWindow : Window
                     tab.AutomaticKind = restored.Entry.AutomaticKind;
                     tab.Kind = tab.AutomaticKind ? TextServices.DetectKind(tab.File.Path ?? tab.File.SuggestedName, tab.File.Text) : restored.Entry.Kind;
                     tab.SourceAnchor = Math.Clamp(restored.Entry.SourceAnchor, 0, tab.File.Text.Length);
+                    tab.ViewportAnchor = Math.Clamp(restored.Entry.ViewportAnchor ?? restored.Entry.SourceAnchor,
+                        0, tab.File.Text.Length);
+                    tab.ViewportDelta = double.IsFinite(restored.Entry.ViewportDelta)
+                        ? Math.Clamp(restored.Entry.ViewportDelta, -2000, 2000) : 0;
+                    // Every tab retains whether it was in reading mode. Only the
+                    // selected tab is rendered now; other tabs render lazily when
+                    // selected, so startup does not duplicate every FlowDocument.
+                    tab.IsReading = restored.Entry.IsReading;
                     int selectionStart = EditorOffset(tab, restored.Entry.SelectionStart);
                     int selectionEnd = EditorOffset(tab, (int)Math.Min(tab.File.Text.Length,
                         (long)restored.Entry.SelectionStart + restored.Entry.SelectionLength));
                     tab.Editor.Select(selectionStart, Math.Max(0, selectionEnd - selectionStart));
-                    // Restore the expensive reading tree only for the tab that
-                    // will actually be shown. Other restored tabs stay as source
-                    // editors until the user explicitly enters reading mode.
                     if (restored.Entry.IsReading && restored.File.Id == result.ActiveId)
                     {
-                        await EnterReadingAsync(tab, restored.Entry.SourceAnchor, focus: false);
+                        await EnterReadingAsync(tab, restored.Entry.SourceAnchor,
+                            focus: false, snapToBlockStart: false);
                         RestoreReadingViewport(tab, restored.Entry);
                     }
                 }
@@ -125,11 +171,21 @@ public partial class MainWindow : Window
                 if (result.Warnings.Count > 0)
                     StatusText.Text = "恢复提示：" + string.Join("；", result.Warnings.Take(3));
             }
-            catch (Exception ex) { Notify("无法恢复上次会话，原有数据仍保留。\n" + ex.Message); }
+            catch (Exception ex)
+            {
+                recoveryNotices.Add("无法恢复上次会话，原有数据仍保留：" + ex.Message);
+                Notify("无法恢复上次会话，原有数据仍保留。\n" + ex.Message);
+            }
+            finally
+            {
+                restoringWorkspace = false;
+                RefreshMenuState();
+            }
         }
         if (tabs.Count == 0) NewDocument();
         initialized = true;
         RefreshCurrent();
+        EnsureRestoredReading(CurrentTab);
         RefreshAnnotations();
         RefreshAnnotationHighlights();
         if (annotations.LastWarning is not null) StatusText.Text = annotations.LastWarning;
@@ -143,9 +199,18 @@ public partial class MainWindow : Window
     private static Version CurrentApplicationVersion() =>
         typeof(MainWindow).Assembly.GetName().Version ?? new Version(0, 0, 0);
 
-    private EditorTab AddDocument(DocumentFile file)
+    private EditorTab AddDocument(DocumentFile file, Action<EditorTab>? prepare = null)
     {
         if (tabs.Count >= 200) throw new InvalidOperationException("最多同时打开 200 个标签，请先关闭部分文档。");
+        var tab = CreateDocumentTab(file);
+        prepare?.Invoke(tab);
+        tabs.Add(tab);
+        SelectTab(tab);
+        return tab;
+    }
+
+    private EditorTab CreateDocumentTab(DocumentFile file)
+    {
         var tab = new EditorTab(file);
         ConfigureEditor(tab);
         AttachSyntax(tab);
@@ -185,14 +250,20 @@ public partial class MainWindow : Window
             {
                 if (CurrentTab == tab) { RefreshLocation(); RefreshAnnotationHighlights(); }
             };
-            preview.Loaded += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
+            preview.Loaded += (_, _) =>
+            {
+                UpdateReadingWidth(tab);
+                RefreshAnnotationHighlights();
+                if (CurrentTab == tab && tab.IsReading && modalDepth == 0 && !SearchPanel.IsKeyboardFocusWithin
+                    && ReferenceEquals(DocumentHost.Content, preview))
+                    preview.Focus();
+            };
             preview.SizeChanged += (_, _) => { UpdateReadingWidth(tab); RefreshAnnotationHighlights(); };
             AttachReadingNavigation(tab, preview);
             ReadingClipboard.Attach(preview, () => tab.Kind == TextKind.Markdown && tab.IsReading,
-                reason => StatusText.Text = "复制已降级：" + reason);
+                reason => StatusText.Text = "复制已降级：" + reason,
+                action => ExecuteAction(action));
         };
-        tabs.Add(tab);
-        SelectTab(tab);
         return tab;
     }
 
@@ -208,6 +279,7 @@ public partial class MainWindow : Window
         if (!tabs.Contains(tab)) return;
         TabStrip.SelectedItem = tab;
         RefreshCurrent();
+        EnsureRestoredReading(tab);
         QueueExternalRefresh(tab);
     }
 
@@ -230,9 +302,18 @@ public partial class MainWindow : Window
     {
         ReleaseClosedPresentations();
         DetachMarkdownEditor();
-        if (CurrentTab is not { } tab) { DocumentHost.Content = null; return; }
+        if (CurrentTab is not { } tab)
+        {
+            foreach (var inactive in tabs) inactive.ReleaseReadingResources();
+            ResetMarkdownPreviewPresentation();
+            DocumentHost.Content = null;
+            RefreshMenuState();
+            return;
+        }
         NavigationTabChanging(tab);
         DocumentHost.Content = tab.IsReading && tab.Rendered is not null ? tab.Preview : tab.EditorSurface;
+        foreach (var inactive in tabs)
+            if (!ReferenceEquals(inactive, tab)) inactive.ReleaseReadingResources();
         ReturnPositionButton.IsEnabled = tab.ReturnAnchor is not null;
         ReadingButton.Content = tab.Kind == TextKind.Markdown
             ? tab.IsReading ? "编辑原文" : "返回预览"
@@ -255,6 +336,7 @@ public partial class MainWindow : Window
         RefreshLocation();
         QueueSearch();
         SchedulePersist();
+        RefreshMenuState();
     }
 
     private async void QueueOutline(EditorTab tab)
@@ -289,11 +371,10 @@ public partial class MainWindow : Window
             (tab.File.IsDirty ? " · 未保存" : " · 已保存") +
             (!PreviewLimits.CanRender(tab.File.Text, tab.Kind) && tab.IsReading ? " · 超过 50 万正文字符，原文阅读" : "") +
             (tab.File.Path is null ? " · 未命名文档" : " · " + tab.File.Path);
-        ReadingTitle.Text = tab.File.Title + (tab.File.IsDirty ? "  •" : "");
-        ReadingStatus.Text = ReadingProgressText(tab);
-        BookmarkButton.Content = CurrentBookmarks(tab).Any() ? "书签已标记" : "添加书签";
         Title = tab.File.Title + (tab.File.IsDirty ? " *" : "") + " · 轻阅";
+        RefreshLocation();
         RefreshPresentation(tab);
+        RefreshMenuState();
     }
 
     private void RefreshLocation()
@@ -306,7 +387,8 @@ public partial class MainWindow : Window
         if (tab.IsReading && tab.Rendered is not null) caret = EditorOffset(tab, caret);
         var location = tab.Positions.Location(caret);
         LocationText.Text = $"行 {location.Line:N0}，列 {location.Column:N0}" +
-            (!tab.IsReading && tab.Editor.SelectionLength > 0 ? $" · 已选 {tab.Editor.SelectionLength:N0}" : "");
+            (!tab.IsReading && tab.Editor.SelectionLength > 0 ? $" · 已选 {tab.Editor.SelectionLength:N0}" : "") +
+            (tab.IsReading && tab.Rendered is not null ? $" · {ReadingProgressText(tab)}" : "");
     }
 
     private void TabChanged(object sender, SelectionChangedEventArgs e)
@@ -314,6 +396,7 @@ public partial class MainWindow : Window
         if (e.Source == TabStrip)
         {
             RefreshCurrent();
+            EnsureRestoredReading(CurrentTab);
             QueueExternalRefresh(CurrentTab);
         }
     }
@@ -352,14 +435,17 @@ public partial class MainWindow : Window
                 {
                     operation.Tab = null;
                     SelectTab(existing);
-                    await RestoreReadingListPositionAsync(existing);
+                    if (TakePendingFileAnchor(fullPath, out int pendingAnchor))
+                        await RestoreSourceAnchorAsync(existing, pendingAnchor);
                     continue;
                 }
                 try
                 {
                     operation.Tab = null;
                     operation.Stage($"正在读取文件（{index + 1}/{requested.Length}）");
-                    var file = await Task.Run(() => DocumentFile.Open(fullPath), operation.Token).WaitAsync(operation.Token);
+                    var file = OpenDocumentForTest is { } testOpen
+                        ? await testOpen(fullPath, operation.Token)
+                        : await Task.Run(() => DocumentFile.Open(fullPath), operation.Token).WaitAsync(operation.Token);
                     operation.Token.ThrowIfCancellationRequested();
                     // An OS file-open request may arrive while a modal dialog is active.
                     // Complete the publication only when the dialog has returned.
@@ -370,29 +456,57 @@ public partial class MainWindow : Window
                     }
                     if (approvedShutdown || exitInProgress) return;
                     var duplicate = tabs.FirstOrDefault(t => string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase));
-                    if (duplicate is not null) { SelectTab(duplicate); continue; }
+                    if (duplicate is not null)
+                    {
+                        SelectTab(duplicate);
+                        if (TakePendingFileAnchor(fullPath, out int duplicateAnchor))
+                            await RestoreSourceAnchorAsync(duplicate, duplicateAnchor);
+                        continue;
+                    }
                     if (tabs.Count >= 200) { Notify("最多同时打开 200 个标签。"); continue; }
                     var empty = tabs.Count == 1 && tabs[0].IsEmpty ? tabs[0] : null;
-                    var opened = AddDocument(file);
+                    bool hasStoredPosition = settings.RecentPositions.TryGetValue(
+                        fullPath, out var storedPosition);
+                    bool hasPendingAnchor = TakePendingFileAnchor(fullPath, out int pendingAnchor);
+                    int requestedAnchor = hasPendingAnchor
+                        ? Math.Clamp(pendingAnchor, 0, file.Text.Length)
+                        : 0;
+                    // macOS restores the path position and the explicit navigation
+                    // anchor before publishing the ReaderTab. Selecting a tab starts
+                    // exactly one lazy reading restore, which must already see the
+                    // final anchor rather than racing a second restore request.
+                    var opened = AddDocument(file, tab =>
+                    {
+                        RestoreRecentPosition(tab);
+                        if (!hasPendingAnchor) return;
+                        tab.SourceAnchor = requestedAnchor;
+                        tab.ViewportAnchor = requestedAnchor;
+                        tab.ViewportDelta = 0;
+                    });
                     if (empty is not null) tabs.Remove(empty);
                     AddRecent(fullPath);
-                    var savedReading = readingList.Find(fullPath);
-                    int savedAnchor = savedReading is null ? 0 : Math.Clamp(savedReading.SourceAnchor, 0, opened.File.Text.Length);
-                    readingList.Upsert(fullPath, savedReading?.ProgressPercent ?? 0, savedAnchor);
-                    readingListDirty = true;
-                    RefreshReadingList();
+                    if (!hasPendingAnchor) requestedAnchor = opened.SourceAnchor;
                     // Only the final opened document can be visible when a batch
                     // open completes. Building every Markdown reading document
                     // here keeps hidden tabs alive with duplicate FlowDocuments.
-                    if (opened.Kind == TextKind.Markdown && index == requested.Length - 1)
+                    if (opened.IsReading && index == requested.Length - 1)
                     {
-                        await EnterReadingAsync(opened, savedAnchor, existingOperation: operation);
+                        await EnsureRestoredReadingAsync(opened);
+                        if (hasStoredPosition && storedPosition is not null && storedPosition.IsReading
+                            && !hasPendingAnchor)
+                            RestoreReadingViewport(opened,
+                                storedPosition.ReadingViewportAnchor,
+                                storedPosition.ReadingViewportDelta);
                         if (CurrentTab == opened) RefreshCurrent();
                     }
-                    else if (savedAnchor > 0)
+                    else if (hasPendingAnchor)
                     {
-                        opened.Editor.CaretIndex = EditorOffset(opened, savedAnchor);
+                        opened.Editor.CaretIndex = EditorOffset(opened, requestedAnchor);
                         ScrollToCaret(opened);
+                    }
+                    else if (!opened.IsReading)
+                    {
+                        RestoreEditorViewportWhenReady(opened);
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -406,14 +520,19 @@ public partial class MainWindow : Window
     private T Modal<T>(Func<T> action)
     {
         modalDepth++;
+        RefreshMenuState();
         try { return action(); }
         finally
         {
             modalDepth--;
+            RefreshMenuState();
             if (modalDepth == 0 && pendingOpen.Count > 0)
                 Dispatcher.BeginInvoke(() => { while (modalDepth == 0 && pendingOpen.TryDequeue(out var next)) next(); });
         }
     }
+    internal bool RunModalForTest(Func<bool> action) => Modal(action);
+    private bool SaveBeforeClosing(EditorTab tab) =>
+        SaveBeforeCloseForTest?.Invoke(tab) ?? SaveDocument(tab);
 
     private void Notify(string text, string title = "轻阅") =>
         Modal(() => Dialogs.Message(this, text, title));
@@ -434,33 +553,37 @@ public partial class MainWindow : Window
         if (tabs.Any(t => t != tab && string.Equals(t.File.Path, fullPath, StringComparison.OrdinalIgnoreCase)))
             throw new IOException("该目标已在另一标签中打开，请先关闭目标标签。");
         string? oldPath = tab.File.Path;
+        RememberRecentPosition(tab);
         tab.File.Text = Normalize(tab.Editor.Text);
         tab.File.Save(fullPath, allowOverwrite);
+        if (oldPath is not null && !string.Equals(oldPath, fullPath, StringComparison.Ordinal))
+            settings.MoveRecentPosition(oldPath, fullPath);
         bookmarks.MigratePath(tab.File.Id, oldPath, fullPath);
         bookmarksDirty = true;
         annotations.MigratePath(tab.File.Id, oldPath, fullPath);
         annotationsDirty = true;
+        if (oldPath is not null && readingList.MigratePath(oldPath, fullPath) > 0)
+            readingListDirty = true;
         TrackSavedBaseline(tab);
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
         AddRecent(fullPath);
-        if (tab.IsReading)
-        {
-            readingList.Upsert(fullPath, ProgressPercent(tab), CurrentSourceAnchor(tab));
-            readingListDirty = true;
-            RefreshReadingList();
-        }
+        RememberRecentPosition(tab);
         if (kindChanged && CurrentTab == tab) RefreshCurrent(); else RefreshStatus();
         RefreshBookmarks();
         SchedulePersist();
         return true;
     }
 
-    private bool SaveDocument(EditorTab tab, bool saveAs = false)
+    private bool SaveDocument(EditorTab tab, bool saveAs = false,
+        string? chosenTarget = null, bool? chosenOverwrite = null)
     {
-        string? target = tab.File.Path;
-        bool overwrite = false;
-        if (saveAs || target is null)
+        // Keep a Save As destination already chosen by the user. Mixed-ending
+        // confirmation must retry that exact path instead of opening the panel
+        // again, matching macOS saveCurrent(chosenDestination:).
+        string? target = chosenTarget ?? tab.File.Path;
+        bool overwrite = chosenOverwrite ?? false;
+        if (chosenTarget is null && (saveAs || target is null))
         {
             var dialog = new SaveFileDialog
             {
@@ -474,6 +597,7 @@ public partial class MainWindow : Window
             // The native dialog has explicitly confirmed an existing Save As target.
             overwrite = File.Exists(target) && !string.Equals(target, tab.File.Path, StringComparison.OrdinalIgnoreCase);
         }
+        if (target is null) return false;
         try { return SaveTabToPath(tab, target, overwrite); }
         catch (MixedLineEndingsException)
         {
@@ -482,7 +606,8 @@ public partial class MainWindow : Window
                 "选择换行格式", MessageBoxButton.YesNoCancel, MessageBoxImage.Question));
             if (answer == MessageBoxResult.Cancel) return false;
             tab.File.LineEnding = answer == MessageBoxResult.Yes ? LineEnding.Lf : LineEnding.CrLf;
-            return SaveDocument(tab, saveAs);
+            try { return SaveTabToPath(tab, target, overwrite); }
+            catch (Exception failure) { Notify("保存失败，编辑仍保留：\n" + failure.Message); return false; }
         }
         catch (FileConflictException ex)
         {
@@ -503,19 +628,25 @@ public partial class MainWindow : Window
     public void RenameTab(EditorTab tab, string name)
     {
         var old = tab.File.Path;
+        RememberRecentPosition(tab);
         tab.File.Rename(name);
         if (tab.File.Path is { } newPath)
         {
+            if (old is not null && !string.Equals(old, newPath, StringComparison.Ordinal))
+                settings.MoveRecentPosition(old, newPath);
             bookmarks.MigratePath(tab.File.Id, old, newPath);
             bookmarksDirty = true;
             annotations.MigratePath(tab.File.Id, old, newPath);
             annotationsDirty = true;
+            if (old is not null && readingList.MigratePath(old, newPath) > 0)
+                readingListDirty = true;
         }
         OnRecoveryPathRenamed(old, tab.File.Path);
         if (old is not null) settings.Recent.RemoveAll(p => string.Equals(p, old, StringComparison.OrdinalIgnoreCase));
         if (tab.File.Path is not null) AddRecent(tab.File.Path);
         bool kindChanged = RefreshAutomaticKind(tab);
         tab.NotifyChanged();
+        RememberRecentPosition(tab);
         if (kindChanged && CurrentTab == tab) RefreshCurrent(); else RefreshStatus();
         RefreshBookmarks();
         SchedulePersist();
@@ -535,16 +666,25 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private bool CloseTab(EditorTab tab, bool ensureDocument = true)
+    private bool CloseTab(EditorTab tab, bool ensureDocument = true, bool closeWindowIfEmpty = false)
     {
+        if (!tabs.Contains(tab)) return true;
+        // Keep the visible document consistent with the save/adjust prompt.
+        // Context-menu close and close-batch paths rely on the same behavior.
+        SelectTab(tab);
         if (!tab.IsEmpty && tab.File.IsDirty)
         {
             var choice = Modal(() => Dialogs.CloseChoice(this, tab.File.Title, false));
-            if (choice == "cancel" || choice == "save" && !SaveDocument(tab)) return false;
+            if (choice == "cancel" || choice == "save" && !SaveBeforeClosing(tab)) return false;
         }
+        RememberRecentPosition(tab);
         tab.ReleaseReadingResources();
         tabs.Remove(tab);
-        if (tabs.Count == 0 && ensureDocument) NewDocument();
+        if (tabs.Count == 0)
+        {
+            if (closeWindowIfEmpty) Close();
+            else if (ensureDocument) NewDocument();
+        }
         RefreshCurrent();
         SchedulePersist();
         return true;
@@ -553,7 +693,8 @@ public partial class MainWindow : Window
     private void CloseTabClick(object sender, RoutedEventArgs e)
     {
         e.Handled = true;
-        if (sender is Button { Tag: EditorTab tab }) CloseTab(tab);
+        if (sender is Button { Tag: EditorTab tab })
+            CloseTab(tab, ensureDocument: false, closeWindowIfEmpty: true);
     }
 
     private void TabDoubleClick(object sender, MouseButtonEventArgs e)

@@ -51,10 +51,13 @@ internal sealed record ReadingClipboardSnapshot(
 
 public static class ReadingClipboard
 {
-    private const int MaximumText = 500_000, MaximumElements = 20_000, MaximumDepth = 64;
-    private const int MaximumImages = 32, MaximumImageBytes = 4 * 1024 * 1024;
-    private const int MaximumTotalImageBytes = 12 * 1024 * 1024, MaximumHtmlBytes = 20 * 1024 * 1024;
-    private const int MaximumNativeBytes = 64 * 1024 * 1024;
+    private const int MaximumText = 2_000_000, MaximumElements = 20_000, MaximumDepth = 64;
+    private const int MaximumImages = 32;
+    private const int MaximumEmbeddedPngBytes = 20 * 1024 * 1024;
+    private const int MaximumHtmlBytes = 20 * 1024 * 1024;
+    private const int MaximumNativeBytes = MaximumHtmlBytes;
+    private const int MaximumImagePixels = 16_000_000;
+    private const long MaximumTotalPixels = 48_000_000;
     private static readonly ConditionalWeakTable<RichTextBox, Registration> Registrations = new();
     private static readonly ConditionalWeakTable<IDataObject, SelectionPayload> PreparedCopies = new();
 
@@ -70,7 +73,7 @@ public static class ReadingClipboard
         ArgumentNullException.ThrowIfNull(preview);
         preview.VerifyAccess();
         string text = DisplayText(new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text);
-        if (text.Length > MaximumText) throw new IOException("阅读正文超过 50 万字符复制上限。");
+        if (text.Length > MaximumText) throw new IOException("阅读正文超过 200 万个 UTF-16 单元复制上限。");
         return TextData(text);
     }
 
@@ -112,7 +115,10 @@ public static class ReadingClipboard
     private static ReadingClipboardResult? CreateCurrentBlockData(RichTextBox preview, bool code)
     {
         ArgumentNullException.ThrowIfNull(preview);
-        var block = CurrentBlock(preview, code);
+        var block = Registrations.TryGetValue(preview, out var registration) &&
+            registration.CommandBlock is { } commandBlock
+            ? commandBlock
+            : CurrentBlock(preview, code);
         return block is null ? null : CreateData(preview.Document, new TextRange(block.ElementStart, block.ElementEnd));
     }
 
@@ -197,7 +203,8 @@ public static class ReadingClipboard
     /// Adds HTML to WPF's existing copy data. Does not copy, focus or select anything.
     /// Attach once per preview; repeated calls only replace the enabling predicate.
     /// </summary>
-    public static void Attach(RichTextBox preview, Func<bool> enabled, Action<string>? report = null)
+    public static void Attach(RichTextBox preview, Func<bool> enabled, Action<string>? report = null,
+        Action<string>? command = null)
     {
         ArgumentNullException.ThrowIfNull(preview);
         ArgumentNullException.ThrowIfNull(enabled);
@@ -206,10 +213,11 @@ public static class ReadingClipboard
         {
             registration.Enabled = enabled;
             registration.Report = report;
+            registration.Command = command;
         }
         else
         {
-            registration = new Registration(enabled, report);
+            registration = new Registration(enabled, report, command);
             Registrations.Add(preview, registration);
             InstallBlockMenu(preview, registration);
             DataObject.AddSettingDataHandler(preview, (_, e) =>
@@ -279,6 +287,42 @@ public static class ReadingClipboard
     }
 
     /// <summary>
+    /// Applies the same eight-command reading menu to tables, images and diagrams
+    /// after their generated document has been attached to the preview.
+    /// </summary>
+    public static void RefreshContextMenus(RichTextBox preview)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        preview.VerifyAccess();
+        if (!Registrations.TryGetValue(preview, out var registration)) return;
+        var visited = new HashSet<DependencyObject>();
+        void Visit(DependencyObject node)
+        {
+            if (!visited.Add(node)) return;
+            switch (node)
+            {
+                case Table table:
+                    table.ContextMenu = BuildContextMenu(preview, registration,
+                        new ReadingContextTarget(Table: table));
+                    break;
+                case MermaidBlockPanel panel:
+                    panel.ContextMenu = BuildContextMenu(preview, registration,
+                        new ReadingContextTarget(Diagram: panel));
+                    break;
+                case MarkdownImageView view:
+                    view.ContextMenu = BuildContextMenu(preview, registration,
+                        new ReadingContextTarget(Image: view));
+                    view.ImageControl.ContextMenu = BuildContextMenu(preview, registration,
+                        new ReadingContextTarget(Image: view));
+                    break;
+            }
+            foreach (object child in LogicalTreeHelper.GetChildren(node))
+                if (child is DependencyObject nested) Visit(nested);
+        }
+        Visit(preview.Document);
+    }
+
+    /// <summary>
     /// Creates an in-memory full-document payload without changing the live selection.
     /// Returns null when the document exceeds the text/structure/output budgets.
     /// Pending or excessive images have explicit placeholders and are counted.
@@ -321,8 +365,8 @@ public static class ReadingClipboard
         return new(
             plainText,
             html,
-            CreateRtf(safeRange),
-            CreatePackage(safeRange),
+            TryCreateRtf(safeRange),
+            TryCreatePackage(safeRange),
             export.SingleBitmap,
             export.Images);
     }
@@ -333,12 +377,12 @@ public static class ReadingClipboard
         var data = TextData(snapshot.PlainText);
         try
         {
-            // Prepare every rich flavor before publishing HTML. If a later format
-            // fails, this object is discarded and only UnicodeText is returned.
-            if (snapshot.Rtf is not null) data.SetData(DataFormats.Rtf, snapshot.Rtf, false);
+            // Native formats are optional just like macOS RTF/RTFD. A failed or
+            // oversized native serializer must never discard the HTML payload.
+            if (snapshot.Rtf is not null) TrySetData(data, DataFormats.Rtf, snapshot.Rtf);
             if (snapshot.XamlPackage is not null)
-                data.SetData(DataFormats.XamlPackage, new MemoryStream(snapshot.XamlPackage.ToArray()), false);
-            if (snapshot.Bitmap is not null) data.SetData(DataFormats.Bitmap, snapshot.Bitmap, false);
+                TrySetData(data, DataFormats.XamlPackage, new MemoryStream(snapshot.XamlPackage.ToArray()));
+            if (snapshot.Bitmap is not null) TrySetData(data, DataFormats.Bitmap, snapshot.Bitmap);
             data.SetData(DataFormats.Html, snapshot.Html, false);
             return new(data, snapshot.Images.Embedded, snapshot.Images.Omitted)
             {
@@ -349,6 +393,12 @@ public static class ReadingClipboard
         {
             return DegradedData(snapshot.PlainText, ex, snapshot.Images);
         }
+    }
+
+    private static void TrySetData(DataObject data, string format, object value)
+    {
+        try { data.SetData(format, value, false); }
+        catch (Exception ex) when (IsExportFailure(ex)) { }
     }
 
     private static string CreatePlainTextFallback(FlowDocument document, TextRange range)
@@ -374,49 +424,115 @@ public static class ReadingClipboard
         };
     }
 
-    private sealed class Registration(Func<bool> enabled, Action<string>? report)
+    private sealed class Registration(Func<bool> enabled, Action<string>? report, Action<string>? command)
     {
         internal Func<bool> Enabled = enabled;
         internal Action<string>? Report = report;
+        internal Action<string>? Command = command;
+        internal TextPointer? ContextPointer;
+        internal Block? CommandBlock;
     }
 
     private static void InstallBlockMenu(RichTextBox preview, Registration registration)
     {
-        if (preview.ContextMenu is null)
+        preview.ContextMenu = BuildContextMenu(preview, registration, null);
+        preview.PreviewMouseRightButtonDown += (_, e) =>
+            registration.ContextPointer = preview.GetPositionFromPoint(e.GetPosition(preview), true);
+    }
+
+    private sealed record ReadingContextTarget(
+        Table? Table = null, MarkdownImageView? Image = null, MermaidBlockPanel? Diagram = null);
+
+    private static ContextMenu BuildContextMenu(RichTextBox preview, Registration registration,
+        ReadingContextTarget? target)
+    {
+        var menu = new ContextMenu();
+        var copySelection = Add("复制选中图文", "copySelection");
+        var copyFull = Add("复制全文（含图片）", "copyReading");
+        var copyPlain = Add("复制全文纯文本", "copyPlain");
+        var copyMarkdown = Add("复制 Markdown 源文", "copyMarkdown");
+        var copyCode = Add("复制当前代码块", "copyCodeBlock");
+        var copyTable = Add("复制当前表格", "copyTable");
+        var expandTable = Add("展开表格（横向滚动）", "expandTable");
+        var viewAttachment = Add("查看图片 / 图表", "viewAttachment");
+        menu.Items.Add(copySelection);
+        menu.Items.Add(copyFull);
+        menu.Items.Add(copyPlain);
+        menu.Items.Add(copyMarkdown);
+        menu.Items.Add(copyCode);
+        menu.Items.Add(copyTable);
+        menu.Items.Add(expandTable);
+        menu.Items.Add(viewAttachment);
+        menu.Opened += (_, _) =>
         {
-            preview.ContextMenu = new ContextMenu();
-            preview.ContextMenu.Items.Add(new MenuItem { Header = "复制", Command = ApplicationCommands.Copy, CommandTarget = preview });
-            preview.ContextMenu.Items.Add(new MenuItem { Header = "全选", Command = ApplicationCommands.SelectAll, CommandTarget = preview });
-        }
-        preview.ContextMenu.Items.Add(new Separator());
-        MenuItem Add(string title, bool code)
-        {
-            var item = new MenuItem { Header = title };
-            item.Click += (_, _) =>
-            {
-                try
-                {
-                    var result = CreateCurrentBlockData(preview, code);
-                    if (result is null) throw new IOException("当前选区不在同一个目标块内，或内容超出复制上限。");
-                    Clipboard.SetDataObject(result.Data, true);
-                    if (result.DegradationReason is { Length: > 0 } reason)
-                        MessageBox.Show("复制已降级：" + reason, "复制已降级");
-                    else if (result.Images.Incomplete)
-                        MessageBox.Show(result.Images.Description + "。已保留明确占位符。", "复制图片未完整");
-                }
-                catch (Exception ex) when (IsExportFailure(ex))
-                { MessageBox.Show(ex.Message, "复制未完成"); }
-            };
-            preview.ContextMenu.Items.Add(item);
-            return item;
-        }
-        var codeItem = Add("复制当前代码块", true);
-        var tableItem = Add("复制当前表格", false);
-        preview.ContextMenu.Opened += (_, _) =>
-        {
-            codeItem.IsEnabled = registration.Enabled() && CurrentBlock(preview, true) is not null;
-            tableItem.IsEnabled = registration.Enabled() && CurrentBlock(preview, false) is not null;
+            bool enabled = registration.Enabled();
+            Block? code = ContextBlock(preview, registration, target, code: true);
+            Block? table = target?.Table ?? ContextBlock(preview, registration, target, code: false);
+            copySelection.IsEnabled = enabled && !preview.Selection.IsEmpty;
+            copyFull.IsEnabled = enabled;
+            copyPlain.IsEnabled = enabled;
+            copyMarkdown.IsEnabled = enabled;
+            copyCode.IsEnabled = enabled && code is not null;
+            copyTable.IsEnabled = enabled && table is not null;
+            expandTable.IsEnabled = enabled && table is Table;
+            viewAttachment.IsEnabled = enabled &&
+                (target?.Diagram is not null || target?.Image?.IsReady == true);
         };
+        copySelection.Click += (_, _) =>
+        {
+            if (!preview.Selection.IsEmpty) ApplicationCommands.Copy.Execute(null, preview);
+        };
+        foreach (var item in new[] { copyFull, copyPlain, copyMarkdown })
+            item.Click += (_, _) => registration.Command?.Invoke(item.Tag as string ?? "");
+        copyCode.Click += (_, _) => InvokeBlockCommand(preview, registration, target, "copyCodeBlock", code: true);
+        copyTable.Click += (_, _) => InvokeBlockCommand(preview, registration, target, "copyTable", code: false);
+        expandTable.Click += (_, _) =>
+        {
+            if ((target?.Table ?? ContextBlock(preview, registration, target, code: false)) is Table table)
+                ReaderTableWindow.Show(table, Window.GetWindow(preview));
+        };
+        viewAttachment.Click += (_, _) =>
+        {
+            if (target?.Diagram is { } diagram)
+                ReaderDiagramWindow.Show(diagram, Window.GetWindow(preview));
+            else if (target?.Image is { } image)
+                ReaderImageWindow.Show(image.ImageControl, image.Caption, Window.GetWindow(preview));
+        };
+        return menu;
+
+        MenuItem Add(string title, string action) => new() { Header = title, Tag = action };
+    }
+
+    private static void InvokeBlockCommand(RichTextBox preview, Registration registration,
+        ReadingContextTarget? target, string action, bool code)
+    {
+        Block? block = target?.Table is { } table && !code
+            ? table
+            : ContextBlock(preview, registration, target, code);
+        if (block is null) return;
+        registration.CommandBlock = block;
+        try { registration.Command?.Invoke(action); }
+        finally { registration.CommandBlock = null; }
+    }
+
+    private static Block? ContextBlock(RichTextBox preview, Registration registration,
+        ReadingContextTarget? target, bool code)
+    {
+        if (!code && target?.Table is { } table) return table;
+        TextPointer? pointer = target is null
+            ? registration.ContextPointer ?? (preview.Selection.IsEmpty ? null : preview.Selection.Start)
+            : null;
+        return FindBlock(pointer, code) ?? (preview.Selection.IsEmpty ? null :
+            FindBlock(preview.Selection.Start, code));
+    }
+
+    private static Block? FindBlock(TextPointer? pointer, bool code)
+    {
+        for (DependencyObject? parent = pointer?.Parent; parent is FrameworkContentElement element;
+            parent = element.Parent)
+            if (code ? element is Paragraph { Tag: ReadingBlock { Kind: ReadingBlockKind.Code } }
+                : element is Table) return (Block)element;
+        return null;
     }
 
     internal sealed record HtmlSnapshot(string Fragment, ReadingImageReport Images);
@@ -448,23 +564,35 @@ public static class ReadingClipboard
         return copy;
     }
 
-    private static MemoryStream CreatePackage(TextRange range)
+    private static MemoryStream? TryCreatePackage(TextRange range)
     {
-        var stream = new LimitedStream(MaximumNativeBytes);
         try
         {
-            range.Save(stream, DataFormats.XamlPackage);
-            stream.Position = 0;
-            return stream;
+            var stream = new LimitedStream(MaximumNativeBytes);
+            try
+            {
+                range.Save(stream, DataFormats.XamlPackage);
+                stream.Position = 0;
+                return stream;
+            }
+            catch
+            {
+                stream.Dispose();
+                throw;
+            }
         }
-        catch { stream.Dispose(); throw; }
+        catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
 
-    private static string CreateRtf(TextRange range)
+    private static string? TryCreateRtf(TextRange range)
     {
-        using var stream = new LimitedStream(MaximumNativeBytes);
-        range.Save(stream, DataFormats.Rtf);
-        return Encoding.ASCII.GetString(stream.ToArray());
+        try
+        {
+            using var stream = new LimitedStream(MaximumNativeBytes);
+            range.Save(stream, DataFormats.Rtf);
+            return Encoding.ASCII.GetString(stream.ToArray());
+        }
+        catch (Exception ex) when (IsExportFailure(ex)) { return null; }
     }
 
     private static bool IsExportFailure(Exception ex) =>
@@ -551,13 +679,14 @@ public static class ReadingClipboard
 
     private sealed class Export(TextRange range)
     {
-        private int textLength, elementCount, imageBytes;
+        private int textLength, elementCount;
         private long imagePixels;
         internal int EmbeddedImages { get; private set; }
         internal int OmittedImages { get; private set; }
         private BitmapSource? singleBitmap;
         private bool hasVisibleNonImageContent;
         private readonly List<string> mermaidSources = [];
+        private readonly HashSet<ReadingBlock> exportedMermaidBlocks = [];
         private int pendingImages, failedImages, unsupportedImages, limitedImages;
         private bool hasUnrenderedImages;
         private bool CanPublishSingleBitmap =>
@@ -636,9 +765,11 @@ public static class ReadingClipboard
             {
                 case Paragraph paragraph:
                     var kind = paragraph.Tag as ReadingBlock;
+                    if (kind is not null && MermaidBlock.IsMermaid(kind)
+                        && exportedMermaidBlocks.Contains(kind)) return null;
                     string tag = kind?.Kind switch
                     {
-                        ReadingBlockKind.Heading => "h" + Math.Clamp(kind.Level, 1, 6),
+                        ReadingBlockKind.Heading => "h2",
                         ReadingBlockKind.Code => "pre",
                         ReadingBlockKind.Quote => "blockquote",
                         _ => "p"
@@ -681,7 +812,6 @@ public static class ReadingClipboard
                         && ReferenceEquals(CellTable(firstCell), table) && ReferenceEquals(CellTable(lastCell), table);
                     int left = rectangle ? Math.Min(CellColumn(firstCell!), CellColumn(lastCell!)) : 0;
                     int right = rectangle ? Math.Max(CellColumn(firstCell!), CellColumn(lastCell!)) : int.MaxValue;
-                    int rowIndex = 0;
                     foreach (TableRowGroup group in table.RowGroups)
                     {
                         Visit(depth + 1);
@@ -704,18 +834,26 @@ public static class ReadingClipboard
                                     if (cell.RowSpan != 1 || cell.ColumnSpan != 1) throw new ExportLimitException();
                                     if (cellColumn < left || cellColumn > right) continue;
                                 }
-                                var content = Container(rowIndex == 0 ? "th" : "td", cell.Blocks, depth + 3);
+                                var content = Container("td", cell.Blocks, depth + 3);
                                 if (content is null && rectangle)
-                                    content = new XElement(rowIndex == 0 ? "th" : "td",
+                                    content = new XElement("td",
                                         new XElement("p", new XElement("br")));
                                 if (content is null) continue;
-                                content.SetAttributeValue("style", "border:1px solid #999;padding:6px 10px;text-align:left");
+                                var alignment = cell.Blocks.OfType<Paragraph>()
+                                    .Select(paragraph => paragraph.TextAlignment).FirstOrDefault();
+                                string align = alignment switch
+                                {
+                                    TextAlignment.Center => "center",
+                                    TextAlignment.Right => "right",
+                                    _ => "left"
+                                };
+                                content.SetAttributeValue("style",
+                                    $"border:1px solid #999;padding:6px 10px;text-align:{align}");
                                 if (cell.ColumnSpan > 1) content.SetAttributeValue("colspan", cell.ColumnSpan);
                                 if (cell.RowSpan > 1) content.SetAttributeValue("rowspan", cell.RowSpan);
                                 tr.Add(content);
                             }
                             if (tr.HasElements) result.Add(tr);
-                            rowIndex++;
                         }
                     }
                     return result.HasElements ? result : null;
@@ -824,23 +962,13 @@ public static class ReadingClipboard
             if (mermaid is not null)
             {
                 if (sourceBlock is { } source && MermaidBlock.IsMermaid(source))
-                    mermaidSources.Add(source.Text);
-                try
                 {
-                    BitmapSource? snapshot = mermaid switch
-                    {
-                        MermaidSequenceView sequence => sequence.CreateClipboardSnapshot(),
-                        MermaidFlowchartView flowchart => flowchart.CreateClipboardSnapshot(),
-                        _ => null
-                    };
-                    if (snapshot is not null)
-                        return EmbedBitmap(snapshot,
-                            mermaid is MermaidFlowchartView ? "Mermaid 流程图" : "Mermaid 时序图");
+                    mermaidSources.Add(source.Text);
+                    exportedMermaidBlocks.Add(source);
+                    hasVisibleNonImageContent = true;
+                    return new XElement("pre", new XElement("code", source.Text));
                 }
-                catch (Exception ex) when (IsExportFailure(ex)) { /* Explicit placeholder below. */ }
-                OmittedImages++;
-                limitedImages++;
-                return new XElement("span", "[图表未包含：图形超出复制资源上限或尚未完成布局]");
+                return null;
             }
 
             Image? image = FindImage(child, depth);
@@ -869,16 +997,15 @@ public static class ReadingClipboard
                 { IsFrozen: true, IsDownloading: false, CacheOption: BitmapCacheOption.OnLoad, UriSource: null } bitmap
                 && EmbeddedImages < MaximumImages && bitmap.PixelWidth is > 0 and <= 4096
                 && bitmap.PixelHeight is > 0 and <= 4096
-                && (long)bitmap.PixelWidth * bitmap.PixelHeight <= 16_777_216
-                && imagePixels + (long)bitmap.PixelWidth * bitmap.PixelHeight <= 48_000_000)
+                && (long)bitmap.PixelWidth * bitmap.PixelHeight <= MaximumImagePixels
+                && imagePixels + (long)bitmap.PixelWidth * bitmap.PixelHeight <= MaximumTotalPixels)
             {
                 try
                 {
-                    int remaining = Math.Min(MaximumImageBytes, MaximumTotalImageBytes - imageBytes);
-                    using var stream = new LimitedStream(remaining);
-                    var encoder = new PngBitmapEncoder();
-                    encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                    encoder.Save(stream);
+                    byte[] png = MarkdownImageView.TryGetDecodedPng(image, out var loadedPng)
+                        ? loadedPng
+                        : EncodePng(bitmap);
+                    if (png.Length > MaximumEmbeddedPngBytes) throw new ExportLimitException();
                     string alt = AutomationProperties.GetName(image);
                     if (alt.Length > 1024) alt = alt[..1024];
                     if (alt.Contains("file:", StringComparison.OrdinalIgnoreCase) || alt.Contains(":/", StringComparison.Ordinal)
@@ -893,7 +1020,7 @@ public static class ReadingClipboard
                     int displayHeight = Math.Max(1, (int)Math.Round(width * bitmap.PixelHeight / bitmap.PixelWidth));
                     BitmapSource frozen = FreezeBitmap(bitmap);
                     var element = new XElement("img",
-                        new XAttribute("src", "data:image/png;base64," + Convert.ToBase64String(stream.ToArray())),
+                        new XAttribute("src", "data:image/png;base64," + Convert.ToBase64String(png)),
                         new XAttribute("alt", alt),
                         new XAttribute("width", displayWidth),
                         new XAttribute("height", displayHeight),
@@ -901,7 +1028,6 @@ public static class ReadingClipboard
                     element.AddAnnotation(new ExportedImage(frozen, displayWidth, displayHeight));
                     EmbeddedImages++;
                     singleBitmap = CanPublishSingleBitmap ? frozen : null;
-                    imageBytes += (int)stream.Length;
                     imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
                     return element;
                 }
@@ -929,9 +1055,9 @@ public static class ReadingClipboard
             int? displayHeight = null)
         {
             if (bitmap.PixelWidth is <= 0 or > 4096 || bitmap.PixelHeight is <= 0 or > 4096 ||
-                (long)bitmap.PixelWidth * bitmap.PixelHeight > 16_777_216 ||
+                (long)bitmap.PixelWidth * bitmap.PixelHeight > MaximumImagePixels ||
                 EmbeddedImages >= MaximumImages ||
-                imagePixels + (long)bitmap.PixelWidth * bitmap.PixelHeight > 48_000_000)
+                imagePixels + (long)bitmap.PixelWidth * bitmap.PixelHeight > MaximumTotalPixels)
             {
                 OmittedImages++;
                 limitedImages++;
@@ -951,7 +1077,7 @@ public static class ReadingClipboard
                 limitedImages++;
                 return new XElement("span", "[图片未包含：图片编码失败]");
             }
-            if (png.Length > MaximumImageBytes || imageBytes + png.Length > MaximumTotalImageBytes)
+            if (png.Length > MaximumEmbeddedPngBytes)
             {
                 OmittedImages++;
                 limitedImages++;
@@ -970,14 +1096,13 @@ public static class ReadingClipboard
             element.AddAnnotation(new ExportedImage(frozen, width, height));
             EmbeddedImages++;
             singleBitmap = CanPublishSingleBitmap ? frozen : null;
-            imageBytes += png.Length;
             imagePixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
             return element;
         }
 
         private static byte[] EncodePng(BitmapSource bitmap)
         {
-            using var stream = new MemoryStream();
+            using var stream = new LimitedStream(MaximumEmbeddedPngBytes);
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
             encoder.Save(stream);

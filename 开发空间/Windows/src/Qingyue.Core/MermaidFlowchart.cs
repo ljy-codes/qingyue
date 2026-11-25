@@ -50,6 +50,11 @@ public sealed record MermaidFlowchart(
         private const int MaximumNodes = 100;
         private const int MaximumEdges = 200;
         private const int MaximumLabelLength = 2_000;
+        private static readonly HashSet<string> Reserved = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "subgraph", "end", "classdef", "class", "style", "linkstyle",
+            "click", "direction", "acctitle", "accdescr"
+        };
         private readonly List<MermaidFlowchartNode> nodes = [];
         private readonly List<MermaidFlowchartEdge> edges = [];
         private readonly Dictionary<string, int> nodeIndexes = new(StringComparer.Ordinal);
@@ -84,8 +89,10 @@ public sealed record MermaidFlowchart(
                     continue;
                 }
 
-                if (line.StartsWith("subgraph", StringComparison.OrdinalIgnoreCase))
-                    return Fail("暂不支持 subgraph 子图语法，请展开节点后再预览。");
+                int firstWordEnd = line.IndexOfAny(' ', '\t');
+                string firstWord = firstWordEnd < 0 ? line : line[..firstWordEnd];
+                if (Reserved.Contains(firstWord))
+                    return Fail("暂不支持子图、样式、交互或局部方向指令。");
                 if (!ParseStatement(line)) return false;
             }
 
@@ -139,6 +146,11 @@ public sealed record MermaidFlowchart(
             if (index < line.Length && line[index] is '[' or '(' or '{')
             {
                 defined = true;
+                if (line.AsSpan(index).StartsWith("[/", StringComparison.Ordinal) ||
+                    line.AsSpan(index).StartsWith("[\\", StringComparison.Ordinal) ||
+                    line.AsSpan(index).StartsWith("([", StringComparison.Ordinal) ||
+                    line.AsSpan(index).StartsWith("{{", StringComparison.Ordinal))
+                    return Fail("暂不支持这种节点形状，请查看源码。");
                 char opener = line[index];
                 string close;
                 if (opener == '[' && index + 1 < line.Length && line[index + 1] == '[')

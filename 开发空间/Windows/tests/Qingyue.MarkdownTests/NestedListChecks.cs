@@ -80,8 +80,10 @@ internal static class NestedListChecks
             "ordered continuation must keep inline source styling");
         var parentContinuation = parent.Blocks.OfType<Paragraph>().Last();
         Check(ParagraphText(parentContinuation) == "父级 续段" &&
-            parentContinuation.Inlines.OfType<Run>().Any(r => r.Text == "续段" && r.TextDecorations.Count > 0),
-            "parent continuation must keep link styling after dedenting");
+            parentContinuation.Inlines.OfType<Hyperlink>().Any(link =>
+                link.NavigateUri?.OriginalString == "https://example.test" &&
+                link.Inlines.OfType<Run>().Any(run => run.Text == "续段" && run.TextDecorations.Count > 0)),
+            "parent continuation must keep an interactive link after dedenting");
         Check(parent.Blocks.OfType<DocumentList>().Count() == 2, "mixed child types stay inside the same parent");
     }
 
@@ -271,7 +273,17 @@ internal static class NestedListChecks
     }
 
     private static string ParagraphText(Block block) =>
-        string.Concat(((Paragraph)block).Inlines.OfType<Run>().Select(r => r.Text));
+        string.Concat(Flatten(((Paragraph)block).Inlines).Select(run => run.Text));
+
+    private static IEnumerable<Run> Flatten(InlineCollection inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            if (inline is Run run) yield return run;
+            if (inline is Span span)
+                foreach (var nested in Flatten(span.Inlines)) yield return nested;
+        }
+    }
 
     private static bool Boundary(string text, int offset) => offset <= 0 || offset >= text.Length ||
         !char.IsHighSurrogate(text[offset - 1]) || !char.IsLowSurrogate(text[offset]);

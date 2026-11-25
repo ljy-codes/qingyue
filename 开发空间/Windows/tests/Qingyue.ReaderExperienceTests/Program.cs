@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -37,7 +38,9 @@ internal static class Program
         Check("expanded table uses the owner's theme without moving source nodes", TableWindowTheme);
         Check("expanded star columns have readable actual widths", ExpandedStarColumns);
         Check("expanded pixel columns grow while retaining larger fixed widths", ExpandedPixelColumns);
-        Console.WriteLine($"Reader experience: {19 - failures}/19 passed");
+        Check("clipboard reuses the exact PNG produced by the image loader", ClipboardReusesLoadedPng);
+        Check("oversized native formats are omitted instead of failing the HTML copy", NativeOversizeIsOptional);
+        Console.WriteLine($"Reader experience: {21 - failures}/21 passed");
         return failures == 0 ? 0 : 1;
     }
 
@@ -278,6 +281,67 @@ internal static class Program
             Assert(click.Handled && preview.Selection.Text == selected, "image click changed selection or escaped the control");
         }
         finally { clickedWindow.Close(); }
+    }
+
+    private static void ClipboardReusesLoadedPng()
+    {
+        var preview = new MarkdownPreview("![复用解码图](missing.png)", 16, 680);
+        var image = Descendants<Image>(ImageControls(preview.Document).Single()).Single();
+        var bitmap = DecodedBitmap();
+        byte[] decodedPng = EncodePng(bitmap);
+        image.Source = bitmap;
+        image.Visibility = Visibility.Visible;
+        MarkdownImageView.RememberDecodedPng(image, bitmap, decodedPng);
+
+        var result = ReadingClipboard.CreateFullDocumentData(preview);
+        string html = (string)result!.Data.GetData(DataFormats.Html)!;
+        Assert(html.Contains(Convert.ToBase64String(decodedPng), StringComparison.Ordinal),
+            "clipboard did not reuse the loader's decoded PNG");
+
+        var replacement = DecodedBitmap(0x7f);
+        image.Source = replacement;
+        Assert(!MarkdownImageView.TryGetDecodedPng(image, out _),
+            "stale loader PNG association survived an image source replacement");
+        var changed = ReadingClipboard.CreateFullDocumentData(preview);
+        string changedHtml = (string)changed!.Data.GetData(DataFormats.Html)!;
+        Assert(!changedHtml.Contains(Convert.ToBase64String(decodedPng), StringComparison.Ordinal),
+            "stale loader PNG was reused after the image source changed");
+    }
+
+    private static void NativeOversizeIsOptional()
+    {
+        var document = new FlowDocument(new Paragraph(new Run(new string('中', 4_000_000))));
+        var range = new TextRange(document.ContentStart, document.ContentEnd);
+        var method = typeof(ReadingClipboard).GetMethod("TryCreateRtf",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert(method is not null, "missing RTF budget boundary");
+        Assert(method!.Invoke(null, [range]) is null,
+            "oversized RTF was not omitted independently of HTML");
+    }
+
+    private static BitmapImage DecodedBitmap(byte value = 0)
+    {
+        byte[] pixels = Enumerable.Repeat(value, 3 * 2 * 4).ToArray();
+        var source = BitmapSource.Create(3, 2, 96, 96, PixelFormats.Bgra32, null,
+            pixels, 3 * 4);
+        source.Freeze();
+        using var stream = new MemoryStream(EncodePng(source));
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.StreamSource = stream;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static byte[] EncodePng(BitmapSource bitmap)
+    {
+        using var stream = new MemoryStream();
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        encoder.Save(stream);
+        return stream.ToArray();
     }
     private static void PendingImageActions()
     {

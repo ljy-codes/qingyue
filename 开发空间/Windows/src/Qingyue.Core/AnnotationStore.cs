@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Unicode;
@@ -58,7 +59,7 @@ public sealed class AnnotationStore
         {
             return items.Where(item => currentPath is not null
                     ? string.Equals(NormalizePath(item.Path), currentPath, StringComparison.OrdinalIgnoreCase)
-                    : item.DocumentId == file.Id && item.Path is null)
+                    : item.DocumentId == file.Id)
                 .OrderBy(item => item.SourceStart)
                 .ThenBy(item => item.CreatedAt)
                 .ToArray();
@@ -69,20 +70,27 @@ public sealed class AnnotationStore
     {
         ArgumentNullException.ThrowIfNull(file);
         ArgumentNullException.ThrowIfNull(draft);
-        if (draft.DocumentId != file.Id)
-            throw new ArgumentException("批注草稿不属于当前文档。", nameof(draft));
-        if (draft.SourceStart < 0 || draft.SourceEnd < draft.SourceStart
-            || draft.SourceEnd > file.Text.Length)
-            throw new ArgumentOutOfRangeException(nameof(draft), "批注源位置超出当前文档。");
-        ValidateText(draft.Quote, MaximumQuoteLength, "引文", allowEmpty: false);
+        lock (gate)
+        {
+            if (items.Count >= MaximumItems)
+                throw new InvalidOperationException("批注数量已达到 5000 条上限。");
+        }
+        if (draft.SourceStart < 0 || draft.SourceEnd < draft.SourceStart)
+            throw new ArgumentOutOfRangeException(nameof(draft), "批注源位置无效。");
+        ValidateText(draft.Quote, MaximumQuoteLength, "引文", allowEmpty: true);
         ValidateText(draft.ContextBefore, MaximumContextLength, "前置上下文", allowEmpty: true);
         ValidateText(draft.ContextAfter, MaximumContextLength, "后置上下文", allowEmpty: true);
+        if (!Enum.IsDefined(draft.Color))
+            throw new ArgumentOutOfRangeException(nameof(draft), "批注颜色无效。");
+        string? path = NormalizePath(draft.Path);
+        string? note = NormalizeNote(draft.Note);
+        IReadOnlyList<string> tags = NormalizeTags(draft.Tags);
 
         var now = DateTimeOffset.UtcNow;
         var item = new DocumentAnnotation(
-            Guid.NewGuid(), file.Id, NormalizePath(file.Path),
+            Guid.NewGuid(), draft.DocumentId, path,
             draft.SourceStart, draft.SourceEnd, draft.Quote,
-            draft.ContextBefore, draft.ContextAfter, null, [], AnnotationColor.Amber,
+            draft.ContextBefore, draft.ContextAfter, note, tags, draft.Color,
             now, now, AnnotationAnchorState.Exact);
         lock (gate)
         {
@@ -95,17 +103,22 @@ public sealed class AnnotationStore
 
     public bool Update(Guid id, string? note, IReadOnlyList<string> tags, AnnotationColor color)
     {
-        string? normalizedNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
-        if (normalizedNote is { Length: > MaximumNoteLength })
+        if (note is { Length: > MaximumNoteLength })
             throw new ArgumentException("备注超过 4000 字符。", nameof(note));
+        string? normalizedNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
 
-        string[] normalizedTags = (tags ?? [])
-            .Select(tag => tag.Trim())
-            .Where(tag => tag.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (normalizedTags.Length > MaximumTags || normalizedTags.Any(tag => tag.Length > MaximumTagLength))
-            throw new ArgumentException("标签最多 10 个，每个最多 32 字符。", nameof(tags));
+        var suppliedTags = tags ?? [];
+        if (suppliedTags.Count > MaximumTags)
+            throw new ArgumentException("标签最多 10 个。", nameof(tags));
+        var normalizedTags = new List<string>();
+        foreach (string tag in suppliedTags)
+        {
+            string value = tag.Trim();
+            if (value.Length == 0 || value.Length > MaximumTagLength)
+                throw new ArgumentException("标签不能为空，每个最多 32 字符。", nameof(tags));
+            if (!normalizedTags.Contains(value))
+                normalizedTags.Add(value);
+        }
         if (!Enum.IsDefined(color)) throw new ArgumentOutOfRangeException(nameof(color));
 
         lock (gate)
@@ -115,7 +128,7 @@ public sealed class AnnotationStore
             items[index] = items[index] with
             {
                 Note = normalizedNote,
-                Tags = normalizedTags,
+                Tags = normalizedTags.ToArray(),
                 Color = color,
                 UpdatedAt = DateTimeOffset.UtcNow
             };
@@ -139,12 +152,19 @@ public sealed class AnnotationStore
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                bool matches = item.DocumentId == documentId
-                    && (source is null
-                        ? item.Path is null
-                        : string.Equals(NormalizePath(item.Path), source, StringComparison.OrdinalIgnoreCase));
+                // A saved document gets a new ID when reopened. Its path is the
+                // durable identity, so an old-path match must migrate even when
+                // the tab's in-memory document ID changed.
+                bool matches = source is null
+                    ? item.DocumentId == documentId && item.Path is null
+                    : string.Equals(NormalizePath(item.Path), source, StringComparison.OrdinalIgnoreCase);
                 if (!matches) continue;
-                items[i] = item with { Path = target, UpdatedAt = DateTimeOffset.UtcNow };
+                items[i] = item with
+                {
+                    DocumentId = documentId,
+                    Path = target,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
                 changed++;
             }
         }
@@ -154,23 +174,25 @@ public sealed class AnnotationStore
     public int ApplyAnchorRepairs(IReadOnlyList<AnnotationAnchorRepair> repairs, DateTimeOffset repairedAt)
     {
         ArgumentNullException.ThrowIfNull(repairs);
-        var byId = repairs
-            .GroupBy(repair => repair.Id)
-            .ToDictionary(group => group.Key, group => group.Last());
         int changed = 0;
         lock (gate)
         {
-            for (int i = 0; i < items.Count; i++)
+            foreach (var repair in repairs)
             {
-                if (!byId.TryGetValue(items[i].Id, out var repair)) continue;
-                if (repair.SourceStart < 0 || repair.SourceEnd < repair.SourceStart)
-                    throw new InvalidDataException("锚点修复范围无效。");
                 if (!Enum.IsDefined(repair.AnchorState))
                     throw new InvalidDataException("锚点状态无效。");
-                items[i] = items[i] with
+                int index = items.FindIndex(item => item.Id == repair.Id);
+                if (index < 0) continue;
+                int start = Math.Max(0, repair.SourceStart);
+                int end = Math.Max(start, repair.SourceEnd);
+                var item = items[index];
+                if (item.SourceStart == start && item.SourceEnd == end
+                    && item.AnchorState == repair.AnchorState)
+                    continue;
+                items[index] = item with
                 {
-                    SourceStart = repair.SourceStart,
-                    SourceEnd = repair.SourceEnd,
+                    SourceStart = start,
+                    SourceEnd = end,
                     AnchorState = repair.AnchorState,
                     UpdatedAt = repairedAt
                 };
@@ -225,9 +247,12 @@ public sealed class AnnotationStore
                 throw new InvalidDataException("批注文件超过 64 MiB 上限。");
             var loaded = JsonSerializer.Deserialize<List<DocumentAnnotation>>(File.ReadAllBytes(path), JsonOptions)
                 ?? throw new InvalidDataException("批注文件为空。");
-            if (loaded.Count > MaximumItems) loaded = loaded.Take(MaximumItems).ToList();
+            if (loaded.Count > MaximumItems)
+                throw new InvalidDataException("批注数量超过 5,000 条上限。");
+            if (loaded.Select(item => item.Id).Distinct().Count() != loaded.Count)
+                throw new InvalidDataException("批注包含重复标识。");
             foreach (var item in loaded) Validate(item);
-            return (loaded.DistinctBy(item => item.Id).ToList(), null);
+            return (loaded, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
@@ -248,16 +273,20 @@ public sealed class AnnotationStore
             || item.SourceStart < 0 || item.SourceEnd < item.SourceStart
             || item.CreatedAt == default || item.UpdatedAt == default
             || !Enum.IsDefined(item.AnchorState) || !Enum.IsDefined(item.Color)
-            || item.Path is not null && !Path.IsPathFullyQualified(item.Path))
+            || item.Path is not null && !IsValidPath(item.Path))
             throw new InvalidDataException("批注字段无效。");
-        ValidateTextForStorage(item.Quote, MaximumQuoteLength, "引文", allowEmpty: false);
+        ValidateTextForStorage(item.Quote, MaximumQuoteLength, "引文", allowEmpty: true);
         ValidateTextForStorage(item.ContextBefore, MaximumContextLength, "前置上下文", allowEmpty: true);
         ValidateTextForStorage(item.ContextAfter, MaximumContextLength, "后置上下文", allowEmpty: true);
-        if (item.Note is { Length: > MaximumNoteLength })
-            throw new InvalidDataException("批注备注过长。");
-        if (item.Tags is null || item.Tags.Count > MaximumTags
-            || item.Tags.Any(tag => tag is null || tag.Length is 0 or > MaximumTagLength))
-            throw new InvalidDataException("批注标签无效。");
+        try
+        {
+            _ = NormalizeNote(item.Note);
+            _ = NormalizeTags(item.Tags);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("批注备注或标签无效。", ex);
+        }
     }
 
     private static void ValidateText(string? value, int maximum, string name, bool allowEmpty)
@@ -272,6 +301,45 @@ public sealed class AnnotationStore
             throw new InvalidDataException($"{name}长度无效。");
     }
 
-    private static string? NormalizePath(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : Path.GetFullPath(value);
+    private static string? NormalizeNote(string? note)
+    {
+        if (note is null) return null;
+        if (note.Length > MaximumNoteLength)
+            throw new ArgumentException("备注超过 4000 字符。", nameof(note));
+        string value = note.Trim();
+        return value.Length == 0 ? null : value;
+    }
+
+    private static IReadOnlyList<string> NormalizeTags(IReadOnlyList<string>? tags)
+    {
+        var supplied = tags ?? [];
+        if (supplied.Count > MaximumTags)
+            throw new ArgumentException("标签最多 10 个。", nameof(tags));
+        var normalized = new List<string>();
+        foreach (string tag in supplied)
+        {
+            if (tag is null)
+                throw new ArgumentException("标签不能为空。", nameof(tags));
+            string value = tag.Trim();
+            if (value.Length == 0 || value.Length > MaximumTagLength)
+                throw new ArgumentException("标签不能为空，每个最多 32 字符。", nameof(tags));
+            if (!normalized.Contains(value))
+                normalized.Add(value);
+        }
+        return normalized.ToArray();
+    }
+
+    private static string? NormalizePath(string? value)
+    {
+        if (value is null) return null;
+        if (!IsValidPath(value))
+            throw new ArgumentException("批注需要有效的本机绝对路径。", nameof(value));
+        return Path.GetFullPath(value);
+    }
+
+    private static bool IsValidPath(string value) =>
+        value.Length > 0
+        && !value.Contains('\0')
+        && Encoding.UTF8.GetByteCount(value) <= 4096
+        && Path.IsPathFullyQualified(value);
 }

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/windows-client
+      - windows
       - main
       - master
   pull_request:

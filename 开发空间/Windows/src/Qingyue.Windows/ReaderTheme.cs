@@ -206,10 +206,13 @@ public static class ReaderTheme
         string accentText = Hex(definition.AccentText is { } accentValue
             ? ParseColor(accentValue)
             : EnsureContrast(accent, editor, 4.5));
-        string syntaxString = Hex(EnsureContrast(ParseColor(definition.String), editor, 4.5));
-        string syntaxNumber = Hex(EnsureContrast(ParseColor(definition.Number), editor, 4.5));
-        string syntaxKey = Hex(EnsureContrast(ParseColor(definition.Key), editor, 4.5));
-        string syntaxComment = Hex(EnsureContrast(ParseColor(definition.Comment), editor, 4.5));
+        // macOS deliberately keeps these syntax tokens as authored. Do not
+        // post-process them with contrast correction or the rendered colors
+        // diverge from the shared seven-theme palette.
+        string syntaxString = Hex(definition.String);
+        string syntaxNumber = Hex(definition.Number);
+        string syntaxKey = Hex(definition.Key);
+        string syntaxComment = Hex(definition.Comment);
         bool darkSurface = RelativeLuminance(editor) < 0.35;
         string accentForeground = Contrast(Colors.White, accent) >= Contrast(ParseColor(0x11141A), accent)
             ? Hex(Colors.White)

@@ -38,22 +38,14 @@ public partial class MainWindow
     private void ToggleMarkdownPreview()
     {
         if (CurrentTab is not { Kind: TextKind.Markdown } tab) return;
-        if (markdownTab == tab && !tab.IsReading && ReferenceEquals(DocumentHost.Content, markdownSplit))
+        if (!PreviewLimits.CanRender(tab.File.Text, tab.Kind))
         {
-            markdownTab = null;
-            markdownTimer.Stop();
+            Notify("MD 分屏预览支持 50 万正文字符，内嵌图片数据单独计限。当前文档可继续查看完整原文。");
+            return;
         }
-        else
-        {
-            if (!PreviewLimits.CanRender(tab.File.Text, tab.Kind))
-            {
-                Notify("MD 分屏预览支持 50 万正文字符，内嵌图片数据单独计限。当前文档可继续查看完整原文。");
-                return;
-            }
-            if (tab.IsReading) ToggleReading();
-            markdownTab = tab;
-            markdownText = null;
-        }
+        if (tab.IsReading) ToggleReading();
+        tab.SplitPreview = !tab.SplitPreview;
+        if (tab.SplitPreview) markdownText = null;
         RefreshCurrent();
         tab.Editor.Focus();
     }
@@ -65,11 +57,14 @@ public partial class MainWindow
 
     private bool RefreshMarkdownPresentation(EditorTab tab)
     {
-        bool enabled = markdownTab == tab && !tab.IsReading && tab.Kind == TextKind.Markdown &&
+        if (markdownTab is not null && !ReferenceEquals(markdownTab, tab))
+            ResetMarkdownPreviewPresentation();
+        bool enabled = ReferenceEquals(CurrentTab, tab) && tab.SplitPreview && !tab.IsReading &&
+            tab.Kind == TextKind.Markdown &&
             PreviewLimits.CanRender(tab.File.Text, tab.Kind);
         if (!enabled)
         {
-            markdownTimer.Stop();
+            if (ReferenceEquals(markdownTab, tab)) ResetMarkdownPreviewPresentation();
             if (ReferenceEquals(DocumentHost.Content, markdownSplit) && markdownSplit is not null)
             {
                 DetachMarkdownEditor();
@@ -77,6 +72,7 @@ public partial class MainWindow
             }
             return false;
         }
+        markdownTab = tab;
         if (markdownSplit is null) CreateMarkdownSplit();
         if (!ReferenceEquals(DocumentHost.Content, markdownSplit))
         {
@@ -85,7 +81,10 @@ public partial class MainWindow
             markdownEditorHost!.Content = tab.EditorSurface;
             DocumentHost.Content = markdownSplit;
         }
-        if (markdownPreview is null || markdownText is null)
+        // A null markdownText also means the first async render is still in flight.
+        // Keep that control during unrelated UI refreshes; replacing it would leave the
+        // previous preview empty and make copy/export target a stale control.
+        if (markdownPreview is null || (markdownText is null && markdownPreviewCancellation is null))
         {
             markdownFont = settings.FontSize;
             markdownWidth = settings.ReadingWidth;
@@ -96,11 +95,13 @@ public partial class MainWindow
                 includeDiagramSource: true);
             AttachMarkdownPreviewNavigation(markdownPreview);
             ReadingClipboard.Attach(markdownPreview, () => true,
-                reason => StatusText.Text = "复制已降级：" + reason);
+                reason => StatusText.Text = "复制已降级：" + reason,
+                action => ExecuteAction(action));
             markdownPreviewHost!.Content = markdownPreview;
             if (MarkdownPreview.CanBuildSynchronously(tab.File.Text))
             {
                 markdownPreview.Update(tab.File.Text);
+                ReadingClipboard.RefreshContextMenus(markdownPreview);
                 markdownText = tab.File.Text;
             }
             else
@@ -135,6 +136,7 @@ public partial class MainWindow
         CancelMarkdownPreviewUpdate();
         double offset = markdownPreview.VerticalOffset;
         markdownPreview.Update(tab.File.Text);
+        ReadingClipboard.RefreshContextMenus(markdownPreview);
         markdownText = tab.File.Text;
         markdownPreview.ScrollToVerticalOffset(offset);
         if (tab.Editor.IsKeyboardFocusWithin) QueueMarkdownLocate(tab, true);
@@ -187,6 +189,7 @@ public partial class MainWindow
                 tab.Kind != TextKind.Markdown || tab.File.Text != text || exitInProgress)
                 return false;
             markdownPreview.Document = document;
+            ReadingClipboard.RefreshContextMenus(markdownPreview);
             markdownText = text;
             markdownPreview.ScrollToVerticalOffset(Math.Max(0, offset));
             if (tab.Editor.IsKeyboardFocusWithin) QueueMarkdownLocate(tab, true);
@@ -219,12 +222,19 @@ public partial class MainWindow
     private void ReleaseClosedMarkdownPreview()
     {
         if (markdownTab is null || tabs.Contains(markdownTab)) return;
+        ResetMarkdownPreviewPresentation();
+    }
+
+    private void ResetMarkdownPreviewPresentation()
+    {
         markdownTimer.Stop();
         CancelMarkdownPreviewUpdate();
         DetachMarkdownEditor();
         markdownTab = null;
         markdownPreview = null;
         markdownText = null;
+        markdownFont = 0;
+        markdownWidth = 0;
         if (markdownPreviewHost is not null) markdownPreviewHost.Content = null;
     }
 

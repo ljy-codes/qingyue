@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Cryptography;
@@ -51,7 +52,7 @@ public sealed partial class RenderedReading
                     });
                 else if (diagramBudget.LimitNotice() is { } notice) Document.Blocks.Add(notice);
             }
-            if (images is not null && block.Kind != ReadingBlockKind.Code)
+            if (images is not null && block.Kind is not ReadingBlockKind.Code and not ReadingBlockKind.Metadata)
                 foreach (var reference in images.InSourceRange(block.SourceStart, block.SourceLength))
                     if (!reference.IsRemote)
                     {
@@ -108,6 +109,12 @@ public sealed partial class RenderedReading
                 paragraph.BorderThickness = new Thickness(1);
                 paragraph.SetResourceReference(Paragraph.BorderBrushProperty, "BorderBrush");
                 paragraph.SetResourceReference(Paragraph.BackgroundProperty, "PanelBrush");
+                break;
+            case ReadingBlockKind.Metadata:
+                paragraph.FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI");
+                paragraph.FontSize = fontSize * .9;
+                paragraph.LineHeight = presentation.LineHeightFor(paragraph.FontSize);
+                paragraph.SetResourceReference(Paragraph.ForegroundProperty, "MutedBrush");
                 break;
             case ReadingBlockKind.Quote:
                 paragraph.BorderThickness = new Thickness(3, 0, 0, 0);
@@ -420,10 +427,21 @@ internal sealed class MarkdownImages
     internal static MarkdownImages Extract(string source, CancellationToken token = default)
     {
         var references = new List<MarkdownImageReference>();
+        var definitions = MarkdownLinks.References(source);
         StringBuilder? projected = null;
         string prefix = "qyimg" + Guid.NewGuid().ToString("N");
         int copied = 0, lineStart = 0, fenceLength = 0;
         char fenceMarker = '\0';
+        MarkdownImageReference ProjectReferenceImage(int start, int end, string alt, string target)
+        {
+            projected ??= new StringBuilder(source.Length > 200_000 ? 4096 : source.Length);
+            projected.Append(source, copied, start - copied);
+            string key = prefix + references.Count;
+            string replacement = "![" + key + "](" + key + ")";
+            int projectedStart = projected.Length;
+            projected.Append(replacement);
+            return new(start, end - start, alt, target, key, projectedStart, replacement.Length);
+        }
         while (lineStart < source.Length)
         {
             token.ThrowIfCancellationRequested();
@@ -483,6 +501,38 @@ internal sealed class MarkdownImages
                     if (altEnd >= lineEnd) break;
                     if (altEnd + 1 >= lineEnd || source[altEnd + 1] != '(')
                     {
+                        string alt = source[(i + 2)..altEnd];
+                        if (altEnd + 1 < lineEnd && source[altEnd + 1] == '[')
+                        {
+                            int refEnd = altEnd + 2;
+                            while (refEnd < lineEnd && source[refEnd] != ']')
+                            {
+                                if (source[refEnd] == '\\') refEnd++;
+                                refEnd++;
+                            }
+                            if (refEnd >= lineEnd) break;
+                            string keyLabel = source[(altEnd + 2)..refEnd];
+                            if (keyLabel.Length == 0) keyLabel = alt;
+                            if (definitions.TryGetValue(MarkdownLinks.NormalizeReferenceLabel(keyLabel),
+                                out var definition))
+                            {
+                                references.Add(ProjectReferenceImage(i, refEnd + 1, alt,
+                                    definition.Destination));
+                                copied = refEnd + 1;
+                                i = refEnd;
+                            }
+                            else i = refEnd;
+                            continue;
+                        }
+                        if (definitions.TryGetValue(MarkdownLinks.NormalizeReferenceLabel(alt),
+                            out var shortcut))
+                        {
+                            references.Add(ProjectReferenceImage(i, altEnd + 1, alt,
+                                shortcut.Destination));
+                            copied = altEnd + 1;
+                            i = altEnd;
+                            continue;
+                        }
                         i = altEnd;
                         continue;
                     }
@@ -552,16 +602,19 @@ internal sealed class MarkdownImages
 
 internal sealed class MarkdownImageBudget
 {
+    internal const int MaximumImages = 32;
+    internal const long MaximumBytes = 32L * 1024 * 1024;
+    internal const long MaximumPixels = 48_000_000;
     private int count;
     private bool limitNotice;
     private long bytes, pixels;
-    internal bool TakeControl() => ++count <= 32;
+    internal bool TakeControl() => ++count <= MaximumImages;
     internal bool TakeLimitNotice() => !limitNotice && (limitNotice = true);
     internal bool Reserve(long imageBytes, long imagePixels)
     {
         lock (this)
         {
-            if (bytes + imageBytes > 64L * 1024 * 1024 || pixels + imagePixels > 48_000_000) return false;
+            if (bytes + imageBytes > MaximumBytes || pixels + imagePixels > MaximumPixels) return false;
             bytes += imageBytes;
             pixels += imagePixels;
             return true;
@@ -573,10 +626,12 @@ internal sealed class MarkdownImageBudget
     }
 }
 
-internal sealed class MarkdownImageResult(BitmapSource? bitmap, string? error, Action? release = null) : IDisposable
+internal sealed class MarkdownImageResult(
+    BitmapSource? bitmap, string? error, byte[]? decodedPng = null, Action? release = null) : IDisposable
 {
     internal BitmapSource? Bitmap { get; } = bitmap;
     internal string? Error { get; } = error;
+    internal byte[]? DecodedPng { get; } = decodedPng;
     private Action? releaseBudget = release;
 
     internal void Accept() => Interlocked.Exchange(ref releaseBudget, null);
@@ -586,9 +641,12 @@ internal sealed class MarkdownImageResult(BitmapSource? bitmap, string? error, A
 internal static class MarkdownImageLoader
 {
     private sealed class ImageSourceException(string message) : Exception(message);
-    private sealed record ImageInput(string? Path, byte[]? InlineBytes, MarkdownImageCacheKey CacheKey);
-    internal const int MaximumBytes = 16 * 1024 * 1024;
-    internal const long MaximumPixels = 32_000_000;
+    private sealed record ImageInput(
+        string? Path, byte[]? InlineBytes, long SourceLength, long LastWriteUtcTicks);
+    internal const int MaximumBytes = 8 * 1024 * 1024;
+    internal const int MaximumDecodedPngBytes = 32 * 1024 * 1024;
+    internal const long MaximumPixels = 16_000_000;
+    internal const int MaximumDecodedSide = 4096;
     private static readonly SemaphoreSlim DecodeSlots = new(2);
 
     internal static async Task<MarkdownImageResult> LoadAsync(string target, string? sourcePath,
@@ -604,14 +662,6 @@ internal static class MarkdownImageLoader
             FormatException or ArgumentException or OverflowException)
         { return new(null, "图片缺失、损坏或无法读取"); }
 
-        if (MarkdownImageCache.TryGet(input.CacheKey, out var cached))
-        {
-            if (!budget.Reserve(cached.SourceBytes, cached.DecodedPixels))
-                return new(null, "本篇图片总量超过上限（64 MiB / 4800 万解码像素）");
-            return new MarkdownImageResult(cached.Bitmap, null,
-                () => budget.Release(cached.SourceBytes, cached.DecodedPixels));
-        }
-
         await DecodeSlots.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
@@ -623,14 +673,22 @@ internal static class MarkdownImageLoader
                 {
                     cancellation.ThrowIfCancellationRequested();
                     byte[] bytes = input.InlineBytes ?? await ReadFileAsync(input.Path!, cancellation);
-                    if (bytes.Length > MaximumBytes)
-                        return new MarkdownImageResult(null, "图片超过 16 MiB 上限");
+                    if (input.Path is not null && bytes.Length > MaximumBytes)
+                        return new MarkdownImageResult(null, "图片超过 8 MiB 上限");
                     if (input.Path is not null)
                     {
                         var info = new FileInfo(input.Path);
-                        if (!info.Exists || info.Length != input.CacheKey.SourceLength ||
-                            info.LastWriteTimeUtc.Ticks != input.CacheKey.LastWriteUtcTicks)
+                        if (!info.Exists || info.Length != input.SourceLength ||
+                            info.LastWriteTimeUtc.Ticks != input.LastWriteUtcTicks)
                             return new MarkdownImageResult(null, "图片读取期间发生变化，请刷新预览");
+                    }
+                    var cacheKey = MarkdownImageCacheKey.FromBytes(bytes);
+                    if (MarkdownImageCache.TryGet(cacheKey, out var cached))
+                    {
+                        if (!budget.Reserve(cached.SourceBytes, cached.OriginalPixels))
+                            return new(null, "本篇图片总量超过上限（32 MiB / 4800 万原图像素）");
+                        return new MarkdownImageResult(cached.Bitmap, null, cached.DecodedPng,
+                            () => budget.Release(cached.SourceBytes, cached.OriginalPixels));
                     }
                     cancellation.ThrowIfCancellationRequested();
                     using var stream = new MemoryStream(bytes, writable: false);
@@ -638,11 +696,11 @@ internal static class MarkdownImageLoader
                     var frame = decoder.Frames[0];
                     int width = frame.PixelWidth, height = frame.PixelHeight;
                     if (width < 1 || height < 1 || width > 32768 || height > 32768 || (long)width * height > MaximumPixels)
-                        return new MarkdownImageResult(null, "图片像素超过上限（3200 万像素 / 单边 32768）");
-                    double scale = Math.Min(1, 4096d / Math.Max(width, height));
-                    long pixels = (long)Math.Ceiling(width * scale) * (long)Math.Ceiling(height * scale);
-                    if (!budget.Reserve(bytes.Length, pixels))
-                        return new MarkdownImageResult(null, "本篇图片总量超过上限（64 MiB / 4800 万解码像素）");
+                        return new MarkdownImageResult(null, "图片像素超过上限（1600 万像素 / 单边 32768）");
+                    long originalPixels = (long)width * height;
+                    double scale = Math.Min(1, MaximumDecodedSide / (double)Math.Max(width, height));
+                    if (!budget.Reserve(bytes.Length, originalPixels))
+                        return new MarkdownImageResult(null, "本篇图片总量超过上限（32 MiB / 4800 万原图像素）");
                     bool success = false;
                     try
                     {
@@ -660,12 +718,18 @@ internal static class MarkdownImageLoader
                         bitmap.EndInit();
                         cancellation.ThrowIfCancellationRequested();
                         bitmap.Freeze();
+                        byte[] decodedPng = EncodePng(bitmap, cancellation);
+                        if (decodedPng.Length > MaximumDecodedPngBytes)
+                            return new MarkdownImageResult(null, "解码图片超过 32 MiB 上限");
+                        long decodedPixels = (long)bitmap.PixelWidth * bitmap.PixelHeight;
                         success = true;
-                        MarkdownImageCache.Add(input.CacheKey,
-                            new MarkdownImageCacheEntry(bitmap, bytes.Length, pixels));
-                        return new MarkdownImageResult(bitmap, null, () => budget.Release(bytes.Length, pixels));
+                        MarkdownImageCache.Add(cacheKey, new MarkdownImageCacheEntry(
+                            bitmap, decodedPng, bytes.Length, originalPixels, decodedPixels,
+                            decodedPng.Length + decodedPixels * 4));
+                        return new MarkdownImageResult(bitmap, null, decodedPng,
+                            () => budget.Release(bytes.Length, originalPixels));
                     }
-                    finally { if (!success) budget.Release(bytes.Length, pixels); }
+                    finally { if (!success) budget.Release(bytes.Length, originalPixels); }
                 }
                 catch (FileNotFoundException) { return new(null, "找不到图片文件"); }
                 catch (DirectoryNotFoundException) { return new(null, "找不到图片目录"); }
@@ -684,21 +748,40 @@ internal static class MarkdownImageLoader
         if (target.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
             const string header = "data:image/png;base64,";
-            if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase))
-                throw new ImageSourceException("仅支持 data:image/png;base64 内嵌图片");
-            if (target.Length - header.Length > ((MaximumBytes + 2) / 3 * 4) + 4096)
-                throw new ImageSourceException("图片超过 16 MiB 上限");
-            string identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)));
-            return new ImageInput(null, Convert.FromBase64String(target[header.Length..]),
-                new MarkdownImageCacheKey("data:" + identity, target.Length, 0, 0, 0));
+            const string invalid = "仅支持有界的内嵌 PNG。";
+            if (!target.StartsWith(header, StringComparison.OrdinalIgnoreCase) ||
+                Encoding.UTF8.GetByteCount(target) > MaximumBytes * 4 / 3 + 128)
+                throw new ImageSourceException(invalid);
+            byte[] bytes = DecodeEmbeddedPng(target[header.Length..]);
+            return new ImageInput(null, bytes, 0, 0);
         }
 
         string path = LocalPath(target, sourcePath);
         var info = new FileInfo(path);
         if (!info.Exists) throw new FileNotFoundException(path);
-        if (info.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
-        return new ImageInput(path, null, new MarkdownImageCacheKey(path, info.Length,
-            info.LastWriteTimeUtc.Ticks, 0, 0));
+        if (info.Length > MaximumBytes) throw new ImageSourceException("图片超过 8 MiB 上限");
+        return new ImageInput(path, null, info.Length, info.LastWriteTimeUtc.Ticks);
+    }
+
+    private static byte[] DecodeEmbeddedPng(string encoded)
+    {
+        // Foundation's .ignoreUnknownCharacters accepts wrapped or decorated
+        // base64 and missing trailing padding. Keep the same tolerance without
+        // accepting a non-PNG payload.
+        var filtered = new StringBuilder(encoded.Length);
+        foreach (char value in encoded)
+            if (value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '+' or '/' or '=')
+                filtered.Append(value);
+        while (filtered.Length > 0 && filtered[filtered.Length - 1] == '=') filtered.Length--;
+        int padding = (4 - filtered.Length % 4) % 4;
+        if (padding > 0) filtered.Append('=', padding);
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(filtered.ToString()); }
+        catch (FormatException) { throw new ImageSourceException("仅支持有界的内嵌 PNG。"); }
+        ReadOnlySpan<byte> signature = [137, 80, 78, 71, 13, 10, 26, 10];
+        if (!bytes.AsSpan().StartsWith(signature))
+            throw new ImageSourceException("仅支持有界的内嵌 PNG。");
+        return bytes;
     }
 
     private static async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellation)
@@ -706,12 +789,22 @@ internal static class MarkdownImageLoader
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete, 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        if (file.Length > MaximumBytes) throw new ImageSourceException("图片超过 16 MiB 上限");
+        if (file.Length > MaximumBytes) throw new ImageSourceException("图片超过 8 MiB 上限");
         byte[] bytes = new byte[checked((int)file.Length)];
         await file.ReadExactlyAsync(bytes, cancellation).ConfigureAwait(false);
         if (await file.ReadAsync(new byte[1], cancellation).ConfigureAwait(false) != 0)
             throw new ImageSourceException("图片读取期间发生变化，请刷新预览");
         return bytes;
+    }
+
+    private static byte[] EncodePng(BitmapSource bitmap, CancellationToken cancellation)
+    {
+        using var output = new MemoryStream();
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        encoder.Save(output);
+        cancellation.ThrowIfCancellationRequested();
+        return output.ToArray();
     }
 
     private static string LocalPath(string target, string? sourcePath)
@@ -749,9 +842,13 @@ internal static class MarkdownImageLoader
 
 internal sealed class MarkdownImageView : Grid
 {
+    private sealed record LoadedPngPayload(WeakReference<BitmapSource> Bitmap, byte[] Png);
+    private static readonly ConditionalWeakTable<Image, LoadedPngPayload> DecodedPngPayloads = new();
+    private static int nextSequence;
     private readonly MarkdownImageReference reference;
     private readonly string? sourcePath;
     private readonly MarkdownImageBudget budget;
+    private readonly int sequence = Interlocked.Increment(ref nextSequence);
     private readonly Image image = new() { Stretch = Stretch.Uniform, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 13 };
     private CancellationTokenSource? loading;
@@ -776,12 +873,13 @@ internal sealed class MarkdownImageView : Grid
         Children.Add(image);
         Children.Add(status);
         ReaderImageWindow.Attach(this, image, alt);
+        MarkdownImageScheduler.Register(this, budget);
         Loaded += OnLoaded;
         Unloaded += (_, _) =>
         {
             loading?.Cancel();
             if (!finished) LoadingStarted = false;
-            MarkdownImageScheduler.Unregister(this, host);
+            MarkdownImageScheduler.Unregister(this, budget);
             if (host is not null) host.SizeChanged -= HostSizeChanged;
             host = null;
         };
@@ -790,21 +888,45 @@ internal sealed class MarkdownImageView : Grid
     internal bool LoadingStarted { get; private set; }
     internal bool IsReady => finished && image.Source is BitmapSource;
     internal bool IsFailed => finished && image.Source is null;
+    internal int SourceStart => reference.Start;
+    internal int Sequence => sequence;
+    internal MarkdownImageBudget Budget => budget;
+    internal Image ImageControl => image;
+    internal string Caption => AutomationProperties.GetName(image);
+
+    internal static void RememberDecodedPng(Image target, BitmapSource? bitmap, byte[]? png)
+    {
+        DecodedPngPayloads.Remove(target);
+        if (bitmap is not null && png is not null)
+            DecodedPngPayloads.Add(target, new LoadedPngPayload(new WeakReference<BitmapSource>(bitmap), png));
+    }
+
+    internal static bool TryGetDecodedPng(Image target, out byte[] png)
+    {
+        if (DecodedPngPayloads.TryGetValue(target, out var payload) &&
+            payload.Bitmap.TryGetTarget(out var bitmap) && ReferenceEquals(target.Source, bitmap))
+        {
+            png = payload.Png;
+            return true;
+        }
+        png = [];
+        return false;
+    }
 
     public void Retry()
     {
         if (!IsFailed) return;
         loading?.Cancel();
-        MarkdownImageScheduler.Unregister(this, host);
         loading = null;
         LoadingStarted = false;
         finished = false;
+        DecodedPngPayloads.Remove(image);
         image.Source = null;
         image.Visibility = Visibility.Collapsed;
         status.Text = "图片加载中：" + (reference.Alt.Length > 160 ? reference.Alt[..160] + "…" : reference.Alt);
         status.Visibility = Visibility.Visible;
         InvalidateMeasure();
-        OnLoaded(this, new RoutedEventArgs(LoadedEvent));
+        MarkdownImageScheduler.Retry(this);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs args)
@@ -820,14 +942,25 @@ internal sealed class MarkdownImageView : Grid
         }
         InvalidateMeasure();
         if (finished || loading is { IsCancellationRequested: false }) return;
-        MarkdownImageScheduler.Register(this, host);
+        MarkdownImageScheduler.Activate(this);
     }
 
-    internal async void StartLoading()
+    internal void MarkTimedOut()
+    {
+        if (finished) return;
+        finished = true;
+        LoadingStarted = false;
+        image.Visibility = Visibility.Collapsed;
+        status.Text = "图片准备超过 5 秒，未完成的图片保留说明，可重试。";
+        status.Visibility = Visibility.Visible;
+        InvalidateMeasure();
+    }
+
+    internal async Task StartLoadingAsync(CancellationToken batchCancellation = default)
     {
         if (finished || loading is { IsCancellationRequested: false } || LoadingStarted) return;
         LoadingStarted = true;
-        using var request = new CancellationTokenSource();
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(batchCancellation);
         loading = request;
         try
         {
@@ -841,6 +974,7 @@ internal sealed class MarkdownImageView : Grid
                 if (result.Bitmap is not null)
                 {
                     image.Source = result.Bitmap;
+                    RememberDecodedPng(image, result.Bitmap, result.DecodedPng);
                     result.Accept();
                     image.Visibility = Visibility.Visible;
                     status.Visibility = Visibility.Collapsed;
@@ -849,7 +983,16 @@ internal sealed class MarkdownImageView : Grid
                 InvalidateMeasure();
             });
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            if (batchCancellation.IsCancellationRequested)
+            {
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (ReferenceEquals(loading, request) && !finished) MarkTimedOut();
+                });
+            }
+        }
         finally
         {
             if (ReferenceEquals(loading, request))

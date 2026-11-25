@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Reflection;
 
 namespace Qingyue.Windows;
 
@@ -80,6 +81,36 @@ internal static class Dialogs
         return dialog.ShowDialog();
     }
 
+    public static bool Confirm(Window owner, string title, string description,
+        string cancelText, string confirmText)
+    {
+        var dialog = Shell(owner, title, 500);
+        var panel = new StackPanel { Margin = new Thickness(28) };
+        panel.Children.Add(Heading(title, 21));
+        panel.Children.Add(new TextBlock
+        {
+            Text = description, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 18, 0, 24)
+        });
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var cancel = new Button
+        {
+            Content = cancelText, IsCancel = true,
+            Margin = new Thickness(0, 0, 10, 0)
+        };
+        var confirm = PrimaryButton(confirmText);
+        confirm.Click += (_, _) => dialog.DialogResult = true;
+        actions.Children.Add(cancel);
+        actions.Children.Add(confirm);
+        panel.Children.Add(actions);
+        dialog.Content = panel;
+        return dialog.ShowDialog() == true;
+    }
+
     public static bool? UpdateAvailable(Window owner, UpdateCheckResult result, Action openReleasePage)
     {
         var dialog = Shell(owner, "发现轻阅更新", 540);
@@ -121,7 +152,7 @@ internal static class Dialogs
         });
         var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         title.Children.Add(Heading(about ? "轻阅 Qingyue" : "留一点空间，给文字。", 25));
-        var subtitle = new TextBlock { Text = "0.18.0 · Windows 构建 1", Margin = new Thickness(0, 7, 0, 0) };
+        var subtitle = new TextBlock { Text = VersionCaption(), Margin = new Thickness(0, 7, 0, 0) };
         subtitle.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         title.Children.Add(subtitle); brand.Children.Add(title); panel.Children.Add(brand);
         panel.Children.Add(Card("从一份新文件开始",
@@ -131,13 +162,13 @@ internal static class Dialogs
         panel.Children.Add(Card("读完，方便带走",
             "“复制”提供富文本、纯文本和 Markdown；代码块和表格可单独复制。\n从文件菜单导出 HTML，可将已加载图片内嵌带走。打开与复制准备均可取消。", "Ctrl+C  复制选区    文件 → 导出 HTML"));
         panel.Children.Add(Card("把阅读留下来",
-            "选中文字后点击“摘录”，可以保存引文、备注、标签和颜色；批注保存在本机并可从侧栏跳回原文。\n当前文档还能导出 Markdown 或 HTML 阅读简报，包含章节、进度和定位状态。", "Ctrl+Shift+A  摘录    视图 → 阅读外观"));
+            "选中文字后点击“摘录”，可以保存引文、备注、标签和颜色；批注保存在本机并可从侧栏跳回原文。\n当前文档还能导出 Markdown 或 HTML 阅读简报，包含章节、进度和定位状态。", "编辑 → 批注与阅读成果  添加摘录    视图 → 阅读外观"));
         panel.Children.Add(Card("每一次修改，都看得见",
             "行号旁橙色表示尚未保存，绿色表示本次会话已保存的修改。\n恢复草稿只保存在本机；修改原文件仍需点击保存。", "Ctrl+S  保存    Ctrl+Z  撤销"));
         panel.Children.Add(new TextBlock
         {
             Text = about ? "本机文本阅读与编辑 · .NET 10 / WPF\n项目作者：ljy-codes · github.com/ljy-codes/qingyue"
-                : "Ctrl+F 查找  ·  Ctrl+H 替换  ·  Ctrl+G 跳转行\nCtrl+B 侧栏  ·  F2 重命名  ·  Ctrl+Tab 切换标签",
+                : "Ctrl+F 查找  ·  Ctrl+Shift+H 替换  ·  Ctrl+L 跳转行\nCtrl+B 侧栏  ·  Ctrl+Shift+] / [ 切换标签",
             Margin = new Thickness(0, 20, 0, 20), TextWrapping = TextWrapping.Wrap
         });
         var close = PrimaryButton("开始使用");
@@ -146,6 +177,31 @@ internal static class Dialogs
         panel.Children.Add(close);
         dialog.Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         return dialog;
+    }
+
+    private static string VersionCaption()
+    {
+        var assembly = typeof(Dialogs).Assembly;
+        string informational = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion ?? "";
+        string version = informational.Split('+', 2)[0];
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            var fallback = assembly.GetName().Version ?? new Version(0, 0, 0);
+            version = $"{fallback.Major}.{fallback.Minor}.{fallback.Build}";
+        }
+        const string buildMarker = "windows-build.";
+        int marker = informational.IndexOf(buildMarker, StringComparison.OrdinalIgnoreCase);
+        string build = "1";
+        if (marker >= 0)
+        {
+            int start = marker + buildMarker.Length;
+            int end = start;
+            while (end < informational.Length && char.IsAsciiDigit(informational[end])) end++;
+            if (end > start) build = informational[start..end];
+        }
+        return $"{version} · Windows 构建 {build}";
     }
 
     public static bool? PreviewTextChanges(Window owner, string before, string after)

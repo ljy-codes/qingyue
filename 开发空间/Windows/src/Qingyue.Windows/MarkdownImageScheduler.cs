@@ -1,131 +1,146 @@
 using System.Runtime.CompilerServices;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Qingyue.Windows;
 
+/// <summary>
+/// Starts the document's image work once, in source order, without depending on
+/// viewport realization. This mirrors ReadingMedia.swift: the first 32 controls
+/// share one five-second deadline and unfinished controls remain retryable.
+/// </summary>
 internal static class MarkdownImageScheduler
 {
-    private sealed class HostState
+    internal const int MaximumImages = 32;
+    internal static TimeSpan Deadline { get; set; } = TimeSpan.FromSeconds(5);
+
+    private sealed class BatchState
     {
-        internal readonly RichTextBox Host;
+        internal readonly object Gate = new();
         internal readonly List<WeakReference<MarkdownImageView>> Views = [];
-        internal readonly ScrollChangedEventHandler ScrollChanged;
-        internal readonly SizeChangedEventHandler SizeChanged;
-
-        internal HostState(RichTextBox host)
-        {
-            Host = host;
-            ScrollChanged = (_, _) => Refresh(this);
-            SizeChanged = (_, _) => Refresh(this);
-            host.AddHandler(ScrollViewer.ScrollChangedEvent, ScrollChanged);
-            host.SizeChanged += SizeChanged;
-        }
-
-        internal void Dispose()
-        {
-            Host.RemoveHandler(ScrollViewer.ScrollChangedEvent, ScrollChanged);
-            Host.SizeChanged -= SizeChanged;
-        }
+        internal readonly HashSet<MarkdownImageView> Attempted = [];
+        internal bool Activated;
+        internal bool Scheduled;
+        internal bool Running;
     }
 
-    private static readonly ConditionalWeakTable<RichTextBox, HostState> Hosts = new();
-    private static readonly object Gate = new();
+    private static readonly ConditionalWeakTable<MarkdownImageBudget, BatchState> Batches = new();
+    private static readonly SemaphoreSlim RetryGate = new(1, 1);
 
-    internal static void Register(MarkdownImageView view, RichTextBox? host)
+    internal static void Register(MarkdownImageView view, MarkdownImageBudget budget)
     {
-        if (host is null)
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(budget);
+        var state = Batches.GetValue(budget, _ => new BatchState());
+        lock (state.Gate)
         {
-            // A detached test/document host has no viewport to rank against. Preserve
-            // the old eager behavior for that case; real windows always provide a host.
-            view.StartLoading();
-            return;
-        }
-
-        HostState state;
-        lock (Gate)
-        {
-            if (!Hosts.TryGetValue(host, out state!))
-            {
-                state = new HostState(host);
-                Hosts.Add(host, state);
-            }
+            state.Views.RemoveAll(reference => !reference.TryGetTarget(out _));
             state.Views.Add(new WeakReference<MarkdownImageView>(view));
         }
-        Refresh(state);
+        if (state.Activated) Schedule(state, view.Dispatcher);
     }
 
-    internal static void Unregister(MarkdownImageView view, RichTextBox? host)
+    internal static void Activate(MarkdownImageView view)
     {
-        if (host is null) return;
-        lock (Gate)
-        {
-            if (!Hosts.TryGetValue(host, out var state)) return;
-            state.Views.RemoveAll(item => !item.TryGetTarget(out var candidate) ||
-                ReferenceEquals(candidate, view));
-            if (state.Views.Count == 0)
-            {
-                state.Dispose();
-                Hosts.Remove(host);
-            }
-        }
+        ArgumentNullException.ThrowIfNull(view);
+        if (!Batches.TryGetValue(view.Budget, out var state)) return;
+        state.Activated = true;
+        Schedule(state, view.Dispatcher);
     }
 
-    private static void Refresh(HostState state)
+    internal static void Unregister(MarkdownImageView view, MarkdownImageBudget budget)
     {
-        if (!state.Host.Dispatcher.CheckAccess())
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(budget);
+        if (!Batches.TryGetValue(budget, out var state)) return;
+        lock (state.Gate)
         {
-            state.Host.Dispatcher.BeginInvoke(() => Refresh(state));
-            return;
-        }
-
-        List<(MarkdownImageView View, double Distance)> candidates = [];
-        lock (Gate)
-        {
-            state.Views.RemoveAll(item => !item.TryGetTarget(out _));
-            foreach (var reference in state.Views)
-            {
-                if (!reference.TryGetTarget(out var view) || view.LoadingStarted) continue;
-                if (TryDistance(view, state.Host, out double distance))
-                    candidates.Add((view, distance));
-                else if (candidates.Count < 8)
-                    candidates.Add((view, double.MaxValue));
-            }
-        }
-
-        double viewport = state.Host.ActualHeight > 0 ? state.Host.ActualHeight : 900;
-        foreach (var candidate in candidates
-            .OrderBy(item => item.Distance)
-            .Take(candidates.Any(item => item.Distance < double.MaxValue) ? 16 : 8))
-        {
-            if (candidate.Distance == double.MaxValue ||
-                candidate.Distance <= viewport * 1.5)
-                candidate.View.StartLoading();
+            state.Views.RemoveAll(reference => !reference.TryGetTarget(out var target) ||
+                ReferenceEquals(target, view));
+            state.Attempted.Remove(view);
         }
     }
 
-    private static bool TryDistance(MarkdownImageView view, RichTextBox host, out double distance)
+    internal static void Retry(MarkdownImageView view)
     {
+        ArgumentNullException.ThrowIfNull(view);
+        _ = RunRetryAsync(view);
+    }
+
+    private static void Schedule(BatchState state, Dispatcher dispatcher)
+    {
+        lock (state.Gate)
+        {
+            if (state.Scheduled || state.Running) return;
+            state.Scheduled = true;
+        }
+        // Background is after layout/load but still cooperates with the WPF test
+        // harness and with modal dispatcher frames used during document transfer.
+        dispatcher.BeginInvoke(DispatcherPriority.Background,
+            new Action(() => _ = RunBatchAsync(state)));
+    }
+
+    private static async Task RunBatchAsync(BatchState state)
+    {
+        MarkdownImageView[] views;
+        lock (state.Gate)
+        {
+            state.Scheduled = false;
+            if (state.Running) return;
+            state.Running = true;
+            state.Views.RemoveAll(reference => !reference.TryGetTarget(out _));
+            views = state.Views
+                .Select(reference => reference.TryGetTarget(out var view) ? view : null)
+                .Where(view => view is not null)
+                .Cast<MarkdownImageView>()
+                .OrderBy(view => view.SourceStart)
+                .ThenBy(view => view.Sequence)
+                .Take(MaximumImages)
+                .ToArray();
+        }
+
         try
         {
-            if (!view.IsLoaded || !host.IsLoaded)
+            using var deadline = new CancellationTokenSource(Deadline);
+            foreach (var view in views)
             {
-                distance = 0;
-                return false;
+                lock (state.Gate)
+                {
+                    if (view.IsReady || view.IsFailed || !state.Attempted.Add(view)) continue;
+                }
+                if (deadline.IsCancellationRequested)
+                {
+                    view.MarkTimedOut();
+                    continue;
+                }
+                await view.StartLoadingAsync(deadline.Token);
             }
-            Rect bounds = view.TransformToAncestor(host).TransformBounds(
-                new Rect(new Size(Math.Max(1, view.ActualWidth), Math.Max(1, view.ActualHeight))));
-            double viewport = host.ActualHeight > 0 ? host.ActualHeight : 900;
-            distance = bounds.Bottom < 0 ? -bounds.Bottom
-                : bounds.Top > viewport ? bounds.Top - viewport
-                : 0;
-            return true;
         }
-        catch (InvalidOperationException)
+        finally
         {
-            distance = 0;
-            return false;
+            bool scheduleAgain;
+            lock (state.Gate)
+            {
+                state.Running = false;
+                scheduleAgain = state.Activated && state.Views.Any(reference =>
+                    reference.TryGetTarget(out var view) && !state.Attempted.Contains(view) &&
+                    !view.IsReady && !view.IsFailed);
+            }
+            if (scheduleAgain) Schedule(state, views.FirstOrDefault()?.Dispatcher ??
+                Dispatcher.CurrentDispatcher);
+        }
+    }
+
+    private static async Task RunRetryAsync(MarkdownImageView view)
+    {
+        await RetryGate.WaitAsync();
+        try
+        {
+            using var deadline = new CancellationTokenSource(Deadline);
+            await view.StartLoadingAsync(deadline.Token);
+        }
+        finally
+        {
+            RetryGate.Release();
         }
     }
 }

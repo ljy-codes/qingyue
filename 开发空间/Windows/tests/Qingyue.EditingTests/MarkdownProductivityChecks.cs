@@ -21,12 +21,17 @@ internal static partial class Program
             bitmap.Freeze();
             return bitmap;
         }
-        async Task<object> Write(BitmapSource image, string document, CancellationToken token = default)
+        async Task<object> Write(BitmapSource image, string document,
+            string suggestedName = "图片", CancellationToken token = default)
         {
             var type = typeof(MainWindow).Assembly.GetType("Qingyue.Windows.MarkdownImageInsertion")
                 ?? throw new Exception("缺少本地图片附件写入器");
-            var task = (Task)(type.GetMethod("WriteAsync", BindingFlags.Static | BindingFlags.Public)!
-                .Invoke(null, [image, document, token])!);
+            var method = type.GetMethod("WriteAsync", BindingFlags.Static | BindingFlags.Public,
+                binder: null,
+                types: [typeof(BitmapSource), typeof(string), typeof(string), typeof(CancellationToken)],
+                modifiers: null) ?? throw new Exception("缺少带建议名的本地图片附件写入器");
+            var task = (Task)(method
+                .Invoke(null, [image, document, suggestedName, token])!);
             await task;
             return task.GetType().GetProperty("Result")!.GetValue(task)!;
         }
@@ -37,6 +42,24 @@ internal static partial class Program
             return await (Task<bool>)method.Invoke(window, [image, token])!;
         }
         string Value(object item, string name) => (string)item.GetType().GetProperty(name)!.GetValue(item)!;
+        await ProductCheck("图片选择器严格采用 macOS 六类格式且不超过八张", async () =>
+        {
+            Equal(MainWindow.IsSupportedImage("a.png"), true);
+            Equal(MainWindow.IsSupportedImage("a.JPG"), true);
+            Equal(MainWindow.IsSupportedImage("a.jpeg"), true);
+            Equal(MainWindow.IsSupportedImage("a.tif"), true);
+            Equal(MainWindow.IsSupportedImage("a.TIFF"), true);
+            Equal(MainWindow.IsSupportedImage("a.gif"), true);
+            Equal(MainWindow.IsSupportedImage("a.bmp"), true);
+            Equal(MainWindow.IsSupportedImage("a.heic"), true);
+            Equal(MainWindow.IsSupportedImage("a.webp"), false);
+            Equal(MainWindow.IsSupportedImage("a.txt"), false);
+            foreach (string extension in new[] { ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".gif", ".bmp", ".heic" })
+                Equal(MainWindow.MarkdownImageFileFilter.Contains("*" + extension, StringComparison.Ordinal), true);
+            Equal(MainWindow.MarkdownImageFileFilter.Contains("*.*", StringComparison.Ordinal), false);
+            Equal(MainWindow.MarkdownImageFileFilter.Contains(".webp", StringComparison.Ordinal), false);
+            await Task.CompletedTask;
+        });
         await ProductCheck("图片附件真实落盘，中文与特殊路径使用相对链接", async () =>
         {
             var asset = await Write(Image(), path);
@@ -57,18 +80,19 @@ internal static partial class Program
             Equal(Value(first, "FilePath") == Value(second, "FilePath"), false);
             Equal(File.ReadAllBytes(Value(first, "FilePath")).SequenceEqual(bytes), true);
         });
-        await ProductCheck("取消与超尺寸图片不创建附件", async () =>
+        await ProductCheck("取消与超像素图片不创建附件，宽幅图片不再受单边限制", async () =>
         {
             string doc = Path.Combine(directory, "取消.md");
             File.WriteAllText(doc, "");
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
-            try { await Write(Image(), doc, cancellation.Token); throw new Exception("已取消写入仍成功"); }
+            try { await Write(Image(), doc, token: cancellation.Token); throw new Exception("已取消写入仍成功"); }
             catch (OperationCanceledException) { }
             Equal(Directory.Exists(Path.Combine(directory, "取消.assets")), false);
-            try { await Write(Image(9000, 1), doc); throw new Exception("超尺寸图片仍成功"); }
+            var wide = await Write(Image(9000, 1), doc);
+            Equal(File.Exists(Value(wide, "FilePath")), true);
+            try { await Write(Image(4001, 4000), doc); throw new Exception("超像素图片仍成功"); }
             catch (ArgumentException) { }
-            Equal(Directory.Exists(Path.Combine(directory, "取消.assets")), false);
         });
         await ProductCheck("附件目录被同名文件占用时失败且保留原文件", async () =>
         {
@@ -80,17 +104,33 @@ internal static partial class Program
             catch (IOException) { }
             Equal(File.ReadAllText(collision), "用户原有文件");
         });
-        await ProductCheck("编码超过4MiB的图片不会生成残留附件", async () =>
+        await ProductCheck("编码超过8MiB的图片不会生成残留附件", async () =>
         {
             string doc = Path.Combine(directory, "编码预算.md");
             File.WriteAllText(doc, "");
-            var pixels = new byte[1400 * 1000 * 4];
+            var pixels = new byte[2000 * 1500 * 4];
             new Random(53).NextBytes(pixels);
-            var bitmap = BitmapSource.Create(1400, 1000, 96, 96, PixelFormats.Bgra32, null, pixels, 1400 * 4);
+            var bitmap = BitmapSource.Create(2000, 1500, 96, 96, PixelFormats.Bgra32, null, pixels, 2000 * 4);
             bitmap.Freeze();
             try { await Write(bitmap, doc); throw new Exception("超编码预算仍成功"); }
             catch (IOException) { }
             Equal(Directory.Exists(Path.Combine(directory, "编码预算.assets")), false);
+        });
+        await ProductCheck("附件文件名安全清理、ALT转义与80字符限制匹配macOS", async () =>
+        {
+            string doc = Path.Combine(directory, "命名.md");
+            File.WriteAllText(doc, "");
+            var special = await Write(Image(), doc, "a]b[c\\d\n截 图#1");
+            string file = Value(special, "FilePath"), markdown = Value(special, "Markdown");
+            Equal(Path.GetFileName(file).StartsWith("a-b-c-d-截-图-1-", StringComparison.Ordinal), true);
+            Equal(markdown.StartsWith("![a\\]b\\[c\\\\d 截 图#1](", StringComparison.Ordinal), true);
+            var empty = await Write(Image(), doc, "");
+            Equal(Path.GetFileName(Value(empty, "FilePath")).StartsWith("image-", StringComparison.Ordinal), true);
+            Equal(Value(empty, "Markdown").StartsWith("![图片](", StringComparison.Ordinal), true);
+            string longName = new('中', 100);
+            var limited = await Write(Image(), doc, longName);
+            string limitedName = Path.GetFileName(Value(limited, "FilePath"));
+            Equal(limitedName.Length, 80 + 1 + 32 + 4);
         });
 
         await window.OpenPathsAsync([path]);
@@ -101,15 +141,17 @@ internal static partial class Program
         await ProductCheck("截图插入可一次撤销重做，原文只在明确保存后写入", async () =>
         {
             string before = tab.Editor.Text;
+            int attachments = Directory.GetFiles(Path.Combine(directory, "工作 笔记.assets"), "*.png").Length;
             Equal(await Insert(Image()), true);
             string inserted = tab.Editor.Text;
-            Equal(inserted.Contains("![图片](", StringComparison.Ordinal), true);
+            Equal(inserted.Contains("![pasted-image](", StringComparison.Ordinal), true);
             Equal(File.ReadAllText(path), "# 笔记\n");
             tab.Editor.Undo();
             Equal(tab.Editor.Text, before);
             tab.Editor.Redo();
             Equal(tab.Editor.Text, inserted);
-            Equal(Directory.GetFiles(Path.Combine(directory, "工作 笔记.assets"), "*.png").Length, 4);
+            Equal(Directory.GetFiles(Path.Combine(directory, "工作 笔记.assets"), "*.png").Length,
+                attachments + 1);
         });
         await ProductCheck("图片后台写入期间正文变化则丢弃结果并清理本次附件", async () =>
         {
@@ -187,9 +229,9 @@ internal static partial class Program
             var paste = new DataObjectPastingEventArgs(data, false, DataFormats.Bitmap);
             tab.Editor.RaiseEvent(paste);
             Equal(paste.CommandCancelled, true);
-            for (int i = 0; i < 100 && !tab.Editor.Text.Contains("![图片](", StringComparison.Ordinal); i++)
+            for (int i = 0; i < 100 && !tab.Editor.Text.Contains("![pasted-image](", StringComparison.Ordinal); i++)
             { await Task.Delay(20); await Idle(window); }
-            Equal(tab.Editor.Text.Contains("![图片](", StringComparison.Ordinal), true);
+            Equal(tab.Editor.Text.Contains("![pasted-image](", StringComparison.Ordinal), true);
         });
         Test("剪贴板同时含图片和文本时保留原生文本粘贴", () =>
         {

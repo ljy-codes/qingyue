@@ -46,6 +46,7 @@ internal static class Program
         Test("large image presentation is bounded while HTML and RTF keep original pixels", ImagePresentation);
         Test("empty rectangular table selection retains only the selected column", EmptyRectangularCells);
         Test("image dimension and encoded byte limits produce explicit placeholders", ImageResourceLimits);
+        Test("reading image copy budgets match the macOS media contract", ImageCopyBudgetsMatchMacOS);
         Test("disabled empty drag and nested text input copy keep defaults", DefaultBehavior);
         Test("pending and excessive images have explicit placeholders without URI access", MissingAndLimitedImages);
         Test("oversized selected text falls back atomically to native formats", TextLimit);
@@ -264,8 +265,9 @@ internal static class Program
         Check(root.Element("h2")?.Value == "标题😀 & <合成>", "heading structure/text missing");
         var table = root.Element("table")!;
         Check(table.Descendants("tr").Count() == 2, "table row structure missing");
-        Check(table.Descendants("th").Select(e => e.Value).SequenceEqual(["列一", "列二"]), "table headings lost");
-        Check(table.Descendants("td").Select(e => e.Value).SequenceEqual(["值一", "值二"]), "table cells flattened");
+        Check(table.Descendants("th").Any() == false, "HTML export must not emit header cells");
+        Check(table.Descendants("td").Select(e => e.Value).SequenceEqual(["列一", "列二", "值一", "值二"]),
+            "table cell structure lost");
         Check(root.Element("ul")?.Elements("li").Select(e => e.Value).SequenceEqual(["项目一", "项目二"]) == true,
             "list structure lost: " + html);
         Check((string)data.GetData(DataFormats.UnicodeText, false)! == box.Selection.Text, "plain selection changed");
@@ -593,18 +595,53 @@ internal static class Program
 
     private static void ImageResourceLimits()
     {
-        foreach (bool dimensions in new[] { true, false })
+        const int maximumEmbeddedPngBytes = 20 * 1024 * 1024;
+
+        // The renderer's decoded long edge is 4096 pixels.
+        var oversizedDimensions = BitmapSource.Create(4097, 1, 96, 96, PixelFormats.Bgra32, null,
+            new byte[4097 * 4], 4097 * 4);
+        var dimensionBox = Box(new Paragraph(new InlineUIContainer(new Image
         {
-            int width = dimensions ? 4097 : 1100, height = dimensions ? 1 : 1100;
-            var pixels = new byte[width * height * 4];
-            if (!dimensions) new Random(127).NextBytes(pixels);
-            var source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, width * 4);
-            var box = Box(new Paragraph(new InlineUIContainer(new Image { Source = Decode(source) })));
-            var result = ReadingClipboard.CreateFullDocumentData(box);
-            Check(result is { EmbeddedImages: 0, OmittedImages: 1 }, "image resource budget bypassed");
-            string html = Fragment(result!.Data);
-            Check(!html.Contains("<img") && html.Contains("图片未"), "resource-limited image has no explicit placeholder");
-        }
+            Source = Decode(oversizedDimensions)
+        })));
+        var dimensionResult = ReadingClipboard.CreateFullDocumentData(dimensionBox);
+        Check(dimensionResult is { EmbeddedImages: 0, OmittedImages: 1 }, "image dimension limit bypassed");
+        string dimensionHtml = Fragment(dimensionResult!.Data);
+        Check(!dimensionHtml.Contains("<img") && dimensionHtml.Contains("图片未"),
+            "dimension-limited image has no explicit placeholder");
+
+        // Exercise the path that reuses the renderer's already-decoded PNG. A real
+        // incompressible PNG that exceeds 20 MiB would need tens of MiB of fixture
+        // memory and makes this test depend on encoder compression choices.
+        var bitmap = BitmapSource.Create(2, 1, 96, 96, PixelFormats.Bgra32, null,
+            new byte[] { 0, 0, 255, 255, 255, 0, 0, 255 }, 8);
+        var decoded = Decode(bitmap);
+        var image = new Image { Source = decoded };
+        var viewType = typeof(ReadingClipboard).Assembly.GetType("Qingyue.Windows.MarkdownImageView")!;
+        var remember = viewType.GetMethod("RememberDecodedPng", BindingFlags.NonPublic | BindingFlags.Static)!;
+        remember.Invoke(null, [image, decoded, new byte[maximumEmbeddedPngBytes + 1]]);
+        var encodedBox = Box(new Paragraph(new InlineUIContainer(image)));
+        var encodedResult = ReadingClipboard.CreateFullDocumentData(encodedBox);
+        Check(encodedResult is { EmbeddedImages: 0, OmittedImages: 1 }, "encoded PNG byte limit bypassed");
+        string encodedHtml = Fragment(encodedResult!.Data);
+        Check(!encodedHtml.Contains("<img") && encodedHtml.Contains("图片未"),
+            "byte-limited image has no explicit placeholder");
+    }
+
+    private static void ImageCopyBudgetsMatchMacOS()
+    {
+        static int Constant(string name) => (int)typeof(ReadingClipboard)
+            .GetField(name, BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetRawConstantValue()!;
+
+        Check(Constant("MaximumImages") == 32,
+            "阅读复制图片数量上限未与 macOS 的 32 张对齐");
+        Check(Constant("MaximumEmbeddedPngBytes") == 20 * 1024 * 1024,
+            "阅读复制单张嵌入 PNG 上限未与 macOS 的 20 MiB 对齐");
+        Check(Constant("MaximumHtmlBytes") == 20 * 1024 * 1024,
+            "阅读复制 HTML 上限未与 macOS 的 20 MiB 对齐");
+        Check(Constant("MaximumNativeBytes") == 20 * 1024 * 1024,
+            "RTF/XamlPackage 单格式上限未与 macOS 的 20 MiB 对齐");
     }
 
     private static void CheckPixels(BitmapSource bitmap, string context)
@@ -656,7 +693,7 @@ internal static class Program
 
     private static void TextLimit()
     {
-        var box = Box(new Paragraph(new Run(new string('x', 500_001))));
+        var box = Box(new Paragraph(new Run(new string('x', 2_000_001))));
         box.SelectAll();
         var data = Copy(box);
         Check(!data.GetDataPresent(DataFormats.Html, false), "excessive text exported");

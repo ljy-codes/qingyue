@@ -225,6 +225,35 @@ internal static partial class Program
             Equal(writer.GetType().GetMethod("Execute")!.Invoke(writer, [MarkdownEditAction.Enter]), false);
             Equal(tab.Editor.Text, "- 中文");
         });
+        Test("WPF普通正文真实Tab按macOS缩进且组合输入不拦截", () =>
+        {
+            tab.Kind = TextKind.Plain;
+            tab.Editor.Text = "a\nb";
+            tab.Editor.Select(0, 3);
+            var key = new KeyEventArgs(Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(tab.Editor), 0, Key.Tab)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            tab.Editor.RaiseEvent(key);
+            Equal(true, key.Handled);
+            Equal("  a\n  b", tab.Editor.Text.ReplaceLineEndings("\n"));
+            Equal(0, tab.Editor.SelectionStart);
+            Equal(7, tab.Editor.SelectionLength);
+
+            tab.Editor.Text = "plain";
+            tab.Editor.CaretIndex = tab.Editor.Text.Length;
+            var composition = new TextComposition(InputManager.Current, tab.Editor, "中");
+            tab.Editor.RaiseEvent(new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+                { RoutedEvent = TextCompositionManager.PreviewTextInputStartEvent });
+            var composingTab = new KeyEventArgs(Keyboard.PrimaryDevice,
+                PresentationSource.FromVisual(tab.Editor), 0, Key.Tab)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            tab.Editor.RaiseEvent(composingTab);
+            Equal(false, composingTab.Handled);
+            Equal("plain", tab.Editor.Text);
+            tab.Editor.RaiseEvent(new TextCompositionEventArgs(Keyboard.PrimaryDevice, composition)
+                { RoutedEvent = TextCompositionManager.PreviewTextInputEvent });
+        });
+        tab.Editor.Text = "- 中文";
         tab.Kind = TextKind.Markdown;
         window.SelectTab(tab);
         Test("WPF中文组合输入期间不执行Markdown结构命令", () =>
@@ -242,17 +271,54 @@ internal static partial class Program
             tab.Editor.Undo();
             Equal(tab.Editor.Text, before);
         });
-        Test("WPF Markdown编写工具栏操作保留选区", () =>
+        Test("WPF Markdown编辑命令保留选区且使用统一上下文工具栏", () =>
         {
-            var toolbar = window.FindName("MarkdownWritingToolbar") as FrameworkElement
-                ?? throw new Exception("缺少Markdown编写工具栏");
+            var toolbar = window.FindName("ContextToolbar") as FrameworkElement
+                ?? throw new Exception("缺少统一上下文工具栏");
             Equal(toolbar.Visibility, Visibility.Visible);
+            Equal(((FrameworkElement)window.FindName("MarkdownEditOptionsMenu")).Visibility,
+                Visibility.Visible);
+            Equal(window.FindName("MarkdownBoldButton"), null);
             tab.Editor.Select(2, 2);
-            var bold = (Button)window.FindName("MarkdownBoldButton");
-            bold.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(tab.MarkdownWriter.Execute(MarkdownEditAction.Bold), true);
             Equal(tab.Editor.Text, "- **中文**");
             Equal(tab.Editor.SelectedText, "中文");
             tab.Editor.Undo();
+        });
+        Test("WPF Markdown编辑区不截获macOS契约之外的快捷键", () =>
+        {
+            var writer = typeof(EditorTab).GetProperty("MarkdownWriter",
+                BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(tab)
+                ?? throw new Exception("缺少Markdown编辑器");
+            var handle = writer.GetType().GetMethod("HandleKey",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("缺少Markdown按键分发入口");
+            tab.Kind = TextKind.Markdown;
+            tab.Editor.Text = "- [ ] 中文";
+            tab.Editor.CaretIndex = tab.Editor.Text.Length;
+            var forbidden = new (Key Key, ModifierKeys Modifiers)[]
+            {
+                (Key.B, ModifierKeys.Control),
+                (Key.I, ModifierKeys.Control),
+                (Key.K, ModifierKeys.Control),
+                (Key.Oem3, ModifierKeys.Control),
+                (Key.Oem3, ModifierKeys.Control | ModifierKeys.Shift),
+                (Key.D1, ModifierKeys.Control | ModifierKeys.Alt),
+                (Key.D2, ModifierKeys.Control | ModifierKeys.Alt),
+                (Key.D3, ModifierKeys.Control | ModifierKeys.Alt),
+                (Key.Q, ModifierKeys.Control | ModifierKeys.Shift),
+                (Key.Space, ModifierKeys.Control | ModifierKeys.Shift),
+                (Key.Back, ModifierKeys.None)
+            };
+            foreach (var (key, modifiers) in forbidden)
+            {
+                Equal(false, (bool)handle.Invoke(writer, [key, modifiers])!);
+                Equal("- [ ] 中文", tab.Editor.Text);
+            }
+            Equal(true, (bool)handle.Invoke(writer, [Key.Enter, ModifierKeys.None])!);
+            Equal("- [ ] 中文\n- [ ] ", tab.Editor.Text.ReplaceLineEndings("\n"));
+            tab.Editor.Undo();
+            Equal("- [ ] 中文", tab.Editor.Text);
         });
         typeof(MainWindow).GetMethod("ToggleMarkdownPreview", BindingFlags.NonPublic | BindingFlags.Instance)!
             .Invoke(window, null);

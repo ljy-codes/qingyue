@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Unicode;
@@ -32,7 +33,8 @@ public sealed class ReadingListStore
             lock (gate)
             {
                 return items.OrderByDescending(item => item.IsPinned)
-                    .ThenByDescending(item => item.LastOpenedAt)
+                    .ThenByDescending(item => item.UpdatedAt)
+                    .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
             }
         }
@@ -52,14 +54,23 @@ public sealed class ReadingListStore
 
     public ReadingListEntry? Find(string path)
     {
-        string normalized = NormalizePath(path);
+        string normalized;
+        try { normalized = NormalizePath(path); }
+        catch (ArgumentException) { return null; }
         lock (gate) return items.FirstOrDefault(item =>
             string.Equals(item.Path, normalized, StringComparison.OrdinalIgnoreCase));
     }
 
-    public ReadingListEntry Upsert(string path, int progressPercent, int sourceAnchor, bool? isRead = null)
+    public ReadingListEntry Upsert(
+        string path,
+        int progressPercent,
+        int sourceAnchor,
+        bool? isRead = null,
+        bool? isPinned = null)
     {
         string normalized = NormalizePath(path);
+        if (sourceAnchor < 0)
+            throw new ArgumentException("阅读位置不能小于 0。", nameof(sourceAnchor));
         lock (gate)
         {
             int index = items.FindIndex(item =>
@@ -67,18 +78,20 @@ public sealed class ReadingListStore
             DateTimeOffset now = DateTimeOffset.UtcNow;
             if (index < 0)
             {
-                var created = new ReadingListEntry(Guid.NewGuid(), normalized, false,
-                    isRead ?? false, Math.Clamp(progressPercent, 0, 100), Math.Max(0, sourceAnchor), now, now);
+                if (items.Count >= MaximumItems)
+                    throw new InvalidOperationException("阅读清单已达到 500 条上限。");
+                var created = new ReadingListEntry(Guid.NewGuid(), normalized, isPinned ?? false,
+                    isRead ?? false, Math.Clamp(progressPercent, 0, 100), sourceAnchor, now, now);
                 items.Insert(0, created);
-                Trim();
                 return created;
             }
             var current = items[index];
             var updated = current with
             {
                 IsRead = isRead ?? current.IsRead,
+                IsPinned = isPinned ?? current.IsPinned,
                 ProgressPercent = Math.Clamp(progressPercent, 0, 100),
-                SourceAnchor = Math.Max(0, sourceAnchor),
+                SourceAnchor = sourceAnchor,
                 LastOpenedAt = now,
                 UpdatedAt = now
             };
@@ -100,11 +113,13 @@ public sealed class ReadingListStore
     public bool UpdateProgress(string path, int progressPercent, int sourceAnchor, bool? isRead = null)
     {
         string normalized = NormalizePath(path);
+        if (sourceAnchor < 0)
+            throw new ArgumentException("阅读位置不能小于 0。", nameof(sourceAnchor));
         lock (gate) return Update(normalized, item => item with
         {
             IsRead = isRead ?? item.IsRead,
             ProgressPercent = Math.Clamp(progressPercent, 0, 100),
-            SourceAnchor = Math.Max(0, sourceAnchor),
+            SourceAnchor = sourceAnchor,
             UpdatedAt = DateTimeOffset.UtcNow
         });
     }
@@ -121,9 +136,47 @@ public sealed class ReadingListStore
 
     public bool Remove(string path)
     {
-        string normalized = NormalizePath(path);
+        string normalized;
+        try { normalized = NormalizePath(path); }
+        catch (ArgumentException) { return false; }
         lock (gate) return items.RemoveAll(item =>
             string.Equals(item.Path, normalized, StringComparison.OrdinalIgnoreCase)) > 0;
+    }
+
+    /// <summary>
+    /// Moves one reading-list identity after a save, save-as, or rename. When the
+    /// destination already has a record, the source record wins because it belongs
+    /// to the document that was just migrated. The old record is always removed.
+    /// </summary>
+    public int MigratePath(string oldPath, string newPath)
+    {
+        string sourcePath = NormalizePath(oldPath);
+        string targetPath = NormalizePath(newPath);
+        if (string.Equals(sourcePath, targetPath, StringComparison.OrdinalIgnoreCase)) return 0;
+        lock (gate)
+        {
+            int sourceIndex = items.FindIndex(item =>
+                string.Equals(item.Path, sourcePath, StringComparison.OrdinalIgnoreCase));
+            if (sourceIndex < 0) return 0;
+            var source = items[sourceIndex];
+            int targetIndex = items.FindIndex(item =>
+                string.Equals(item.Path, targetPath, StringComparison.OrdinalIgnoreCase));
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            var migrated = source with
+            {
+                Path = targetPath,
+                LastOpenedAt = now,
+                UpdatedAt = now
+            };
+            if (targetIndex < 0)
+            {
+                items[sourceIndex] = migrated;
+                return 1;
+            }
+            items[targetIndex] = migrated;
+            items.RemoveAt(sourceIndex);
+            return 1;
+        }
     }
 
     public Task<ReadingListSaveResult> SaveAsync()
@@ -140,6 +193,9 @@ public sealed class ReadingListStore
         try
         {
             Directory.CreateDirectory(root);
+            if (snapshot.Length > MaximumItems)
+                throw new InvalidDataException("阅读清单超过 500 条上限。");
+            foreach (var item in snapshot) Validate(item);
             byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
             if (bytes.LongLength > MaximumBytes) throw new InvalidDataException("阅读清单超过 2 MiB 上限。");
             temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -170,13 +226,17 @@ public sealed class ReadingListStore
                 throw new InvalidDataException("阅读清单超过 2 MiB 上限。");
             var loaded = JsonSerializer.Deserialize<List<ReadingListEntry>>(File.ReadAllBytes(path), JsonOptions)
                 ?? throw new InvalidDataException("阅读清单为空。");
-            if (loaded.Count > MaximumItems) loaded = loaded.Take(MaximumItems).ToList();
-            foreach (var item in loaded) Validate(item);
-            return (loaded.GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.OrderByDescending(item => item.UpdatedAt).First())
-                .ToList(), null);
+            if (loaded.Count > MaximumItems)
+                throw new InvalidDataException("阅读清单超过 500 条上限。");
+            var validated = loaded.Select(Validate).ToList();
+            if (validated.Select(item => item.Id).Distinct().Count() != validated.Count
+                || validated.Select(item => item.Path)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() != validated.Count)
+                throw new InvalidDataException("阅读清单含有重复条目。");
+            return (validated, null);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
+            or InvalidDataException or ArgumentException)
         {
             string? quarantine = null;
             try
@@ -198,26 +258,28 @@ public sealed class ReadingListStore
         return true;
     }
 
-    private void Trim()
-    {
-        if (items.Count <= MaximumItems) return;
-        items = items.OrderByDescending(item => item.IsPinned)
-            .ThenByDescending(item => item.LastOpenedAt)
-            .Take(MaximumItems)
-            .ToList();
-    }
-
-    private static void Validate(ReadingListEntry item)
+    private static ReadingListEntry Validate(ReadingListEntry item)
     {
         if (item.Id == Guid.Empty || string.IsNullOrWhiteSpace(item.Path) ||
-            !Path.IsPathFullyQualified(item.Path) || item.ProgressPercent is < 0 or > 100 ||
+            item.ProgressPercent is < 0 or > 100 ||
             item.SourceAnchor < 0)
             throw new InvalidDataException("阅读清单字段无效。");
+        try
+        {
+            return item with { Path = NormalizePath(item.Path) };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidDataException("阅读清单字段无效。", ex);
+        }
     }
 
     private static string NormalizePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("阅读清单路径不能为空。", nameof(path));
+        if (path.Contains('\0') || Encoding.UTF8.GetByteCount(path) > 4096
+            || !Path.IsPathFullyQualified(path))
+            throw new ArgumentException("阅读清单需要有效的本机绝对路径。", nameof(path));
         return Path.GetFullPath(path);
     }
 }

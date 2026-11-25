@@ -22,6 +22,8 @@ public sealed record WorkspaceTypeOption(string Name, WorkspaceFileFilter Filter
     ];
 }
 
+public sealed record WorkspaceFavoriteOption(string? Path, string Label);
+
 public sealed class WorkspaceNode : INotifyPropertyChanged
 {
     public WorkspaceNode(string fullPath, bool isDirectory, TextKind? kind, long length, bool isRoot = false)
@@ -42,6 +44,7 @@ public sealed class WorkspaceNode : INotifyPropertyChanged
     public long Length { get; }
     public ObservableCollection<WorkspaceNode> Children { get; } = [];
     public bool IsFavorite { get; private set; }
+    public bool IsExpanded { get; set; }
     public string DisplayName => (IsFavorite ? "★ " : "") + Name;
     public string MetaText => IsRoot ? "默认忽略 bin、obj、.git、.vs"
         : IsDirectory ? "目录" : $"{(Kind is { } value ? LanguageCatalog.DisplayName(value) : "文件")} · {FormatSize(Length)}";
@@ -69,15 +72,49 @@ public sealed class WorkspaceNode : INotifyPropertyChanged
 
 public partial class MainWindow
 {
+    private const int MaximumFavoriteDirectories = 50;
     private long workspaceGeneration;
     private CancellationTokenSource? workspaceScanCancellation;
+    private bool updatingWorkspaceFavorites;
+    private readonly List<WorkspaceBrowserWindow> workspaceBrowserWindows = [];
 
     public async Task OpenWorkspaceAsync()
     {
         var dialog = new OpenFolderDialog { Title = "打开本地工作区" };
         if (Modal(() => dialog.ShowDialog()) != true || string.IsNullOrWhiteSpace(dialog.FolderName)) return;
-        string root = Path.GetFullPath(dialog.FolderName);
+        await ActivateWorkspaceAsync(dialog.FolderName);
+        ShowWorkspaceBrowser(dialog.FolderName);
+    }
+
+    private void ShowWorkspaceBrowser(string root)
+    {
+        workspaceBrowserWindows.RemoveAll(window => !window.IsVisible);
+        var browser = new WorkspaceBrowserWindow(
+            this,
+            settings,
+            root,
+            path =>
+            {
+                settings.WorkspaceRoot = path;
+                SchedulePersist();
+                _ = ActivateWorkspaceAsync(path);
+            },
+            SchedulePersist,
+            path => _ = OpenPathsAsync([path]));
+        browser.Closed += (_, _) => workspaceBrowserWindows.Remove(browser);
+        workspaceBrowserWindows.Add(browser);
+        browser.Show();
+        browser.Activate();
+    }
+
+    private async Task ActivateWorkspaceAsync(string path)
+    {
+        string root = Path.GetFullPath(path);
         settings.WorkspaceRoot = root;
+        settings.Sidebar = true;
+        if (focusMode) ToggleFocus();
+        ApplySidebar();
+        SidebarTabs.SelectedItem = WorkspaceTab;
         await ScanWorkspaceAsync(root);
         SchedulePersist();
     }
@@ -93,9 +130,13 @@ public partial class MainWindow
         {
             var filter = WorkspaceTypeFilter.SelectedItem as WorkspaceTypeOption;
             var result = await workspaceScanner.ScanAsync(fullRoot, new WorkspaceScanOptions(
-                WorkspaceFilter.Text, filter?.Filter ?? WorkspaceFileFilter.All), workspaceScanCancellation.Token);
+                WorkspaceFilter.Text,
+                filter?.Filter ?? WorkspaceFileFilter.All,
+                ExtensionFilter: WorkspaceExtensionFilter.Text),
+                workspaceScanCancellation.Token);
             if (generation != workspaceGeneration) return;
             WorkspaceTree.ItemsSource = BuildWorkspaceRoots(result);
+            RefreshWorkspaceFavorites();
             StatusText.Text = result.Warnings.Count == 0
                 ? $"工作区已加载：{result.Entries.Count(item => !item.IsDirectory):N0} 个文件"
                 : $"工作区已加载；{result.Warnings[0]}";
@@ -114,12 +155,12 @@ public partial class MainWindow
     private IReadOnlyList<WorkspaceNode> BuildWorkspaceRoots(WorkspaceScanResult result)
     {
         var root = new WorkspaceNode(result.Root, true, null, 0, isRoot: true);
+        root.SetFavorite(IsFavoriteDirectory(result.Root));
         var nodes = new Dictionary<string, WorkspaceNode>(StringComparer.OrdinalIgnoreCase)
         {
             [result.Root] = root
         };
-        foreach (var entry in result.Entries.OrderBy(item => item.RelativePath.Count(value => value == '/'))
-                     .ThenBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase))
+        foreach (var entry in result.Entries.OrderBy(item => item.RelativePath, NaturalOrder.Instance))
         {
             string parentPath = Path.GetDirectoryName(entry.Path) ?? result.Root;
             if (!nodes.TryGetValue(parentPath, out var parent))
@@ -149,8 +190,7 @@ public partial class MainWindow
 
     private static void SortWorkspaceTree(WorkspaceNode node)
     {
-        var sorted = node.Children.OrderByDescending(item => item.IsDirectory)
-            .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        var sorted = node.Children.OrderBy(item => item.Name, NaturalOrder.Instance).ToArray();
         node.Children.Clear();
         foreach (var child in sorted)
         {
@@ -172,6 +212,70 @@ public partial class MainWindow
         if (settings.WorkspaceRoot is { } root && initialized) _ = ScanWorkspaceAsync(root);
     }
 
+    private void WorkspaceExtensionFilterChanged(object sender, TextChangedEventArgs e)
+    {
+        if (settings.WorkspaceRoot is { } root && initialized) _ = ScanWorkspaceAsync(root);
+    }
+
+    private async void WorkspaceRescanClick(object sender, RoutedEventArgs e)
+    {
+        if (settings.WorkspaceRoot is not { } root || !Directory.Exists(root))
+        {
+            await OpenWorkspaceAsync();
+            return;
+        }
+        await ScanWorkspaceAsync(root);
+    }
+
+    private void WorkspaceFavoriteCurrentClick(object sender, RoutedEventArgs e)
+    {
+        if (settings.WorkspaceRoot is not { } root) return;
+        ToggleFavoriteDirectory(root);
+    }
+
+    private async void WorkspaceFavoriteSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (updatingWorkspaceFavorites ||
+            WorkspaceFavoritePicker.SelectedItem is not WorkspaceFavoriteOption { Path: { } path }) return;
+        settings.WorkspaceRoot = path;
+        settings.Sidebar = true;
+        if (focusMode) ToggleFocus();
+        ApplySidebar();
+        SidebarTabs.SelectedItem = WorkspaceTab;
+        await ScanWorkspaceAsync(path);
+        SchedulePersist();
+    }
+
+    private void RefreshWorkspaceFavorites()
+    {
+        if (WorkspaceFavoritePicker is null) return;
+        updatingWorkspaceFavorites = true;
+        try
+        {
+            var options = new List<WorkspaceFavoriteOption>
+            {
+                new(null, "收藏目录…")
+            };
+            options.AddRange(settings.FavoriteDirectories
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(MaximumFavoriteDirectories)
+                .Select(path => new WorkspaceFavoriteOption(path, path)));
+            WorkspaceFavoritePicker.ItemsSource = options;
+            WorkspaceFavoritePicker.SelectedItem = settings.WorkspaceRoot is { } root
+                ? options.FirstOrDefault(item =>
+                    string.Equals(item.Path, root, StringComparison.OrdinalIgnoreCase)) ?? options[0]
+                : options[0];
+            WorkspaceFavoriteButton.Content =
+                settings.WorkspaceRoot is { } current && IsFavoriteDirectory(current)
+                    ? "取消收藏"
+                    : "收藏目录";
+        }
+        finally
+        {
+            updatingWorkspaceFavorites = false;
+        }
+    }
+
     private async void WorkspaceDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (WorkspaceTree.SelectedItem is WorkspaceNode { IsDirectory: false } node)
@@ -184,13 +288,43 @@ public partial class MainWindow
         if (sender is not MenuItem item || item.Parent is not ContextMenu menu ||
             menu.PlacementTarget is not FrameworkElement target ||
             target.DataContext is not WorkspaceNode { IsDirectory: true } node) return;
-        bool favorite = !IsFavoriteDirectory(node.FullPath);
-        settings.FavoriteDirectories.RemoveAll(path =>
-            string.Equals(path, node.FullPath, StringComparison.OrdinalIgnoreCase));
-        if (favorite) settings.FavoriteDirectories.Insert(0, node.FullPath);
-        node.SetFavorite(favorite);
-        SchedulePersist();
+        ToggleFavoriteDirectory(node.FullPath);
         e.Handled = true;
+    }
+
+    private void ToggleFavoriteDirectory(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        bool favorite = !IsFavoriteDirectory(fullPath);
+        settings.FavoriteDirectories.RemoveAll(item =>
+            string.Equals(item, fullPath, StringComparison.OrdinalIgnoreCase));
+        if (favorite)
+        {
+            if (settings.FavoriteDirectories.Count >= MaximumFavoriteDirectories)
+            {
+                StatusText.Text = $"最多收藏 {MaximumFavoriteDirectories} 个目录，请先取消一个收藏。";
+                return;
+            }
+            settings.FavoriteDirectories.Add(fullPath);
+        }
+        RefreshWorkspaceFavoriteVisuals(fullPath, favorite);
+        RefreshWorkspaceFavorites();
+        SchedulePersist();
+        StatusText.Text = favorite ? "已收藏当前工作区目录。" : "已取消收藏当前工作区目录。";
+    }
+
+    private void RefreshWorkspaceFavoriteVisuals(string path, bool favorite)
+    {
+        foreach (var root in WorkspaceTree.Items.OfType<WorkspaceNode>())
+            RefreshWorkspaceFavoriteVisual(root, path, favorite);
+    }
+
+    private static void RefreshWorkspaceFavoriteVisual(WorkspaceNode node, string path, bool favorite)
+    {
+        if (string.Equals(node.FullPath, path, StringComparison.OrdinalIgnoreCase))
+            node.SetFavorite(favorite);
+        foreach (var child in node.Children)
+            RefreshWorkspaceFavoriteVisual(child, path, favorite);
     }
 
     public sealed record ReadingListItem(ReadingListEntry Entry)
@@ -207,6 +341,7 @@ public partial class MainWindow
     {
         if (ReadingList is null) return;
         ReadingList.ItemsSource = readingList.Items.Select(item => new ReadingListItem(item)).ToArray();
+        RefreshCompanionWindows();
     }
 
     private async void ReadingListDoubleClick(object sender, MouseButtonEventArgs e)
@@ -254,19 +389,17 @@ public partial class MainWindow
         if (!initialized || tab.File.Path is not { } path || readingList.Find(path) is not { } item) return;
         int anchor = Math.Clamp(CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
         int progress = ProgressPercent(tab);
-        bool read = item.IsRead || progress >= 95;
-        if (!readingList.UpdateProgress(path, progress, anchor, read)) return;
+        if (!readingList.UpdateProgress(path, progress, anchor)) return;
         readingListDirty = true;
         if (CurrentTab == tab) RefreshReadingList();
     }
 
-    private async Task RestoreReadingListPositionAsync(EditorTab tab)
+    private async Task RestoreSourceAnchorAsync(EditorTab tab, int sourceAnchor)
     {
-        if (tab.File.Path is not { } path || readingList.Find(path) is not { } item) return;
-        int anchor = Math.Clamp(item.SourceAnchor, 0, tab.File.Text.Length);
+        int anchor = Math.Clamp(sourceAnchor, 0, tab.File.Text.Length);
         if (tab.Kind == TextKind.Markdown && !tab.IsReading)
         {
-            await EnterReadingAsync(tab, anchor, focus: false);
+            await EnterReadingAsync(tab, anchor, focus: false, snapToBlockStart: false);
         }
         else if (tab.IsReading)
         {

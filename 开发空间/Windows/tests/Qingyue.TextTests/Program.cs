@@ -19,6 +19,100 @@ var tests = new List<(string Name, Action Run)>
         Equal(TextKind.Yaml, Detect("app.config", "服务:\n  端口: 80"));
         Equal(TextKind.Plain, Detect(null, "中文😀"));
     }),
+    ("quick open/macOS filtering and ranking contract", () =>
+    {
+        QuickOpenItem[] items =
+        [
+            new("recent-path", "config.yaml", "/项目/说明文档/config.yaml", false),
+            new("open-path", "notes.md", "/项目/说明文档/notes.md", true),
+            new("recent-title", "说明文档.md", "/资料/说明文档.md", false),
+            new("open-title", "说明文档.md", "/另一份/说明文档.md", true),
+            new("recent-fold", "Café.JSON", "/資料/Ｃａｆｅ́.json", false),
+            new("emoji", "😀笔记.md", "/中文/😀笔记.md", false)
+        ];
+        string Ids(string query) =>
+            string.Join(",", QuickOpenRanker.Filter(items, query).Select(item => item.Id));
+        Equal("open-path,open-title,recent-path,recent-title,recent-fold,emoji", Ids(""));
+        Equal(Ids(""), Ids("  \t\n"));
+        Equal("open-title,open-path,recent-title,recent-path", Ids("说明文档"));
+        Equal("open-title,recent-title", Ids("说明文档.md"));
+        Equal("open-title", Ids("另一份"));
+        Equal("recent-fold", Ids("cafe.json"));
+        Equal("recent-fold", Ids("ＣＡＦＥ"));
+        Equal("emoji", Ids("😀"));
+        Equal("open-path,recent-path", Ids("说明 项目"));
+        Equal("", Ids("does-not-exist"));
+        Check(QuickOpenRanker.Filter([], "a").Count == 0, "空数据源应安全返回空结果");
+        Equal(2, QuickOpenRanker.Filter([items[0], items[0], items[1]], "").Count);
+
+        QuickOpenItem[] ranking =
+        [
+            new("contains", "my-report.txt", "/x", false),
+            new("prefix", "report-new.txt", "/x", false),
+            new("exact", "report", "/x", false),
+            new("path", "other", "/report", false)
+        ];
+        Equal("exact,prefix,contains,path",
+            string.Join(",", QuickOpenRanker.Filter(ranking, "report").Select(item => item.Id)));
+        Equal("open-path,open-title,recent-title,emoji", Ids(" md"));
+    }),
+    ("reading list/macOS order and path migration", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-reading-list-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            string first = Path.Combine(root, "a.md");
+            string second = Path.Combine(root, "b.md");
+            var store = new ReadingListStore(root);
+            store.Upsert(first, 10, 3);
+            store.Upsert(second, 20, 8);
+            store.MarkRead(first, true);
+            Equal(Path.GetFullPath(first), store.Items[0].Path);
+
+            var migrated = store.Upsert(first, 88, 42, isRead: true);
+            store.SetPinned(first, true);
+            store.Upsert(second, 15, 6);
+            var migratePath = typeof(ReadingListStore).GetMethod("MigratePath")
+                ?? throw new MissingMethodException("缺失功能：ReadingListStore.MigratePath");
+            int changed = (int)migratePath.Invoke(store, [first, second])!;
+            Check(changed > 0, "阅读清单路径迁移应报告实际变更");
+            Check(store.Find(first) is null, "迁移后旧路径记录必须删除");
+            var target = store.Find(second) ?? throw new Exception("迁移后新路径记录不存在");
+            Check(target.IsPinned && target.IsRead && target.ProgressPercent == 88 &&
+                target.SourceAnchor == 42, "迁移必须合并固定、已读、进度与锚点");
+            Equal(1, store.Items.Count);
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("workspace/clear only the selected document draft", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-clear-draft-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var first = new DocumentFile("第一份未保存草稿");
+            first.Rename("第一份.md");
+            var second = new DocumentFile("第二份未保存草稿");
+            second.Rename("第二份.md");
+            var store = new WorkspaceStore(root);
+            var session = new WorkspaceSession(1,
+            [
+                new WorkspaceEntry(first.Id, null, false, 0, 0, 0),
+                new WorkspaceEntry(second.Id, null, false, 0, 0, 0)
+            ], first.Id);
+            var saved = store.SaveAsync(session,
+                [first.CaptureSnapshot(), second.CaptureSnapshot()]).GetAwaiter().GetResult();
+            Check(saved.Errors.Count == 0, "测试草稿首次保存失败：" + string.Join(";", saved.Errors));
+            var clearDraft = typeof(WorkspaceStore).GetMethod("ClearDraftAsync", [typeof(Guid)])
+                ?? throw new MissingMethodException("缺失功能：WorkspaceStore.ClearDraftAsync(Guid)");
+            ((Task)clearDraft.Invoke(store, [first.Id])!).GetAwaiter().GetResult();
+            var loaded = new WorkspaceStore(root).LoadAsync().GetAwaiter().GetResult();
+            Check(loaded.Documents.Count == 1 && loaded.Documents[0].File.Id == second.Id,
+                "清除单文档草稿不得删除其他文档草稿");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
     ("format/json lexical fidelity and duplicate keys", () =>
     {
         const string input = "{\"n\":123456789012345678901234567890,\"n\":1.2300e+100,\"small\":-0.000000000000000000001,\"s\":\"中文😀\",\"negative\":-0}";
@@ -205,6 +299,28 @@ var tests = new List<(string Name, Action Run)>
         Reject(() => Format(input));
         Check(Diagnostic("{broken}", TextKind.Jsonc) is not null, "JSONC 应检查语法");
     }),
+    ("format/macOS input depth node and output budgets", () =>
+    {
+        Equal(500_000, FormatKind(new string('a', 500_000), TextKind.Plain).Length);
+        Reject(() => FormatKind(new string('a', 500_001), TextKind.Plain), "500000");
+
+        string JsonDepth(int depth) => new string('[', depth) + "0" + new string(']', depth);
+        Check(Format(JsonDepth(256)).Length > 0, "标准 JSON 应允许 256 层嵌套");
+        Reject(() => Format(JsonDepth(257)), "JSON");
+        Check(FormatKind(JsonDepth(128), TextKind.Jsonc).Length > 0, "JSONC 应允许 128 层嵌套");
+        Reject(() => FormatKind(JsonDepth(129), TextKind.Jsonc), "JSONC");
+
+        string jsoncNodes = "[" + string.Join(',', Enumerable.Repeat("0", 99_999)) + "]";
+        Check(FormatKind(jsoncNodes, TextKind.Jsonc).Length > 0, "JSONC 应允许 100000 个值节点");
+        Reject(() => FormatKind("[" + string.Join(',', Enumerable.Repeat("0", 100_000)) + "]",
+            TextKind.Jsonc), "JSONC");
+
+        string XmlDepth(int elements) =>
+            string.Concat(Enumerable.Repeat("<a>", elements)) +
+            string.Concat(Enumerable.Repeat("</a>", elements));
+        Check(FormatKind(XmlDepth(129), TextKind.Xml).Length > 0, "XML 应允许 128 层子嵌套");
+        Reject(() => FormatKind(XmlDepth(130), TextKind.Xml), "128");
+    }),
     ("format/yaml indentation only and xml safety", () =>
     {
         Check(Diagnostic("a:\n\tb: 1", TextKind.Yaml) is not null, "Tab 缩进应提示");
@@ -234,6 +350,23 @@ var tests = new List<(string Name, Action Run)>
         Equal(2, Find("😀", "(?=)", "|", new(Regex: true)).Count);
         Reject(() => Find("a", "[", "", new(Regex: true)));
     }),
+    ("search/regex follows macOS scalar and whole-word contracts", () =>
+    {
+        const string scalarInput = "😀中";
+        var scalarMatches = Find(scalarInput, ".", "x", new(Regex: true));
+        Equal(2, scalarMatches.Count);
+        Equal((0, 2), (scalarMatches[0].Start, scalarMatches[0].Length));
+        Equal((2, 1), (scalarMatches[1].Start, scalarMatches[1].Length));
+        Equal("xx", Replace(scalarInput, scalarMatches));
+
+        const string wholeInput = "abc abcdef";
+        var wholeCapture = Find(
+            wholeInput,
+            "(a)(bc)",
+            "$2-$1",
+            new(Regex: true, WholeWord: true));
+        Equal("bc-a abcdef", Replace(wholeInput, wholeCapture));
+    }),
     ("search/unicode whole word", () =>
     {
         Equal(2, Find("猫 猫咪 (猫) _猫 猫2", "猫", "", new(WholeWord: true)).Count);
@@ -248,10 +381,12 @@ var tests = new List<(string Name, Action Run)>
             new[] { new SearchMatch(-1, 1, "x") }, new[] { new SearchMatch(0, int.MaxValue, "x") },
             new[] { new SearchMatch(0, 3, "x"), new SearchMatch(2, 1, "y") },
             new[] { new SearchMatch(2, 1, "x") }, new[] { new SearchMatch(1, 1, "x") },
-            new[] { new SearchMatch(0, 0, "x"), new SearchMatch(0, 0, "y") },
             new[] { new SearchMatch(3, 1, "x"), new SearchMatch(0, 1, "y") } })
-            UnchangedOrRejected("a😀b", matches);
+            Equal("a😀b", Replace("a😀b", matches));
+        Equal("xya😀b", Replace("a😀b", new[] {
+            new SearchMatch(0, 0, "x"), new SearchMatch(0, 0, "y") }));
         Equal("a😀x", Replace("a😀b", new[] { new SearchMatch(3, 1, "x") }));
+        Equal("a😀b", Replace("a😀b", Enumerable.Repeat(new SearchMatch(0, 0, ""), 100_001).ToArray()));
     }),
     ("search/resource guards", () =>
     {
@@ -259,7 +394,7 @@ var tests = new List<(string Name, Action Run)>
         Reject(() => Find("a", new string('a', 4097), "", new()));
         Reject(() => Find("a", "a", new string('b', 1_000_001), new()));
         Reject(() => Find(new string('a', 100_001), "a", "", new()));
-        Reject(() => Replace("aaaaaaaaaaa", new[] { new SearchMatch(0, 1, new string('x', 1_000_000)),
+        Equal("aaaaaaaaaaa", Replace("aaaaaaaaaaa", new[] { new SearchMatch(0, 1, new string('x', 1_000_000)),
             new SearchMatch(1, 1, new string('x', 1_000_000)), new SearchMatch(2, 1, new string('x', 1_000_000)),
             new SearchMatch(3, 1, new string('x', 1_000_000)), new SearchMatch(4, 1, new string('x', 1_000_000)),
             new SearchMatch(5, 1, new string('x', 1_000_000)), new SearchMatch(6, 1, new string('x', 1_000_000)),
@@ -285,7 +420,7 @@ var tests = new List<(string Name, Action Run)>
         Equal(100_000, Find(new string('a', 100_000), "a", "", new()).Count);
         Equal(10_000_000, Replace(new string('a', 10), Find(new string('a', 10), "a", new string('b', 1_000_000), new())).Length);
         Equal(0, Find("😀", "\ud83d", "", new()).Count);
-        Equal(0, Find("😀", ".", "", new(Regex: true)).Count);
+        Equal(1, Find("😀", ".", "", new(Regex: true)).Count);
     }),
     ("search/named captures have numeric aliases and sparse numbers", () =>
     {
@@ -331,6 +466,63 @@ var tests = new List<(string Name, Action Run)>
         VerifyBlocks(model);
         var found = Find(model.VisibleText, "加粗", "", new()).Single();
         Equal("加粗", model.VisibleText.Substring(found.Start, found.Length));
+    }),
+    ("reading/markdown mapping uses macOS whole-block and next-visible semantics", () =>
+    {
+        const string input = "[hidden]: https://example.test/hidden\n\n# 标题😀\n\n正文 **重点** 与[链接](https://example.test/hidden)\n\n```txt\n第一行😀\n```\n";
+        var model = Build(input, TextKind.Markdown);
+        var title = model.Blocks.Single(block => block.Text == "标题😀");
+        var body = model.Blocks.Single(block => block.Text.StartsWith("正文 ", StringComparison.Ordinal));
+        var code = model.Blocks.Single(block => block.Kind == ReadingBlockKind.Code);
+
+        // Metadata and block separators precede the first visible block.
+        Equal(title.DisplayStart, model.SourceToDisplay(0));
+        Equal(title.DisplayStart, model.SourceToDisplay(input.IndexOf("[hidden]", StringComparison.Ordinal)));
+        Equal(code.DisplayStart, model.SourceToDisplay(input.IndexOf("```txt", StringComparison.Ordinal)));
+        Equal(title.SourceStart, model.DisplayToSource(0));
+
+        // A point anywhere inside one rendered paragraph maps to the whole block.
+        int emphasis = input.IndexOf("重点", StringComparison.Ordinal);
+        Equal(body.DisplayStart, model.SourceToDisplay(emphasis));
+        Equal(body.DisplayStart, model.SourceToDisplay(emphasis + 1));
+        Equal(body.SourceStart, model.DisplayToSource(body.DisplayStart + 5));
+        Equal((body.SourceStart, body.SourceLength), model.SourceRangeForDisplay(body.DisplayStart + 5));
+        Equal((body.DisplayStart, body.Text.Length), model.DisplayRangeForSource(emphasis + 1));
+
+        // Hidden Markdown punctuation remains part of the annotation source range.
+        string quote = input.Substring(body.SourceStart, body.SourceLength);
+        Check(quote.Contains("**重点**", StringComparison.Ordinal) &&
+              quote.Contains("https://example.test/hidden", StringComparison.Ordinal),
+            "阅读块反向映射必须保留原始 Markdown 标记");
+
+        Equal(model.VisibleText.Length, model.SourceToDisplay(input.Length));
+        Equal(input.Length, model.DisplayToSource(model.VisibleText.Length));
+        Equal((input.Length, 0), model.SourceRangeForDisplay(model.VisibleText.Length));
+        Equal((model.VisibleText.Length, 0), model.DisplayRangeForSource(input.Length));
+
+        var crlf = Build("```\r\n甲😀\r\n```\r\n\r\n乙", TextKind.Markdown);
+        Equal(0, crlf.SourceToDisplay(0));
+        Equal(crlf.Blocks[1].DisplayStart, crlf.SourceToDisplay(crlf.Blocks[0].SourceStart + crlf.Blocks[0].SourceLength));
+        var hiddenOnly = Build("```", TextKind.Markdown);
+        Equal(0, hiddenOnly.VisibleText.Length);
+        Equal(hiddenOnly.SourceText.Length, hiddenOnly.DisplayToSource(0));
+        Equal(hiddenOnly.SourceText.Length, hiddenOnly.DisplayToSource(int.MaxValue));
+        Equal((hiddenOnly.SourceText.Length, 0), hiddenOnly.SourceRangeForDisplay(0));
+        var emptyMarkdown = Build("", TextKind.Markdown);
+        Equal(0, emptyMarkdown.DisplayToSource(0));
+        Equal(0, emptyMarkdown.DisplayToSource(int.MaxValue));
+        for (int offset = -1; offset <= input.Length + 1; offset++)
+        {
+            int display = model.SourceToDisplay(offset);
+            Check(display >= 0 && display <= model.VisibleText.Length, "源到显示范围应安全");
+            Boundary(model.VisibleText, display);
+        }
+        for (int offset = -1; offset <= model.VisibleText.Length + 1; offset++)
+        {
+            int source = model.DisplayToSource(offset);
+            Check(source >= 0 && source <= input.Length, "显示到源范围应安全");
+            Boundary(input, source);
+        }
     }),
     ("reading/markdown GFM autolinks and reference links", () =>
     {
@@ -419,19 +611,40 @@ var tests = new List<(string Name, Action Run)>
         string atLimit = "| H |\n| --- |\n" + string.Concat(Enumerable.Repeat("| x |\n", 1023));
         var table = Build(atLimit, TextKind.Markdown).Blocks.Single(b => b.Kind == ReadingBlockKind.Table);
         Equal(1024, table.Text.Split('\n').Length);
-        Check(!Build(atLimit + "| overflow |\n", TextKind.Markdown).Blocks.Any(b => b.Kind == ReadingBlockKind.Table),
-            "1025 个单元格应退回，不能截断正文");
+        var bounded = Build(atLimit + "| overflow |\n", TextKind.Markdown);
+        var boundedTable = bounded.Blocks.Single(b => b.Kind == ReadingBlockKind.Table);
+        Equal(1024, boundedTable.Text.Split('\n').Length);
+        Check(bounded.VisibleText.Contains("| overflow |", StringComparison.Ordinal),
+            "超出单元格预算的后续行必须保留为普通正文");
+        VerifyBlocks(bounded);
     }),
-    ("reading/table mismatched body row ends table without losing source", () =>
+    ("reading/table ragged rows pad missing cells and merge excess cells", () =>
     {
-        const string input = "| A | B |\n| --- | --- |\n| x | y |\n| stop |\n| u | v |";
+        const string input = "A | B\n--- | ---\nonly |\nextra | data | retained\n";
         var model = Build(input, TextKind.Markdown);
-        Equal(2, model.Blocks.Count);
-        Equal(ReadingBlockKind.Table, model.Blocks[0].Kind);
-        Equal("A\tB\nx\ty", model.Blocks[0].Text);
-        Equal(ReadingBlockKind.Paragraph, model.Blocks[1].Kind);
-        Equal("| stop |\n| u | v |", model.Blocks[1].Text);
-        Equal(input.Length, model.Blocks[1].SourceStart + model.Blocks[1].SourceLength);
+        var table = model.Blocks.Single();
+        Equal(ReadingBlockKind.Table, table.Kind);
+        Equal("A\tB\nonly\t\nextra\tdata | retained", table.Text);
+        Equal(3, table.Text.Split('\n').Length);
+        Equal(input.Length, table.SourceStart + table.SourceLength);
+        VerifyBlocks(model);
+    }),
+    ("reading/table unclosed code span keeps pipes as delimiters", () =>
+    {
+        const string input = "| A | `open | tail |\n| --- | --- | --- |\n| x | y | z |";
+        var table = Build(input, TextKind.Markdown).Blocks.Single();
+        Equal(ReadingBlockKind.Table, table.Kind);
+        Equal("A\t`open\ttail\nx\ty\tz", table.Text);
+    }),
+    ("reading/frontmatter is per-line metadata outside the outline", () =>
+    {
+        const string input = "---\ntitle: demo\nauthor: 😀\n---\n# 可见\n";
+        var model = Build(input, TextKind.Markdown);
+        var metadata = model.Blocks.Where(block => block.Kind == ReadingBlockKind.Metadata).ToArray();
+        Equal(4, metadata.Length);
+        Check(metadata.Select(block => block.Text).SequenceEqual(["---", "title: demo", "author: 😀", "---"]),
+            "Frontmatter must retain each source line as its own metadata block");
+        Equal("可见", model.Headings.Single().Title);
         VerifyBlocks(model);
     }),
     ("reading/table adjacent paragraph empty body and block boundaries", () =>
@@ -526,8 +739,52 @@ var tests = new List<(string Name, Action Run)>
             var item = store.Add(file, 3, "正文");
             Check(item.SourceAnchor == 3 && item.Path == file.Path, "书签保存规范化路径和源位置");
             Check(store.For(file).Count == 1, "书签按当前文件路径查询");
+
+            string parityRoot = Path.Combine(root, "parity");
+            var parityStore = new BookmarkStore(parityRoot);
+            var first = parityStore.Add(file, 0, "第一条");
+            var second = parityStore.Add(file, 1, "第二条");
+            Check(parityStore.Items.Select(entry => entry.Id).SequenceEqual([first.Id, second.Id]),
+                "书签内部存储顺序与 macOS 一样按新增追加");
+            string emojiLabel = "a" + string.Concat(Enumerable.Repeat("😀", 100));
+            var emoji = parityStore.Add(file, 2, emojiLabel);
+            Check(emoji.Label.Length == 159 && char.IsLowSurrogate(emoji.Label[^1])
+                && !char.IsHighSurrogate(emoji.Label[^1]),
+                "书签标签按 UTF-16 预算截断且不得切断 emoji 代理对");
+            var empty = new DocumentFile("");
+            Check(parityStore.Add(empty, 0).Label == "位置 0",
+                "空正文书签默认标签与 macOS 一样使用“位置 0”");
+
             Check(store.Remove(item.Id), "书签可以删除");
             Check(store.For(file).Count == 0, "删除后查询为空");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("bookmark/macOS limit and pathless identity", () =>
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qingyue-bookmark-parity-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = new DocumentFile("标题\n正文");
+            file.Save(Path.Combine(root, "a.md"));
+            var store = new BookmarkStore(root);
+            var item = store.Add(file, 3, "正文");
+
+            var pathless = new DocumentFile(file.Text);
+            typeof(DocumentFile).GetProperty("Id")!.SetValue(pathless, file.Id);
+            Check(store.For(pathless).Single().Id == item.Id,
+                "无路径查询按文档标识命中已有书签，与 macOS 一致");
+            Check(store.Repair(file.Id, null, file.Text, "前言\n" + file.Text) == 1,
+                "无路径书签修复按文档标识命中，与 macOS 一致");
+
+            for (int index = 1; index < 500; index++) store.Add(file, index, "书签 " + index);
+            Check(store.Items.Count == 500, "书签可达到 500 条上限");
+            bool rejected = false;
+            try { store.Add(file, 0, "第 501 条"); }
+            catch (InvalidOperationException error) { rejected = error.Message.Contains("500"); }
+            Check(rejected && store.Items.Count == 500,
+                "达到 500 条后拒绝新增且保留全部旧书签，与 macOS 一致");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }),
@@ -549,6 +806,63 @@ var tests = new List<(string Name, Action Run)>
                 "书签重启后可恢复");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }),
+    ("search/macOS large text progress cancellation and adaptive limit", () =>
+    {
+        SearchEngine.ValidateTextLength(SearchEngine.MaximumTextLength);
+        Reject(() => SearchEngine.ValidateTextLength(SearchEngine.MaximumTextLength + 1), "50,000,000");
+        Check(SearchEngine.TimeLimitFor(5_000_000) == TimeSpan.FromMilliseconds(350),
+            "500 万文本使用快速默认查找预算");
+        Check(SearchEngine.TimeLimitFor(5_000_001) == TimeSpan.FromSeconds(2),
+            "超过 500 万文本使用 2 秒预算");
+        Check(SearchEngine.TimeLimitFor(20_000_001) == TimeSpan.FromSeconds(4),
+            "超过 2000 万文本使用 4 秒预算");
+
+        string tail = new string('a', 6_000_000) + "needle";
+        var tailMatches = SearchEngine.Find(tail, "needle", "", new SearchOptions());
+        Equal(1, tailMatches.Count);
+        Equal(6_000_000, tailMatches[0].Start);
+
+        string boundary = new string('x', SearchEngine.ProgressChunkSize - 1) + "É";
+        var boundaryProgress = new List<SearchProgress>();
+        var boundaryMatches = SearchEngine.FindWithProgress(
+            boundary, "é", "", new SearchOptions(), boundaryProgress.Add);
+        Equal(1, boundaryMatches.Count);
+        Equal(SearchEngine.ProgressChunkSize - 1, boundaryMatches[0].Start);
+        Check(boundaryProgress.Count >= 2 &&
+            boundaryProgress.All(item => item.CompletedUtf16 >= 0 &&
+                item.CompletedUtf16 <= item.TotalUtf16 &&
+                item.Fraction is >= 0 and <= 1),
+            "跨分块非 ASCII 查找报告有界进度");
+
+        string large = string.Concat(Enumerable.Repeat("中文😀", 350_000)) + "尾针";
+        int progressEvents = 0;
+        var largeMatches = SearchEngine.FindWithProgress(
+            large, "尾针", "", new SearchOptions(CaseSensitive: true),
+            _ => progressEvents++);
+        Equal(1, largeMatches.Count);
+        Check(progressEvents > 1, "大文本查找按固定分块报告进度");
+
+        using var cancellation = new CancellationTokenSource();
+        bool cancelledFromProgress = false;
+        try
+        {
+            _ = SearchEngine.FindWithProgress(
+                string.Concat(Enumerable.Repeat("中文😀", 1_000_000)), "尾针", "",
+                new SearchOptions(CaseSensitive: true),
+                progress =>
+                {
+                    if (progress.CompletedUtf16 < SearchEngine.ProgressChunkSize) return;
+                    cancelledFromProgress = true;
+                    cancellation.Cancel();
+                },
+                cancellation.Token);
+            throw new Exception("大文本查找应支持协作取消");
+        }
+        catch (OperationCanceledException)
+        {
+            Check(cancelledFromProgress, "进度回调可以中断运行中的大文本查找");
+        }
     }),
     ("anchor mapping follows unchanged paragraph", () =>
     {
@@ -617,12 +931,6 @@ static void Reject(Action action, string? contains = null)
     }
     throw new Exception("应拒绝操作");
 }
-static void UnchangedOrRejected(string text, IReadOnlyList<SearchMatch> matches)
-{
-    try { Equal(text, Replace(text, matches)); }
-    catch (ArgumentException error) { Check(error.Message.Any(c => c >= '\u4e00' && c <= '\u9fff'), "异常应中文"); }
-    catch (InvalidOperationException error) { Check(error.Message.Any(c => c >= '\u4e00' && c <= '\u9fff'), "异常应中文"); }
-}
 static void VerifyBlocks(View model)
 {
     Equal(model.VisibleText, string.Join("\n", model.Blocks.Select(b => b.Text)));
@@ -664,8 +972,13 @@ static void VerifyTableSeparators(int dashes)
 sealed class View(object model)
 {
     public string VisibleText => (string)model.GetType().GetProperty("VisibleText")!.GetValue(model)!;
+    public string SourceText => (string)model.GetType().GetProperty("SourceText")!.GetValue(model)!;
     public IReadOnlyList<ReadingBlock> Blocks => (IReadOnlyList<ReadingBlock>)model.GetType().GetProperty("Blocks")!.GetValue(model)!;
     public IReadOnlyList<ReadingHeading> Headings => (IReadOnlyList<ReadingHeading>)model.GetType().GetProperty("Headings")!.GetValue(model)!;
     public int SourceToDisplay(int offset) => (int)model.GetType().GetMethod("SourceToDisplay")!.Invoke(model, [offset])!;
     public int DisplayToSource(int offset) => (int)model.GetType().GetMethod("DisplayToSource")!.Invoke(model, [offset])!;
+    public (int Start, int Length) SourceRangeForDisplay(int offset) =>
+        ((int Start, int Length))model.GetType().GetMethod("SourceRangeForDisplay")!.Invoke(model, [offset])!;
+    public (int Start, int Length) DisplayRangeForSource(int offset) =>
+        ((int Start, int Length))model.GetType().GetMethod("DisplayRangeForSource")!.Invoke(model, [offset])!;
 }

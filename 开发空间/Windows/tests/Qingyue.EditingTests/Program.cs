@@ -124,6 +124,7 @@ internal static partial class Program
             long allocated = GC.GetAllocatedBytesForCurrentThread() - start;
             if (allocated > 16_384) throw new Exception("未修改文本仍分配了diff数据：" + allocated);
         });
+        RunTextEditingTests();
         RunMarkdownEditingTests();
         RunWpfTests();
         Console.WriteLine($"RESULT {passed} passed, {failed} failed");

@@ -9,8 +9,14 @@ namespace Qingyue.Windows;
 
 public sealed class JsonStructureView : TreeView
 {
+    internal const int MaximumCharacters = 2_000_000;
+    internal const int MaximumNodes = 10_000;
+    internal const int MaximumDepth = 128;
+
     public JsonStructureView(string text, TextKind kind)
     {
+        if (text.Length > MaximumCharacters)
+            throw new FormatException("JSON 结构视图支持 200 万字符以内，请使用编辑视图查看完整原文。");
         BorderThickness = new Thickness(0);
         Padding = new Thickness(18, 14, 18, 24);
         FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI");
@@ -18,15 +24,48 @@ public sealed class JsonStructureView : TreeView
         SetResourceReference(BackgroundProperty, "EditorBrush");
         SetResourceReference(ForegroundProperty, "TextBrush");
         System.Windows.Automation.AutomationProperties.SetName(this, "JSON 只读结构，可展开和折叠");
-        using var document = JsonDocument.Parse(text, new JsonDocumentOptions
+        JsonDocument document;
+        try
         {
-            AllowTrailingCommas = kind == TextKind.Jsonc,
-            CommentHandling = kind == TextKind.Jsonc ? JsonCommentHandling.Skip : JsonCommentHandling.Disallow,
-            MaxDepth = 256
-        });
+            document = JsonDocument.Parse(text, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = kind == TextKind.Jsonc,
+                CommentHandling = kind == TextKind.Jsonc ? JsonCommentHandling.Skip : JsonCommentHandling.Disallow,
+                MaxDepth = MaximumDepth
+            });
+        }
+        catch (JsonException error)
+        {
+            throw new FormatException("JSON 结构失败：请先修复语法。 " + error.Message, error);
+        }
+        using var ownedDocument = document;
+        if (CountNodes(document.RootElement) > MaximumNodes)
+            throw new FormatException("JSON 结构超过 10000 个值节点，请使用编辑视图查看完整原文。");
         var root = Node("根节点", document.RootElement.Clone());
         Items.Add(root);
         root.IsExpanded = true;
+    }
+
+    private static int CountNodes(JsonElement element)
+    {
+        int count = 1;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                count = checked(count + CountNodes(property.Value));
+                if (count > MaximumNodes) return count;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray())
+            {
+                count = checked(count + CountNodes(child));
+                if (count > MaximumNodes) return count;
+            }
+        }
+        return count;
     }
 
     private static TreeViewItem Node(string key, JsonElement value)

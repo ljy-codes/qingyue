@@ -2,83 +2,105 @@
 
 .NET 10 + WPF 原生 Windows 客户端。Core 不依赖第三方 NuGet 包，文件、文本、阅读模型和界面流程分别测试。
 
-## 与 Mac 0.4.0 的源码对齐
+## 当前版本
 
-2026-11-24 已同步 Mac 的 Markdown 段内 `<br>` 行为：正文和表格预览换行、编辑器高亮、纯文本、RTF/XamlPackage、HTML 导出及源位置映射保持一致；反引号代码跨度保持字面内容。
-本次只覆盖 `<br>` 受控子集，不代表 Windows 已完整对齐 Mac 0.4.0；Windows 大文件搜索、独立设置窗口、7 套主题和 1024px 图标等差异仍在功能对照表中保留。
-目录版本仍为 0.18.0 · Windows 构建 1；本轮已重新生成 ZIP 和 NSIS 安装包，并安装到本机 `D:\Program Files\Qingyue`。未创建新 Release，安装包未签名。
-`scripts/test.ps1` 全量回归已执行并以退出码 0 完成；这不替代 Word、Excel 和浏览器等目标软件中的人工粘贴验收。
+- 产品版本：`0.19.0`
+- Windows 构建：`1`
+- 文件版本：`0.19.0.1`
+- InformationalVersion：`0.19.0+windows-build.1`
+- 目标：Windows 10 22H2 / Windows 11 x64
 
-在仓库根目录用 PowerShell 7 执行：
+Windows 0.19.0 已按 Mac 0.4.0 的用户功能契约完成对齐。功能矩阵与验证边界见[功能对照表](../../docs/功能对照表.md)。
+
+## 已对齐能力
+
+- 六组原生菜单：文件、编辑、搜索、视图、标签、帮助；菜单打开和关闭后恢复原编辑器焦点与选区。
+- Ctrl 快捷键白名单与 Mac 命令契约对应；Ctrl+1…8 选择标签，Ctrl+9 选择最后标签。
+- 非模态快速打开；独立设置窗口；七套主题与四款 1024px 应用图标。
+- 工作区、本地文件树、类型/通配过滤、收藏目录和跨文件全局搜索。
+- 全局搜索普通/正则/全词/大小写、替换预览、取消、结果上限和写回前磁盘复检。
+- 阅读清单、固定、已读/未读、进度和上次位置恢复。
+- 批注、标签、颜色、锚点修复、独立高亮、书签，以及 Markdown/HTML 阅读简报导出。
+- Markdown `<br>`、表格编辑、TSV 粘贴为表格、图片插入、本地/内嵌图片和有限离线 Mermaid。
+- 纯文本、Markdown、代码块、表格和富文本复制，以及自包含 HTML 导出。
+- 外部文件修改三路处理：保留当前编辑、接纳磁盘版本、重新检查。
+- 会话恢复、当前文件草稿排除、全局草稿开关、清除草稿和损坏数据隔离。
+- 文件 ACL、只读、占用、硬链接、重解析点、编码/BOM、换行和安全原子替换保护。
+
+Windows 使用原生设置窗口、资源管理器、文件对话框、Ctrl 快捷键和 WPF 文本控件，不照搬 AppKit 控件。Windows 内嵌编辑工具条属于平台呈现方式，不构成功能缺失。
+
+## 验证结果
+
+2026-11-25 全量回归：
+
+| 检查 | 结果 |
+| --- | --- |
+| Release 构建 | 0 警告、0 错误 |
+| WPF 流程 | 984 项通过 |
+| 文件核心 | 44/47 通过，3 项符号链接因令牌权限跳过 |
+| UI 行为回归 | 142 项通过 |
+| 编辑/文本 | 57 + 34 + 198 项通过 |
+| Markdown / 图表 | 43 + 29 项通过 |
+| 阅读 / 图片 / 剪贴板 | 65 + 44 + 63 项通过 |
+| 实例 / 外部刷新 / 导航 | 16 + 97 + 34 项通过 |
+| 恢复 / 阅读体验 / 批注 / 阅读成果 | 22 + 21 + 34 + 198 项通过 |
+| 文本位置与 WPF 指针映射 | 5/5 通过，0 失败 |
+
+3 个符号链接用例需要 `SeCreateSymbolicLinkPrivilege`，当前普通令牌无法创建测试链接，因此明确记录为 SKIP，不宣称通过。
+
+## 构建与打包
+
+在仓库根目录执行：
 
 ```powershell
 pwsh -File 开发空间/Windows/scripts/build.ps1
 pwsh -File 开发空间/Windows/scripts/test.ps1
 pwsh -File 开发空间/Windows/scripts/publish.ps1
-pwsh -File 开发空间/Windows/scripts/build-installer.ps1 -SkipPublish
+pwsh -File 开发空间/Windows/scripts/build-installer.ps1
 ```
 
-开发需要 .NET 10 SDK 及 Windows Desktop targeting pack。首次自包含发布需要下载 win-x64 运行时包，
-有完整 NuGet 缓存时可以离线构建。构建脚本遇到失败会抛出异常并停止。
-安装器构建另需 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK；可通过 `-NsisPath` 指定编译器。
-这些构建命令生成产物，不自动安装或签名；本机上述安装由单独执行安装器完成。
+输出：
 
-输出：`交付产品/轻阅-Windows-x64/Qingyue.exe`、
-`交付产品/轻阅-0.18.0-Windows构建1-x64.zip` 和
-`交付产品/轻阅-0.18.0-Windows构建1-x64-setup.exe`。
-采用自包含目录发布，整个目录必须一起保留。版本见 `Directory.Build.props` 与 Windows 项目 InformationalVersion。
+- `交付产品/轻阅-Windows-x64/Qingyue.exe`
+- `交付产品/轻阅-0.19.0-Windows构建1-x64.zip`
+- `交付产品/轻阅-0.19.0-Windows构建1-x64-setup.exe`
 
-工程入口：
+采用自包含目录发布，整个目录必须一起保留。版本源为 `Directory.Build.props` 和 `installer/version.nsh`。安装包默认未签名；正式外部分发前必须补充 Authenticode 签名。
 
-- `src/Qingyue.Core`：文件与会话安全、工作区扫描、全局搜索、阅读清单、格式和原生阅读模型。
-- `src/Qingyue.Windows`：每标签独立 WPF 编辑器、工作区、阅读清单、全局搜索、FlowDocument 阅读、菜单和恢复。
-- `tests/Qingyue.FileTests`：真实临时文件与 Windows 文件系统行为。
-- `tests/Qingyue.TextTests`：Unicode、搜索与文本转换。
-- `tests/Qingyue.UITests`：STA/WPF 真实控件流程与深浅主题截图。
-- `tests/Qingyue.EditingTests`：命名、选择、修改行、拖动排序、恢复、Markdown 结构命令、输入法与分屏定位。
-- `tests/Qingyue.MarkdownTests`：Markdown 分色、嵌套列表、预览与阅读映射兼容。
-- `tests/Qingyue.ClipboardTests`：`<br>` 在纯文本、RTF/XamlPackage 和 HTML 中的选区与导出行为。
-- `tests/Qingyue.SequenceTests`：有限 Mermaid 时序语法、错误与资源限制。
-- `tests/Qingyue.MermaidViewTests`：原生时序图几何范围、滚动、主题和文字布局。
-- `tests/Qingyue.ReadingTests`：默认全宽预览、富文本导航、自动查找与实际刷新钩子。
-- `tests/Qingyue.ImageTests`：本地与内嵌图片、路径、资源限制及实际样本（`--samples 文档目录`）。
-- `tests/Qingyue.ClipboardTests`：结构化富文本、UTF-8 剪贴板偏移、局部选区、内嵌图片和 `<br>` 导出；使用合成数据，不读取系统剪贴板。
-- `tests/Qingyue.InstanceTests`：真实多进程启动转发、激活和单实例通信。
-- `tests/Qingyue.ExternalChangesTests`：磁盘刷新、未保存保护、异步竞态和视图状态。
-- `tests/Qingyue.NavigationTests`：打开取消、真实视口、查找返回与目录跳转。
-- `tests/Qingyue.RecoveryTests`：未加载草稿保护、改名中断和退出冻结。
-- `tests/Qingyue.ReaderExperienceTests`：图片窗口、表格对齐、展开阅读及资源边界。
-- `tests/Qingyue.AnnotationTests`：批注存储、路径迁移、锚点修复与阅读简报安全。
-- `tests/Qingyue.ReadingOutcomeTests`：阅读外观、主题画刷、批注选区、高亮与简报导出。
+## 工程入口
 
-当前版本支持 `mermaid` 围栏中的离线 `sequenceDiagram` 和有限 `flowchart` / `graph` 流程图，不引入 WebView 或脚本运行时。
-语法边界及总量限制见 `操作指导/Windows使用说明.md`，示例为 `Samples/时序图.md`。
+- `src/Qingyue.Core`：文件安全、会话、工作区、全局搜索、阅读清单、格式、批注、简报和阅读模型。
+- `src/Qingyue.Windows`：WPF 窗口、编辑器、阅读渲染、设置、主题、图片、Mermaid、剪贴板和恢复。
+- `tests/Qingyue.FileTests`：真实临时文件、ACL、链接、占用、外部冲突、编码与草稿。
+- `tests/Qingyue.UITests`：真实 STA/WPF 菜单、快捷键、设置、快速打开、全局搜索、工作区、阅读清单和焦点流程。
+- `tests/Qingyue.EditingTests`：选择、行编辑、Markdown 结构命令、输入法隔离和分屏定位。
+- `tests/Qingyue.MarkdownTests`：分色、嵌套列表、预览、`<br>` 与阅读映射。
+- `tests/Qingyue.ClipboardTests`：纯文本、RTF、XamlPackage、HTML、图片和选区复制。
+- `tests/Qingyue.ReadingTests` / `ReaderExperienceTests`：阅读布局、表格、图片、导航与资源边界。
+- `tests/Qingyue.ImageTests`：本地/内嵌图片、路径、解码预算和实际样本。
+- `tests/Qingyue.AnnotationTests` / `ReadingOutcomeTests`：批注锚点、高亮、主题和简报。
+- `tests/Qingyue.ExternalChangesTests` / `NavigationTests` / `RecoveryTests`：外部修改、取消、恢复和退出一致性。
+- `tests/Qingyue.InstanceTests` / `InstanceIpcTests`：单实例转发、激活和命名管道。
 
-0.15.0 增加四套动漫风格应用图标：天空蓝、樱花紫、薄荷珊瑚和蜜桃紫。
-默认使用天空蓝，用户可在“视图 → 阅读外观”中切换，选择保存到本机 `Settings.json`，
-重启后继续使用；安装包、EXE 和资源管理器固定使用天空蓝。
-构建 2 在 WPF 启动阶段启用软件渲染，规避部分显卡驱动路径造成的异常 native render memory
-占用；本机完整窗口验证约 62–75 MB 私有内存，具体结果需在 Windows 环境重新验收；历史记录保留在 Git 历史。
-0.14.0 增加 Markdown 层次参考线、嵌套容器排版、表格编辑和截图插图。
-输入和保存仍使用原生 TextBox 与标准 Markdown，预览和复制使用真实嵌套列表。
-批注、书签、设置、阅读清单和恢复数据默认写入
-`%LOCALAPPDATA%\\Qingyue`；批注文件为 `Annotations.json`，原文仍需用户明确保存。
-本版本只支持本机数据，不提供账号、云同步或历史数据迁移。
+## 安装器
 
-测试产物在 `artifacts`，不纳入 Git。GUI 流程测试需要可用的 Windows 交互桌面。
-手工验收需在 Windows 环境单独执行，用户操作见 `操作指导/Windows使用说明.md`。
+安装器使用自定义 NSIS 深色界面，提供可选安装目录、开始菜单、可选桌面快捷方式、系统卸载登记和覆盖安装。正式安装写入 `HKLM`；隔离测试包使用 `HKCU`。
 
-安装器使用自定义 NSIS 对话框和原生深色控件，提供可选路径、快捷方式、系统卸载入口。
-正式安装以管理员权限写入 `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall`，
-这样 Windows 设置的“已安装的应用”可以稳定发现轻阅；隔离测试包仍使用 HKCU，不触发 UAC。
-默认卸载保留用户数据；彻底清理需明确选择和再次确认，仅作用于轻阅默认数据目录。
-程序文件按构建生成的清单删除，保留未知文件。静默卸载永远保留用户数据。
+默认卸载保留用户数据；彻底清理需要明确勾选和二次确认，仅删除轻阅自己的默认数据目录。程序文件按安装清单删除，未知文件保留。静默卸载始终保留用户数据。
 
-`scripts/test-installer.ps1` 编译轻量测试包，使用独立产品身份、注册项、数据目录及快捷方式；
-会创建和卸载这些测试对象，需要当前用户目录及 HKCU 写权限。测试结束保留隔离安装供 GUI 选项验收。
-继续运行 `scripts/test-installer-purge.ps1`，可通过共用生产删除宏验证彻底清理并移除测试安装；
-运行 `scripts/build-wizard-preview.ps1` 生成卸载页面预览，预览不包含文件、注册、安装或删除动作。
-危险路径只通过不含安装操作的校验程序检查。最终安装/清理测试分别通过 25/10 项；
-正式本机安装验收需在 Windows 环境单独执行。原生图标可用
-`powershell.exe -NoProfile -STA -File 开发空间/Windows/scripts/build-brand-assets.ps1` 离线重建。
-安装器第三方来源和许可见 `installer/UPSTREAM.md`。
+安装器回归：
+
+```powershell
+pwsh -File 开发空间/Windows/scripts/test-installer-contract.ps1
+pwsh -File 开发空间/Windows/scripts/test-installer.ps1
+pwsh -File 开发空间/Windows/scripts/test-installer-purge.ps1
+```
+
+## 实机边界
+
+本项目已完成 Windows x64 开发机上的构建、自动回归和安装验收。以下项目仍需按目标环境另行验收：
+
+- Word、Excel、WPS、浏览器和邮件客户端的人工富文本粘贴结果。
+- 不同 Windows 版本、DPI 缩放、多屏和输入法候选矩阵。
+- Authenticode 签名、SmartScreen 信誉和外部正式分发。
+- 缺少符号链接创建权限时的真实链接写入场景。

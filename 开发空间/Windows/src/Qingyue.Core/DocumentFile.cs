@@ -15,6 +15,7 @@ public sealed class DocumentFile
     private TextCodec _baselineCodec = TextCodec.Utf8;
     private LineEnding _baselineLineEnding = LineEnding.Lf;
     private string? _baselineDigest;
+    private string? _loadedResolvedPath;
     private bool _hadBom;
     private bool _wasSaved;
     private TextCodec _codec = TextCodec.Utf8;
@@ -65,6 +66,7 @@ public sealed class DocumentFile
             var (text, detected, hadBom) = Decode(bytes, codec);
             var ending = DetectLineEnding(text);
             var file = new DocumentFile(text) { Path = path, Codec = detected, LineEnding = ending };
+            file._loadedResolvedPath = ResolveFinalPath(path);
             file.SetBaseline(bytes, hadBom);
             return file;
         }
@@ -85,7 +87,9 @@ public sealed class DocumentFile
         if (!_wasSaved || Path is null || _baselineDigest is null) return false;
         try
         {
-            using var stream = new FileStream(Path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+            var resolved = ResolveFinalPath(Path);
+            if (_loadedResolvedPath is not null && !SamePath(resolved, _loadedResolvedPath)) return true;
+            using var stream = new FileStream(resolved, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             return !string.Equals(Convert.ToHexString(SHA256.HashData(stream)), _baselineDigest, StringComparison.OrdinalIgnoreCase);
         }
         catch (FileNotFoundException) { return true; }
@@ -101,24 +105,27 @@ public sealed class DocumentFile
         try
         {
             var target = FullPath(destination ?? Path ?? throw new IOException("请先选择另存为路径。"));
-            bool same = _wasSaved && Path is not null && SamePath(target, Path);
             var bytes = EncodeForSave(out bool bom);
+            RejectReparseParents(target);
+            var resolvedTarget = ResolveFinalPath(target);
+            bool same = _wasSaved && Path is not null
+                && (SamePath(target, Path)
+                    || (_loadedResolvedPath is not null && SamePath(resolvedTarget, _loadedResolvedPath)));
             if (same && !allowOverwrite && DiskChanged()) throw new FileConflictException();
-            RejectReparseComponents(target);
-            bool exists = File.Exists(target);
+            bool exists = File.Exists(resolvedTarget);
             if (exists && !same && !allowOverwrite) throw new FileConflictException("目标文件已存在，请选择其他名称或明确覆盖。");
-            if (Directory.Exists(target)) throw new IOException("目标是目录，请选择文件路径。");
+            if (Directory.Exists(resolvedTarget)) throw new IOException("目标是目录，请选择文件路径。");
             string? targetSecurity = exists && OperatingSystem.IsWindows()
-                ? new FileInfo(target).GetAccessControl(AccessControlSections.Access)
+                ? new FileInfo(resolvedTarget).GetAccessControl(AccessControlSections.Access)
                     .GetSecurityDescriptorSddlForm(AccessControlSections.Access)
                 : null;
             // Keep this handle alive across the final digest check and replacement. Deny
             // concurrent writers while checking the target. The replacement fallback
             // below closes it immediately before MoveFileEx because this Windows
             // runtime rejects File.Replace with ERROR_ACCESS_DENIED.
-            guard = exists ? OpenSafeTarget(target) : null;
+            guard = exists ? OpenSafeTarget(resolvedTarget) : null;
             if (same && !allowOverwrite && DiskChanged()) throw new FileConflictException();
-            temporary = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(target)!, ".qingyue-" + Guid.NewGuid().ToString("N") + ".tmp");
+            temporary = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(resolvedTarget)!, ".qingyue-" + Guid.NewGuid().ToString("N") + ".tmp");
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 64 * 1024, FileOptions.WriteThrough))
             {
@@ -127,20 +134,22 @@ public sealed class DocumentFile
             }
             if (targetSecurity is not null)
                 ApplyAccessSecurity(temporary, targetSecurity);
-            RejectReparseComponents(target);
+            RejectReparseParents(target);
+            RejectReparseParents(resolvedTarget);
             if (same && !allowOverwrite && DiskChanged()) throw new FileConflictException();
             if (exists)
             {
                 guard?.Dispose();
                 guard = null;
-                using (OpenSafeTarget(target)) { }
-                File.Move(temporary, target, overwrite: true);
+                using (OpenSafeTarget(resolvedTarget)) { }
+                File.Move(temporary, resolvedTarget, overwrite: true);
                 if (targetSecurity is not null)
-                    ApplyAccessSecurity(target, targetSecurity);
+                    ApplyAccessSecurity(resolvedTarget, targetSecurity);
             }
-            else File.Move(temporary, target, overwrite: false);
+            else File.Move(temporary, resolvedTarget, overwrite: false);
             temporary = null;
             Path = target;
+            _loadedResolvedPath = ResolveFinalPath(target);
             SuggestedName = null;
             SetBaseline(bytes, bom);
         }
@@ -164,9 +173,9 @@ public sealed class DocumentFile
         try
         {
             if (DiskChanged()) throw new FileConflictException();
-            RejectReparseComponents(source);
-            RejectReparseComponents(target);
-            using var guard = OpenSafeTarget(source);
+            RejectReparseParents(source);
+            RejectReparseParents(target);
+            using var guard = OpenRenameGuard(ResolveFinalPath(source));
             if (DiskChanged()) throw new FileConflictException();
             if (!SamePath(source, target))
             {
@@ -191,6 +200,7 @@ public sealed class DocumentFile
                 }
             }
             Path = target;
+            _loadedResolvedPath = ResolveFinalPath(target);
             SuggestedName = null;
             ChangeVersion++;
         }
@@ -200,7 +210,8 @@ public sealed class DocumentFile
     }
 
     public DocumentSnapshot CaptureSnapshot() => new(1, Id, Path, SuggestedName, Text,
-        Codec, LineEnding, _baselineText, _baselineCodec, _baselineLineEnding, _baselineDigest, _hadBom, _wasSaved);
+        Codec, LineEnding, _baselineText, _baselineCodec, _baselineLineEnding, _baselineDigest, _hadBom, _wasSaved,
+        _loadedResolvedPath);
 
     // Must run on the document's owning thread. The replacement was safely opened on
     // a worker; transfer its raw mixed-ending bytes as well as its digest/BOM baseline.
@@ -217,11 +228,41 @@ public sealed class DocumentFile
         _baselineCodec = replacement._baselineCodec;
         _baselineLineEnding = replacement._baselineLineEnding;
         _baselineDigest = replacement._baselineDigest;
+        _loadedResolvedPath = replacement._loadedResolvedPath;
         _hadBom = replacement._hadBom;
         _wasSaved = replacement._wasSaved;
         _originalMixedBytes = replacement._originalMixedBytes;
         ChangeVersion++;
         return true;
+    }
+
+    /// <summary>
+    /// Replaces the loaded disk version while keeping this document's identity.
+    /// This is used by "reopen with encoding": bookmarks, annotations, recovery
+    /// metadata, and the active tab must continue to refer to the same document.
+    /// </summary>
+    public void ReplaceWith(DocumentFile replacement)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (!_wasSaved || Path is null || replacement.Path is null
+            || !SamePath(Path, replacement.Path)
+            || !replacement._wasSaved || replacement.IsDirty)
+            throw new InvalidOperationException("只能用同一磁盘文件的干净版本替换当前文档。");
+
+        _text = replacement._text;
+        Path = replacement.Path;
+        SuggestedName = replacement.SuggestedName;
+        _codec = replacement._codec;
+        _lineEnding = replacement._lineEnding;
+        _baselineText = replacement._baselineText;
+        _baselineCodec = replacement._baselineCodec;
+        _baselineLineEnding = replacement._baselineLineEnding;
+        _baselineDigest = replacement._baselineDigest;
+        _loadedResolvedPath = replacement._loadedResolvedPath;
+        _hadBom = replacement._hadBom;
+        _wasSaved = replacement._wasSaved;
+        _originalMixedBytes = replacement._originalMixedBytes;
+        ChangeVersion++;
     }
 
     public static DocumentFile Restore(DocumentSnapshot snapshot)
@@ -243,13 +284,16 @@ public sealed class DocumentFile
         }
         if (snapshot.Path is not null && (!System.IO.Path.IsPathFullyQualified(snapshot.Path) || FullPath(snapshot.Path) != snapshot.Path))
             throw new InvalidDataException("文档快照路径必须是规范的绝对路径。");
+        if (snapshot.ResolvedPath is not null
+            && (!System.IO.Path.IsPathFullyQualified(snapshot.ResolvedPath) || FullPath(snapshot.ResolvedPath) != snapshot.ResolvedPath))
+            throw new InvalidDataException("文档快照物理路径必须是规范的绝对路径。");
         return new DocumentFile(snapshot.Text)
         {
             Id = snapshot.Id, Path = snapshot.Path, SuggestedName = snapshot.SuggestedName,
             Codec = snapshot.Codec, LineEnding = snapshot.LineEnding,
             _baselineText = snapshot.BaselineText, _baselineCodec = snapshot.BaselineCodec,
             _baselineLineEnding = snapshot.BaselineLineEnding, _baselineDigest = snapshot.BaselineDigest,
-            _hadBom = snapshot.HadBom, _wasSaved = snapshot.WasSaved
+            _hadBom = snapshot.HadBom, _wasSaved = snapshot.WasSaved, _loadedResolvedPath = snapshot.ResolvedPath
         };
     }
 
@@ -402,9 +446,10 @@ public sealed class DocumentFile
             || (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && "123456789¹²³".Contains(stem[3])))
             throw new IOException("文件名是 Windows 保留设备名，请选择其他名称。");
     }
-    private static void RejectReparseComponents(string path)
+    private static void RejectReparseParents(string path)
     {
-        for (string? current = path; current is not null; current = System.IO.Path.GetDirectoryName(current))
+        for (string? current = System.IO.Path.GetDirectoryName(path); current is not null;
+             current = System.IO.Path.GetDirectoryName(current))
         {
             try
             {
@@ -413,6 +458,32 @@ public sealed class DocumentFile
             }
             catch (FileNotFoundException) { }
             catch (DirectoryNotFoundException) { }
+        }
+    }
+    private static string ResolveFinalPath(string path)
+    {
+        if (!File.Exists(path)) return path;
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var capacity = 512;
+        while (true)
+        {
+            var buffer = new StringBuilder(capacity);
+            uint length = GetFinalPathNameByHandle(stream.SafeFileHandle, buffer, (uint)buffer.Capacity, 0);
+            if (length == 0)
+            {
+                var error = Marshal.GetLastWin32Error();
+                throw new IOException("无法解析文件物理路径：" + new Win32Exception(error).Message);
+            }
+            if (length < buffer.Capacity)
+            {
+                var resolved = buffer.ToString();
+                if (resolved.StartsWith(@"\\?\UNC\", StringComparison.Ordinal))
+                    return @"\\" + resolved[8..];
+                if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal))
+                    return resolved[4..];
+                return System.IO.Path.GetFullPath(resolved);
+            }
+            capacity = checked((int)length + 1);
         }
     }
     private static SafeFileHandle OpenSafeTarget(string path)
@@ -436,6 +507,18 @@ public sealed class DocumentFile
         {
             handle.Dispose();
             throw new IOException("文件为链接或存在多个硬链接，请另存为。");
+        }
+        return handle;
+    }
+    private static SafeFileHandle OpenRenameGuard(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0) throw new IOException("文件是只读文件，请另存为。");
+        var handle = CreateFile(path, 0x80000000, 1 | 4, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            throw new IOException("无法取得文件安全句柄，文件可能被占用：" + new Win32Exception(error).Message);
         }
         return handle;
     }
@@ -466,4 +549,6 @@ public sealed class DocumentFile
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation info);
+    [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint length, uint flags);
 }

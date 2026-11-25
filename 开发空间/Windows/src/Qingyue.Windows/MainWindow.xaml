@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:Qingyue.Windows"
         Title="轻阅" Width="1120" Height="790" MinWidth="820" MinHeight="520"
         WindowStartupLocation="CenterScreen" AllowDrop="True" Drop="WindowDrop" DragOver="WindowDragOver"
-        GotKeyboardFocus="TrackTextCommandTarget">
+        GotKeyboardFocus="TrackTextCommandTarget" PreviewKeyDown="WindowPreviewKeyDown">
   <Window.Resources>
     <local:DocumentLabelConverter x:Key="DocumentLabel"/>
     <local:OutlineIndentConverter x:Key="OutlineIndent"/>
@@ -27,19 +27,19 @@
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
     <Menu x:Name="MainMenu" Grid.Column="0" Background="{DynamicResource PanelBrush}">
-      <MenuItem Header="文件(_F)">
+      <MenuItem Header="文件(_F)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
         <MenuItem Header="新建" InputGestureText="Ctrl+N" Tag="new" Click="MenuAction"/>
         <MenuItem Header="打开…" InputGestureText="Ctrl+O" Tag="open" Click="MenuAction"/>
-        <MenuItem x:Name="RecentMenu" Header="最近文件"/>
+        <MenuItem Header="打开工作区…" Tag="openWorkspace" Click="MenuAction"/>
+        <MenuItem x:Name="RecentMenu" Header="最近文件" SubmenuOpened="RecentMenuOpened"/>
         <MenuItem Header="快速打开…" InputGestureText="Ctrl+Shift+P" Tag="quick" Click="MenuAction"/>
         <Separator/>
         <MenuItem Header="保存" InputGestureText="Ctrl+S" Tag="save" Click="MenuAction"/>
         <MenuItem Header="另存为…" InputGestureText="Ctrl+Shift+S" Tag="saveAs" Click="MenuAction"/>
         <MenuItem Header="保存全部" InputGestureText="Ctrl+Alt+S" Tag="saveAll" Click="MenuAction"/>
-        <MenuItem Header="重命名…" InputGestureText="F2" Tag="rename" Click="MenuAction"/>
+        <MenuItem Header="重命名…" Tag="rename" Click="MenuAction"/>
         <MenuItem Header="导出自包含 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
-        <MenuItem Header="导出 Markdown 阅读简报…" Tag="exportBriefMarkdown" Click="MenuAction"/>
-        <MenuItem Header="导出 HTML 阅读简报…" Tag="exportBriefHtml" Click="MenuAction"/>
+        <MenuItem Header="重新载入磁盘文件" InputGestureText="Ctrl+Shift+R" Tag="reload" Click="MenuAction"/>
         <MenuItem Header="按编码重新打开">
           <MenuItem Header="UTF-8" Tag="reopen:Utf8" Click="MenuAction"/>
           <MenuItem Header="UTF-8 BOM" Tag="reopen:Utf8Bom" Click="MenuAction"/>
@@ -51,20 +51,23 @@
         <MenuItem Header="复制文件路径" Tag="copyPath" Click="MenuAction"/>
         <MenuItem Header="在资源管理器中显示" Tag="reveal" Click="MenuAction"/>
         <MenuItem Header="会话与恢复草稿…" Tag="drafts" Click="MenuAction"/>
+        <MenuItem Header="恢复选项">
+          <MenuItem Header="当前文件草稿恢复开关" Tag="toggleCurrentDraft" Click="MenuAction"/>
+          <MenuItem Header="恢复详情…" Tag="recoveryDetails" Click="MenuAction"/>
+        </MenuItem>
         <Separator/>
         <MenuItem Header="关闭当前标签" InputGestureText="Ctrl+W" Tag="close" Click="MenuAction"/>
-        <MenuItem Header="关闭全部标签" Tag="closeAll" Click="MenuAction"/>
-        <MenuItem Header="退出" InputGestureText="Alt+F4" Tag="quit" Click="MenuAction"/>
+        <MenuItem Header="关闭全部标签" InputGestureText="Ctrl+Shift+W" Tag="closeAll" Click="MenuAction"/>
+        <MenuItem Header="退出" InputGestureText="Ctrl+Q" Tag="quit" Click="MenuAction"/>
       </MenuItem>
-      <MenuItem x:Name="EditMenu" Header="编辑(_E)">
-        <MenuItem Header="撤销" Command="ApplicationCommands.Undo"/>
-        <MenuItem Header="重做" Command="ApplicationCommands.Redo" InputGestureText="Ctrl+Y"/>
+      <MenuItem x:Name="EditMenu" Header="编辑(_E)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
+        <MenuItem x:Name="UndoMenuItem" Header="撤销" InputGestureText="Ctrl+Z" Tag="undo" Click="MenuAction"/>
+        <MenuItem x:Name="RedoMenuItem" Header="重做" InputGestureText="Ctrl+Shift+Z" Tag="redo" Click="MenuAction"/>
         <Separator/>
         <MenuItem Header="剪切" Command="ApplicationCommands.Cut"/>
         <MenuItem Header="复制" Command="ApplicationCommands.Copy"/>
         <MenuItem Header="粘贴" Command="ApplicationCommands.Paste"/>
         <MenuItem Header="全选" Command="ApplicationCommands.SelectAll"/>
-        <MenuItem Header="摘录当前选区" InputGestureText="Ctrl+Shift+A" Tag="annotate" Click="MenuAction"/>
         <MenuItem Header="Markdown 复制">
           <MenuItem Header="复制全文（富文本与图片）" Tag="copyReading" Click="MenuAction"/>
           <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
@@ -76,44 +79,88 @@
         <Separator/>
         <MenuItem Header="检查当前文档" Tag="validate" Click="MenuAction"/>
         <MenuItem Header="格式化 / 整理文本" Tag="format" Click="MenuAction" InputGestureText="Ctrl+Alt+F"/>
+        <MenuItem Header="JSON 工具">
+          <MenuItem Header="整理 JSON" InputGestureText="Ctrl+Shift+J" Tag="formatJson" Click="MenuAction"/>
+        </MenuItem>
+        <MenuItem Header="Markdown 编辑">
+          <MenuItem Header="插入表格行" Tag="InsertRow" Click="MarkdownTableClick"/>
+          <MenuItem Header="删除表格行" Tag="DeleteRow" Click="MarkdownTableClick"/>
+          <MenuItem Header="插入表格列" Tag="InsertColumn" Click="MarkdownTableClick"/>
+          <MenuItem Header="删除表格列" Tag="DeleteColumn" Click="MarkdownTableClick"/>
+          <Separator/>
+          <MenuItem Header="左对齐当前列" Tag="AlignLeft" Click="MarkdownTableClick"/>
+          <MenuItem Header="居中当前列" Tag="AlignCenter" Click="MarkdownTableClick"/>
+          <MenuItem Header="右对齐当前列" Tag="AlignRight" Click="MarkdownTableClick"/>
+          <MenuItem Header="切换任务状态" Tag="ToggleTask" Click="MarkdownWritingClick"/>
+          <MenuItem Header="粘贴 TSV 为表格" Tag="PasteTable" Click="MarkdownTableClick"/>
+          <MenuItem Header="插入图片…" Tag="insertMarkdownImage" Click="MenuAction"/>
+        </MenuItem>
+        <MenuItem Header="批注与阅读成果">
+          <MenuItem Header="添加当前批注…" Tag="annotate" Click="MenuAction"/>
+          <MenuItem Header="查看当前文档批注…" Tag="showAnnotations" Click="MenuAction"/>
+          <MenuItem Header="导出 Markdown 阅读简报…" Tag="exportBriefMarkdown" Click="MenuAction"/>
+          <MenuItem Header="导出 HTML 阅读简报…" Tag="exportBriefHtml" Click="MenuAction"/>
+        </MenuItem>
       </MenuItem>
-      <MenuItem Header="搜索(_S)">
+      <MenuItem Header="搜索(_S)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
         <MenuItem Header="查找…" InputGestureText="Ctrl+F" Tag="find" Click="MenuAction"/>
-        <MenuItem Header="替换…" InputGestureText="Ctrl+H" Tag="replace" Click="MenuAction"/>
-        <MenuItem Header="全局搜索…" Tag="globalSearch" Click="MenuAction"/>
-        <MenuItem Header="下一个" InputGestureText="F3" Tag="next" Click="MenuAction"/>
-        <MenuItem Header="上一个" InputGestureText="Shift+F3" Tag="previous" Click="MenuAction"/>
-        <MenuItem Header="跳转行…" InputGestureText="Ctrl+G" Tag="goto" Click="MenuAction"/>
+        <MenuItem Header="替换…" InputGestureText="Ctrl+Shift+H" Tag="replace" Click="MenuAction"/>
+        <MenuItem Header="下一个" InputGestureText="Ctrl+G" Tag="next" Click="MenuAction"/>
+        <MenuItem Header="上一个" InputGestureText="Ctrl+Shift+G" Tag="previous" Click="MenuAction"/>
+        <MenuItem Header="跳转行…" InputGestureText="Ctrl+L" Tag="goto" Click="MenuAction"/>
         <MenuItem Header="文档目录" InputGestureText="Ctrl+Shift+O" Tag="outline" Click="MenuAction"/>
+        <MenuItem Header="添加 / 移除当前位置书签" InputGestureText="Ctrl+D" Tag="bookmark" Click="MenuAction"/>
+        <MenuItem Header="当前文档书签" Tag="currentBookmarks" Click="MenuAction"/>
+        <MenuItem Header="全局搜索工作区…" Tag="globalSearch" Click="MenuAction"/>
         <MenuItem Header="返回跳转前位置" InputGestureText="Alt+←" Tag="returnPosition" Click="MenuAction"/>
       </MenuItem>
-      <MenuItem Header="视图(_V)">
+      <MenuItem Header="视图(_V)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
         <MenuItem Header="阅读 / 编辑" InputGestureText="Ctrl+R" Tag="reading" Click="MenuAction"/>
         <MenuItem Header="专注 / 退出专注" InputGestureText="Ctrl+Shift+F" Tag="focus" Click="MenuAction"/>
         <MenuItem Header="显示 / 隐藏侧栏" InputGestureText="Ctrl+B" Tag="sidebar" Click="MenuAction"/>
         <MenuItem Header="自动折行（仅显示，不改文件）" Tag="wrap" Click="MenuAction"/>
         <MenuItem Header="显示 / 隐藏行号" Tag="lines" Click="MenuAction"/>
+        <MenuItem Header="阅读外观与设置…" InputGestureText="Ctrl+," Tag="appearance" Click="MenuAction"/>
+        <MenuItem Header="阅读清单…" Tag="readingList" Click="MenuAction"/>
+        <MenuItem Header="加入当前文档到阅读清单" Tag="addReadingList" Click="MenuAction"/>
+        <MenuItem Header="标记当前文档已读" Tag="markRead" Click="MenuAction"/>
         <Separator/>
-        <MenuItem Header="切换明暗主题" Tag="theme" Click="MenuAction"/>
-        <MenuItem Header="阅读外观…" Tag="appearance" Click="MenuAction"/>
+        <MenuItem Header="切换明暗主题" InputGestureText="Ctrl+Shift+T" Tag="theme" Click="MenuAction"/>
         <MenuItem Header="增大字号" InputGestureText="Ctrl++" Tag="fontUp" Click="MenuAction"/>
         <MenuItem Header="减小字号" InputGestureText="Ctrl+-" Tag="fontDown" Click="MenuAction"/>
         <MenuItem Header="阅读正文宽度" ToolTip="控制阅读视图每行的宽度，不改变文件内容">
           <MenuItem Header="窄（短行阅读）" Tag="width:560" Click="MenuAction"/><MenuItem Header="适中（推荐）" Tag="width:720" Click="MenuAction"/>
           <MenuItem Header="宽（展示更多）" Tag="width:900" Click="MenuAction"/><MenuItem Header="铺满窗口" Tag="width:5000" Click="MenuAction"/>
         </MenuItem>
+        <MenuItem Header="文档视图">
+          <MenuItem Header="分屏编辑" Tag="markdownPreview" Click="MenuAction"/>
+          <MenuItem Header="JSON 结构" Tag="structure" Click="MenuAction"/>
+        </MenuItem>
       </MenuItem>
-      <MenuItem Header="标签(_T)">
-        <MenuItem Header="下一个标签" InputGestureText="Ctrl+Tab" Tag="nextTab" Click="MenuAction"/>
-        <MenuItem Header="上一个标签" InputGestureText="Ctrl+Shift+Tab" Tag="previousTab" Click="MenuAction"/>
+      <MenuItem Header="标签(_T)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
+        <MenuItem Header="下一个标签" InputGestureText="Ctrl+Shift+]" Tag="nextTab" Click="MenuAction"/>
+        <MenuItem Header="上一个标签" InputGestureText="Ctrl+Shift+[" Tag="previousTab" Click="MenuAction"/>
         <MenuItem Header="向左移动" Tag="moveLeft" Click="MenuAction"/>
         <MenuItem Header="向右移动" Tag="moveRight" Click="MenuAction"/>
+        <MenuItem Header="重命名当前标签…" Tag="rename" Click="MenuAction"/>
         <MenuItem Header="关闭其他标签" Tag="closeOthers" Click="MenuAction"/>
+        <Separator/>
+        <MenuItem Header="切换到标签">
+          <MenuItem Header="标签 1" InputGestureText="Ctrl+1" Tag="tab:1" Click="MenuAction"/>
+          <MenuItem Header="标签 2" InputGestureText="Ctrl+2" Tag="tab:2" Click="MenuAction"/>
+          <MenuItem Header="标签 3" InputGestureText="Ctrl+3" Tag="tab:3" Click="MenuAction"/>
+          <MenuItem Header="标签 4" InputGestureText="Ctrl+4" Tag="tab:4" Click="MenuAction"/>
+          <MenuItem Header="标签 5" InputGestureText="Ctrl+5" Tag="tab:5" Click="MenuAction"/>
+          <MenuItem Header="标签 6" InputGestureText="Ctrl+6" Tag="tab:6" Click="MenuAction"/>
+          <MenuItem Header="标签 7" InputGestureText="Ctrl+7" Tag="tab:7" Click="MenuAction"/>
+          <MenuItem Header="标签 8" InputGestureText="Ctrl+8" Tag="tab:8" Click="MenuAction"/>
+          <MenuItem Header="最后一个标签" InputGestureText="Ctrl+9" Tag="tab:9" Click="MenuAction"/>
+        </MenuItem>
       </MenuItem>
-      <MenuItem Header="帮助(_H)">
+      <MenuItem Header="帮助(_H)" SubmenuOpened="MenuGroupOpened" SubmenuClosed="MenuGroupClosed">
+        <MenuItem Header="检查 Windows 更新…" Tag="update" Click="MenuAction"/>
         <MenuItem Header="Windows 使用说明" Tag="help" Click="MenuAction"/>
         <MenuItem Header="打开与阅读诊断…" Tag="diagnostics" Click="MenuAction"/>
-        <MenuItem Header="检查更新" Tag="update" Click="MenuAction"/>
         <MenuItem Header="关于轻阅" Tag="about" Click="MenuAction"/>
       </MenuItem>
     </Menu>
@@ -130,44 +177,9 @@
           <Button x:Name="OpenButton" Style="{StaticResource CompactButton}" Content="打开文件" Tag="open" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+O"/>
           <Button x:Name="SaveButton" Style="{StaticResource CompactButton}" Content="保存" Tag="save" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+S"/>
           <Button x:Name="ReadingButton" Style="{StaticResource CompactButton}" Content="阅读模式" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0" ToolTip="Ctrl+R"/>
-          <Button x:Name="FocusButton" Style="{StaticResource CompactButton}" Content="专注" Tag="focus" Click="MenuAction" ToolTip="Ctrl+Shift+F"/>
-        </StackPanel>
-      </Grid>
-    </Border>
-    <Border x:Name="ReadingToolbar" Grid.ColumnSpan="2" Panel.ZIndex="2" Visibility="Collapsed"
-            Background="{DynamicResource ReadingPanelBrush}" BorderBrush="{DynamicResource BorderBrush}"
-            BorderThickness="0,0,0,1" Padding="12,5">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto"/>
-          <ColumnDefinition Width="*"/>
-          <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-        <Button Grid.Column="0" Style="{StaticResource CompactButton}" Tag="sidebar" Click="MenuAction" Width="32" Padding="0"
-                ToolTip="显示 / 隐藏侧栏 · Ctrl+B" AutomationProperties.Name="显示或隐藏侧栏">
-          <Path Width="14" Height="14" Stretch="Uniform" Stroke="{DynamicResource TextBrush}"
-                StrokeThickness="1.4" Data="M 1,1 L 15,1 15,15 1,15 Z M 6,1 L 6,15"/>
-        </Button>
-        <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
-          <TextBlock x:Name="ReadingTitle" FontSize="14" FontWeight="SemiBold"
-                     TextTrimming="CharacterEllipsis"/>
-          <TextBlock x:Name="ReadingStatus" FontSize="10" Foreground="{DynamicResource MutedBrush}"
-                     Margin="0,1,0,0" TextTrimming="CharacterEllipsis"/>
-        </StackPanel>
-        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-          <Button Style="{StaticResource CompactButton}" Content="查找" Tag="find" Click="MenuAction" Margin="0,0,6,0" ToolTip="Ctrl+F"/>
-          <Button Style="{StaticResource CompactButton}" Content="目录" Tag="outline" Click="MenuAction" Margin="0,0,6,0" ToolTip="Ctrl+Shift+O"/>
-          <Button Style="{StaticResource CompactButton}" Content="A−" Tag="fontDown" Click="MenuAction" Margin="0,0,6,0" ToolTip="减小字号"/>
-          <Button Style="{StaticResource CompactButton}" Content="A+" Tag="fontUp" Click="MenuAction" Margin="0,0,6,0" ToolTip="增大字号"/>
-          <Button Style="{StaticResource CompactButton}" Content="主题" Tag="theme" Click="MenuAction" Margin="0,0,6,0" ToolTip="切换明暗主题"/>
-          <Button Style="{StaticResource CompactButton}" Content="排版" Tag="appearance" Click="MenuAction" Margin="0,0,6,0" ToolTip="设置阅读字体、行高、段距和主题"/>
-          <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,6,0" ToolTip="摘录选中文本 · Ctrl+Shift+A"/>
-          <Button x:Name="BookmarkButton" Style="{StaticResource CompactButton}" Content="添加书签" Tag="bookmark" Click="MenuAction"
-                  Margin="0,0,6,0" ToolTip="标记当前位置 · Ctrl+D"/>
-          <Button x:Name="ReadingCopyButton" Style="{StaticResource CompactButton}" Content="复制全文" Tag="copyReading" Click="MenuAction"
-                  Visibility="Collapsed" Margin="0,0,6,0" ToolTip="复制富文本、表格和图片"/>
-          <Button Style="{StaticResource CompactButton}" Content="编辑原文" Tag="reading" Click="MenuAction" Background="{DynamicResource AccentBrush}"
-                  Foreground="{DynamicResource AccentForegroundBrush}" ToolTip="进入原文编辑 · Ctrl+R"/>
+          <Button x:Name="FocusButton" Style="{StaticResource CompactButton}" Content="专注" Tag="focus" Click="MenuAction" Margin="0,0,8,0" ToolTip="Ctrl+Shift+F"/>
+          <Button x:Name="SettingsButton" Style="{StaticResource CompactButton}" Content="设置" Tag="appearance" Click="MenuAction"
+                  ToolTip="阅读外观与编辑设置" AutomationProperties.Name="阅读外观与编辑设置"/>
         </StackPanel>
       </Grid>
     </Border>
@@ -185,14 +197,15 @@
                 <StackPanel Orientation="Horizontal" ToolTip="{Binding File.Path}" MouseLeftButtonDown="TabDoubleClick">
                   <StackPanel.ContextMenu>
                     <ContextMenu Opened="TabContextMenuOpened">
-                      <MenuItem Header="关闭当前标签" Tag="closeTab" Click="TabContextAction"/>
+                      <MenuItem Header="重命名…" Tag="rename" Click="TabContextAction"/>
+                      <MenuItem Header="关闭此标签" Tag="closeTab" Click="TabContextAction"/>
                       <MenuItem Header="关闭其他标签" Tag="closeOthers" Click="TabContextAction"/>
-                      <MenuItem Header="关闭右侧标签" Tag="closeRight" Click="TabContextAction"/>
-                      <Separator/>
+                      <MenuItem Header="关闭全部标签" Tag="closeAll" Click="TabContextAction"/>
                       <MenuItem Header="向左移动" Tag="moveLeft" Click="TabContextAction"/>
                       <MenuItem Header="向右移动" Tag="moveRight" Click="TabContextAction"/>
-                      <Separator/>
-                      <MenuItem Header="复制文件路径" Tag="copyPath" Click="TabContextAction"/>
+                      <MenuItem Header="切换此文件草稿恢复" Tag="toggleCurrentDraft"
+                                IsCheckable="True" Click="TabContextAction"/>
+                      <MenuItem Header="复制路径" Tag="copyPath" Click="TabContextAction"/>
                       <MenuItem Header="在资源管理器中显示" Tag="revealPath" Click="TabContextAction"/>
                     </ContextMenu>
                   </StackPanel.ContextMenu>
@@ -229,6 +242,11 @@
           <CheckBox x:Name="RegexOption" Content="正则" Click="SearchOptionChanged"/>
           <CheckBox x:Name="WordOption" Content="全词" Click="SearchOptionChanged"/>
           <TextBlock x:Name="SearchCount" Text="输入查找内容" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+          <ProgressBar x:Name="SearchProgressBar" Width="120" Height="6" Minimum="0" Maximum="100"
+                       Margin="12,0,0,0" VerticalAlignment="Center" Visibility="Collapsed"
+                       AutomationProperties.Name="查找进度"/>
+          <Button x:Name="SearchCancelButton" Content="取消查找" Tag="cancelSearch" Click="MenuAction"
+                  Margin="12,0,0,0" MinHeight="26" Padding="8,2" Visibility="Collapsed"/>
         </StackPanel>
         <Grid x:Name="ReplacePanel" Margin="0,8,0,0" Visibility="Collapsed">
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -247,21 +265,39 @@
             <TabItem x:Name="WorkspaceTab" Header="工作区">
               <Grid Margin="0,12,0,0">
                 <Grid.RowDefinitions>
-                  <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                  <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <StackPanel Orientation="Horizontal">
-                  <Button Content="打开文件夹" Tag="openWorkspace" Click="MenuAction" Padding="8,3" Margin="0,0,6,0"/>
-                  <Button Content="全局搜索" Tag="globalSearch" Click="MenuAction" Padding="8,3"/>
-                </StackPanel>
-                <Grid Grid.Row="1" Margin="0,8,0,0">
+                <WrapPanel>
+                  <Button Content="打开文件夹" Tag="openWorkspace" Click="MenuAction" Padding="8,3" Margin="0,0,6,4"/>
+                  <Button Content="重新扫描" Click="WorkspaceRescanClick" Padding="8,3" Margin="0,0,6,4"/>
+                  <Button x:Name="WorkspaceFavoriteButton" Content="收藏目录" Click="WorkspaceFavoriteCurrentClick"
+                          Padding="8,3" Margin="0,0,6,4"/>
+                  <Button Content="全局搜索" Tag="globalSearch" Click="MenuAction" Padding="8,3" Margin="0,0,0,4"/>
+                </WrapPanel>
+                <Grid Grid.Row="1" Margin="0,6,0,0">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                  <TextBlock Text="收藏目录" VerticalAlignment="Center" Margin="0,0,8,0"
+                             Foreground="{DynamicResource MutedBrush}"/>
+                  <ComboBox x:Name="WorkspaceFavoritePicker" Grid.Column="1"
+                            DisplayMemberPath="Label" SelectionChanged="WorkspaceFavoriteSelected"
+                            ToolTip="切换到已收藏的工作区目录"
+                            AutomationProperties.Name="收藏目录"/>
+                </Grid>
+                <TextBox x:Name="WorkspaceFilter" Grid.Row="2" Margin="0,8,0,0" TextChanged="WorkspaceFilterChanged"
+                         ToolTip="按文件名或路径过滤，例如 report 或 *.md"
+                         AutomationProperties.Name="工作区文件名过滤"/>
+                <Grid Grid.Row="3" Margin="0,6,0,0">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                  <TextBox x:Name="WorkspaceFilter" TextChanged="WorkspaceFilterChanged"
-                           ToolTip="按文件名过滤，例如 *.md;*.txt" AutomationProperties.Name="工作区文件名过滤"/>
+                  <TextBox x:Name="WorkspaceExtensionFilter" TextChanged="WorkspaceExtensionFilterChanged"
+                           ToolTip="按扩展名过滤，例如 md,txt,json"
+                           AutomationProperties.Name="工作区类型过滤"/>
                   <ComboBox x:Name="WorkspaceTypeFilter" Grid.Column="1" Width="92" Margin="6,0,0,0"
                             DisplayMemberPath="Name" SelectionChanged="WorkspaceTypeChanged"
                             ToolTip="按类型过滤" AutomationProperties.Name="工作区类型过滤"/>
                 </Grid>
-                <TreeView x:Name="WorkspaceTree" Grid.Row="2" Margin="0,10,0,0"
+                <TreeView x:Name="WorkspaceTree" Grid.Row="4" Margin="0,10,0,0"
                           MouseDoubleClick="WorkspaceDoubleClick">
                   <TreeView.Resources>
                     <HierarchicalDataTemplate DataType="{x:Type local:WorkspaceNode}" ItemsSource="{Binding Children}">
@@ -310,6 +346,9 @@
             <TabItem Header="最近打开">
               <Grid Margin="0,12,0,0">
                 <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TextBlock x:Name="RecentEmptyHint" Text="打开文件后&#x0a;会显示在这里"
+                           Foreground="{DynamicResource MutedBrush}" FontSize="12"
+                           TextWrapping="Wrap" Visibility="Collapsed"/>
                 <ListBox x:Name="RecentList" MouseDoubleClick="RecentDoubleClick" KeyDown="RecentKeyDown">
                   <ListBox.ItemTemplate>
                     <DataTemplate>
@@ -329,7 +368,7 @@
                 <Button Grid.Row="1" Content="清除最近记录" Tag="clearRecent" Click="MenuAction" FontSize="11" Margin="0,14,0,0"/>
               </Grid>
             </TabItem>
-            <TabItem Header="书签">
+            <TabItem x:Name="BookmarksTab" Header="书签">
               <ListBox x:Name="BookmarksList" Margin="0,12,0,0"
                        MouseDoubleClick="BookmarkDoubleClick" KeyDown="BookmarkKeyDown">
                 <ListBox.ItemTemplate>
@@ -399,99 +438,62 @@
       </Border>
       <Grid Grid.Column="1">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <Border x:Name="EditOnlyTools" Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,4">
-          <Grid>
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Border x:Name="ContextToolbar" Background="{DynamicResource MainBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,4">
+          <WrapPanel HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction"
+                    Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0"/>
+            <Button x:Name="StructureButton" Style="{StaticResource CompactButton}" Content="JSON 结构" Tag="structure"
+                    Click="MenuAction" Margin="0,0,8,0" Visibility="Collapsed"
+                    ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
+            <Button x:Name="MarkdownButton" Style="{StaticResource CompactButton}" Content="分屏编辑" Tag="markdownPreview"
+                    Click="MenuAction" Margin="0,0,8,0" Visibility="Collapsed"
+                    ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
+            <Button x:Name="CopyReadingButton" Style="{StaticResource CompactButton}" Content="复制全文（含图片）"
+                    Tag="copyReading" Click="MenuAction" Margin="0,0,8,0" Visibility="Collapsed"
+                    ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
+            <Menu x:Name="CopyOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0" VerticalAlignment="Center"
+                  AutomationProperties.Name="复制 / 导出">
+              <MenuItem Header="复制 / 导出 ▾">
+                <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
+                <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
+                <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
+                <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
+                <MenuItem Header="导出 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
+              </MenuItem>
+            </Menu>
+            <Menu x:Name="MarkdownEditOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0"
+                  VerticalAlignment="Center" AutomationProperties.Name="Markdown 编辑">
+              <MenuItem Header="Markdown 编辑 ▾">
+                <MenuItem Header="插入表格行" Tag="InsertRow" Click="MarkdownTableClick"/>
+                <MenuItem Header="删除表格行" Tag="DeleteRow" Click="MarkdownTableClick"/>
+                <MenuItem Header="插入表格列" Tag="InsertColumn" Click="MarkdownTableClick"/>
+                <MenuItem Header="删除表格列" Tag="DeleteColumn" Click="MarkdownTableClick"/>
+                <MenuItem Header="左对齐当前列" Tag="AlignLeft" Click="MarkdownTableClick"/>
+                <MenuItem Header="居中当前列" Tag="AlignCenter" Click="MarkdownTableClick"/>
+                <MenuItem Header="右对齐当前列" Tag="AlignRight" Click="MarkdownTableClick"/>
+                <MenuItem Header="粘贴 TSV 为表格" Tag="PasteTable" Click="MarkdownTableClick"/>
+                <MenuItem Header="插入图片…" Tag="insertMarkdownImage" Click="MenuAction"/>
+              </MenuItem>
+            </Menu>
+            <Button x:Name="ReturnPositionButton" Style="{StaticResource CompactButton}" Content="返回位置"
+                    Tag="returnPosition" Click="MenuAction" Margin="0,0,10,0" IsEnabled="False"
+                    ToolTip="返回目录跳转前的阅读位置 · Alt+←"/>
             <TextBlock x:Name="PresentationHint" FontSize="11" Foreground="{DynamicResource MutedBrush}"
-                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
-            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
-              <Button x:Name="FormatButton" Style="{StaticResource CompactButton}" Content="格式化" Tag="format" Click="MenuAction" Background="{DynamicResource AccentBrush}" Foreground="{DynamicResource AccentForegroundBrush}" Margin="0,0,8,0"/>
-              <Button Style="{StaticResource CompactButton}" Content="摘录" Tag="annotate" Click="MenuAction" Margin="0,0,8,0"
-                      ToolTip="摘录选中文本 · Ctrl+Shift+A"/>
-              <Button x:Name="StructureButton" Style="{StaticResource CompactButton}" Content="JSON 结构" Tag="structure" Click="MenuAction" Margin="0,0,14,0" ToolTip="只读查看 JSON 层级，可展开、折叠；保持原文"/>
-              <Button x:Name="MarkdownButton" Style="{StaticResource CompactButton}" Content="分屏编辑" Tag="markdownPreview" Click="MenuAction" Margin="0,0,14,0" ToolTip="可选：左右分屏编辑与预览。打开 Markdown 默认全宽预览"/>
-              <Button x:Name="CopyReadingButton" Style="{StaticResource CompactButton}" Content="复制全文（含图片）" Tag="copyReading" Click="MenuAction" Margin="0,0,14,0" Visibility="Collapsed" ToolTip="复制阅读内容、表格和已加载图片；粘贴效果取决于目标应用"/>
-              <Menu x:Name="CopyOptionsMenu" Visibility="Collapsed" Margin="0,0,8,0" VerticalAlignment="Center">
-                <MenuItem Header="复制 / 导出 ▾">
-                  <MenuItem Header="复制全文纯文本" Tag="copyPlain" Click="MenuAction"/>
-                  <MenuItem Header="复制 Markdown 源文" Tag="copyMarkdown" Click="MenuAction"/>
-                  <MenuItem Header="复制当前代码块" Tag="copyCodeBlock" Click="MenuAction"/>
-                  <MenuItem Header="复制当前表格" Tag="copyTable" Click="MenuAction"/>
-                  <Separator/>
-                  <MenuItem Header="导出 HTML（含图片）…" Tag="exportHtml" Click="MenuAction"/>
-                </MenuItem>
-              </Menu>
-              <Button x:Name="ReturnPositionButton" Style="{StaticResource CompactButton}" Content="返回位置" Tag="returnPosition" Click="MenuAction" Margin="0,0,8,0" IsEnabled="False" ToolTip="返回目录跳转前的阅读位置 · Alt+←"/>
-            </WrapPanel>
-          </Grid>
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0" MaxWidth="360"/>
+            <Border x:Name="MarkdownWritingStateBadge" Margin="0,0,10,0" Padding="8,3"
+                    Background="{DynamicResource SelectionBrush}" CornerRadius="9"
+                    VerticalAlignment="Center" Visibility="Collapsed">
+              <TextBlock x:Name="MarkdownWritingState" FontSize="11"
+                         Foreground="{DynamicResource TextBrush}" AutomationProperties.Name="当前Markdown块状态"/>
+            </Border>
+            <TextBlock x:Name="MarkdownWritingHint" VerticalAlignment="Center" FontSize="11"
+                       Foreground="{DynamicResource AccentTextBrush}"
+                       Text="- + 空格 → 圆点 · Tab / Shift+Tab 调整层级"
+                       AutomationProperties.Name="Markdown编辑提示" Visibility="Collapsed"/>
+          </WrapPanel>
         </Border>
         <StackPanel Grid.Row="1">
-          <Border x:Name="MarkdownWritingToolbar" Visibility="Collapsed" Padding="10,5"
-                  Background="{DynamicResource MainBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-            <WrapPanel VerticalAlignment="Center">
-              <Menu VerticalAlignment="Center" Margin="0,0,4,0">
-                <MenuItem Header="标题 ▾">
-                  <MenuItem Header="一级标题" Tag="Heading1" Click="MarkdownWritingClick" InputGestureText="Ctrl+Alt+1"/>
-                  <MenuItem Header="二级标题" Tag="Heading2" Click="MarkdownWritingClick" InputGestureText="Ctrl+Alt+2"/>
-                  <MenuItem Header="三级标题" Tag="Heading3" Click="MarkdownWritingClick" InputGestureText="Ctrl+Alt+3"/>
-                </MenuItem>
-                <MenuItem Header="列表 ▾">
-                  <MenuItem Header="• 无序列表" Tag="Unordered" Click="MarkdownWritingClick"/>
-                  <MenuItem Header="1. 有序列表" Tag="Ordered" Click="MarkdownWritingClick"/>
-                  <MenuItem Header="☐ 任务列表" Tag="Task" Click="MarkdownWritingClick"/>
-                  <MenuItem Header="切换任务状态" Tag="ToggleTask" Click="MarkdownWritingClick" InputGestureText="Ctrl+Shift+Space"/>
-                </MenuItem>
-                <MenuItem Header="表格 ▾" AutomationProperties.Name="Markdown表格编辑">
-                  <MenuItem Header="插入表格" Tag="InsertTable" Click="MarkdownTableClick"/>
-                  <MenuItem Header="粘贴为表格" Tag="PasteTable" Click="MarkdownTableClick" ToolTip="将 Excel 等复制的制表符文本转换为 Markdown 表格"/>
-                  <Separator/>
-                  <MenuItem Header="下一单元格" Tag="NextCell" Click="MarkdownTableClick" InputGestureText="Tab"/>
-                  <MenuItem Header="上一单元格" Tag="PreviousCell" Click="MarkdownTableClick" InputGestureText="Shift+Tab"/>
-                  <MenuItem Header="在下方插入行" Tag="InsertRow" Click="MarkdownTableClick" InputGestureText="Enter"/>
-                  <MenuItem Header="删除当前行" Tag="DeleteRow" Click="MarkdownTableClick"/>
-                  <MenuItem Header="在右侧插入列" Tag="InsertColumn" Click="MarkdownTableClick"/>
-                  <MenuItem Header="删除当前列" Tag="DeleteColumn" Click="MarkdownTableClick"/>
-                  <Separator/>
-                  <MenuItem Header="当前列左对齐" Tag="AlignLeft" Click="MarkdownTableClick"/>
-                  <MenuItem Header="当前列居中" Tag="AlignCenter" Click="MarkdownTableClick"/>
-                  <MenuItem Header="当前列右对齐" Tag="AlignRight" Click="MarkdownTableClick"/>
-                </MenuItem>
-              </Menu>
-              <Button x:Name="MarkdownBoldButton" Style="{StaticResource CompactButton}" Content="B" FontWeight="Bold"
-                      Tag="Bold" Click="MarkdownWritingClick" ToolTip="加粗 · Ctrl+B" AutomationProperties.Name="加粗"/>
-              <Button Style="{StaticResource CompactButton}" Content="I" FontStyle="Italic"
-                      Tag="Italic" Click="MarkdownWritingClick" ToolTip="斜体 · Ctrl+I" AutomationProperties.Name="斜体"/>
-              <Button Style="{StaticResource CompactButton}" Content="链接" Tag="Link" Click="MarkdownWritingClick" ToolTip="插入链接 · Ctrl+K"/>
-              <Button Style="{StaticResource CompactButton}" Content="图片" Click="MarkdownImageClick"
-                      ToolTip="选择图片，或直接粘贴截图、拖入单张图片" AutomationProperties.Name="插入本地图片"/>
-              <Button Style="{StaticResource CompactButton}" Content="引用" Tag="Quote" Click="MarkdownWritingClick" ToolTip="引用 · Ctrl+Shift+Q"/>
-              <Menu VerticalAlignment="Center" Margin="2,0">
-                <MenuItem Header="代码 ▾">
-                  <MenuItem Header="行内代码" Tag="InlineCode" Click="MarkdownWritingClick" InputGestureText="Ctrl+`"/>
-                  <MenuItem Header="代码块" Tag="CodeBlock" Click="MarkdownWritingClick" InputGestureText="Ctrl+Shift+`"/>
-                </MenuItem>
-              </Menu>
-              <Button Style="{StaticResource CompactButton}" Content="←" Tag="Outdent" Click="MarkdownWritingClick"
-                      ToolTip="列表升一级 · Shift+Tab" AutomationProperties.Name="列表升一级"/>
-              <Button Style="{StaticResource CompactButton}" Content="→" Tag="Indent" Click="MarkdownWritingClick"
-                      ToolTip="列表降一级 · Tab" AutomationProperties.Name="列表降一级"/>
-              <Menu x:Name="MarkdownLocateMenu" VerticalAlignment="Center" Margin="2,0">
-                <MenuItem Header="定位 ▾">
-                  <MenuItem Header="在预览定位当前编辑位置" Tag="preview" Click="MarkdownLocateClick"/>
-                  <MenuItem Header="在原文定位当前预览位置" Tag="editor" Click="MarkdownLocateClick"/>
-                </MenuItem>
-              </Menu>
-              <Border x:Name="MarkdownWritingStateBadge" Margin="10,0,0,0" Padding="8,3"
-                      Background="{DynamicResource SelectionBrush}" CornerRadius="9"
-                      VerticalAlignment="Center">
-                <TextBlock x:Name="MarkdownWritingState" FontSize="11"
-                           Foreground="{DynamicResource TextBrush}" AutomationProperties.Name="当前Markdown块状态"/>
-              </Border>
-              <TextBlock x:Name="MarkdownWritingHint" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="11"
-                         Foreground="{DynamicResource AccentTextBrush}" Text="- + 空格 → 圆点 · Tab / Shift+Tab 调整层级"
-                         AutomationProperties.Name="Markdown编辑提示"/>
-            </WrapPanel>
-          </Border>
           <Border x:Name="OperationPanel" Visibility="Collapsed" Padding="14,8" Background="{DynamicResource PanelBrush}">
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -528,7 +530,7 @@
         <ContentControl x:Name="DocumentHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
       </Grid>
     </Grid>
-    <Border Grid.Row="4" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,7">
+    <Border x:Name="Footer" Grid.Row="4" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,7">
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center">

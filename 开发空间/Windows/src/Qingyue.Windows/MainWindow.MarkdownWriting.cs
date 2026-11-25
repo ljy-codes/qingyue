@@ -74,8 +74,9 @@ public partial class MainWindow
     private void RefreshMarkdownWriting()
     {
         bool writing = CurrentTab is { Kind: TextKind.Markdown, IsReading: false };
-        MarkdownWritingToolbar.Visibility = writing ? Visibility.Visible : Visibility.Collapsed;
-        MarkdownLocateMenu.IsEnabled = writing && CurrentTab == markdownTab && markdownPreview is not null;
+        MarkdownEditOptionsMenu.Visibility = writing ? Visibility.Visible : Visibility.Collapsed;
+        MarkdownWritingStateBadge.Visibility = writing ? Visibility.Visible : Visibility.Collapsed;
+        MarkdownWritingHint.Visibility = writing ? Visibility.Visible : Visibility.Collapsed;
         if (!writing || CurrentTab is not { } tab) return;
         string text = tab.Editor.Text;
         int caret = Math.Clamp(tab.Editor.CaretIndex, 0, text.Length);

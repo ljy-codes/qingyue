@@ -20,15 +20,29 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Windows 非法文件名设备名", () => Run(InvalidNames)),
     ("快照恢复与损坏快照拒绝", () => Run(SnapshotRoundTrip)),
     ("硬链接拒绝原位写与另存", () => Run(HardLinkSafety)),
+    ("符号链接保存写穿目标并保留链接", () => Run(SymbolicLinkSave)),
+    ("符号链接重定向被视为外部冲突", () => Run(SymbolicLinkRetargetConflict)),
+    ("符号链接重命名只移动链接本身", () => Run(SymbolicLinkRename)),
     ("会话干净重读与脏稿优先", SessionAndDraft),
     ("快照集合复制与串行保存", SnapshotCopy),
     ("损坏草稿隔离并继续恢复", QuarantineDraft),
     ("孤立草稿找回与重复路径副本", OrphansAndDuplicates),
+    ("会话顺序活动标签与阅读位置", SessionMetadataAndViewState),
+    ("关闭标签只删除对应旧草稿", ClosingTabKeepsOtherDrafts),
+    ("缺失路径与重复引用独立告警", MissingAndDuplicateReferences),
+    ("单个草稿失败不影响其他草稿", IndividualDraftFailure),
     ("版本与重复 ID 校验", InvalidWorkspace),
     ("200文档及150MiB草稿限额", Limits),
+    ("总量预算失败隔离并保留旧稿", AggregateDraftBudgetIsolation),
     ("先草稿后会话再清理与失败保护", SaveFailureOrder),
     ("清除草稿阻止已排队写复活", ClearQueue),
+    ("清除草稿同时清理隔离区明文", ClearQuarantineDrafts),
+    ("旧版恢复迁移与显式空会话", LegacyRecoveryMigration),
+    ("崩溃窗口孤立脏稿覆盖干净会话", OrphanDirtyDraftSupersedesClean),
+    ("同路径两份脏稿独立恢复", TwoDirtyDraftsAtSamePath),
+    ("损坏大草稿不消耗成功恢复预算", DamagedLargeDraftBudget),
     ("干净 UTF16 无 BOM 会话恢复保留编码", CleanEncodingSession),
+    ("不含快照的后续保存保留编码提示", CleanEncodingSurvivesMinimalSave),
     ("干净 Mixed 会话恢复仍能原字节保存", CleanMixedSession),
     ("恢复时拒绝草稿与会话路径错配", DraftPathMismatch),
     ("符号链接与父目录重解析点拒绝写入", () => Run(ReparseSafety)),
@@ -36,15 +50,26 @@ var tests = new (string Name, Func<Task> Run)[]
     ("不成对代理字符保存拒绝并保留编辑", () => Run(InvalidSurrogates)),
     ("本地工作区扫描忽略规则与过滤", WorkspaceScanning),
     ("全局搜索上下文与替换预览", GlobalSearching),
+    ("全局搜索硬上限与 macOS 一致", GlobalSearchHardLimit),
+    ("全局搜索没有 Windows 独有文件数限制", GlobalSearchNoExtraFileLimit),
+    ("全局替换基线冲突与格式保持", GlobalReplacementSafety),
     ("阅读清单持久化与状态恢复", ReadingListPersistence),
+    ("阅读清单超限、重复和负位置拒绝而不静默修复", ReadingListIntegrity),
+    ("会话元数据采用 macOS 2 MiB 上限", WorkspaceSessionTwoMegabytes),
 };
 int failures = 0;
+int skipped = 0;
 foreach (var (name, run) in tests)
 {
     try { await run(); Console.WriteLine("PASS " + name); }
+    catch (TestSkippedException ex)
+    {
+        skipped++;
+        Console.WriteLine($"SKIP {name}：{ex.Message}");
+    }
     catch (Exception ex) { failures++; Console.Error.WriteLine($"FAIL {name}\n{ex}"); }
 }
-Console.WriteLine($"RESULT {tests.Length - failures}/{tests.Length} passed");
+Console.WriteLine($"RESULT {tests.Length - failures - skipped}/{tests.Length} passed; {skipped} skipped");
 return failures == 0 ? 0 : 1;
 
 static Task Run(Action action) { action(); return Task.CompletedTask; }
@@ -250,6 +275,8 @@ static async Task WorkspaceScanning()
     Directory.CreateDirectory(tmp.File("obj"));
     Directory.CreateDirectory(tmp.File(".git"));
     File.WriteAllText(tmp.File("README.md"), "needle");
+    File.WriteAllText(tmp.File("file10.md"), "needle");
+    File.WriteAllText(tmp.File("file2.md"), "needle");
     File.WriteAllText(tmp.File("src/nested/code.cs"), "needle");
     File.WriteAllText(tmp.File("src/image.bin"), "\0binary");
     File.WriteAllText(tmp.File("bin/ignored.txt"), "needle");
@@ -269,6 +296,11 @@ static async Task WorkspaceScanning()
     Check(nameFiltered.Entries.Any(entry => entry.RelativePath == "README.md") &&
         !nameFiltered.Entries.Any(entry => entry.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)),
         "文件名过滤未生效");
+    var dottedExtension = await scanner.ScanAsync(tmp.Root,
+        new WorkspaceScanOptions(ExtensionFilter: "..MD.."));
+    Check(dottedExtension.Entries.Select(entry => entry.RelativePath)
+            .SequenceEqual(["file2.md", "file10.md", "README.md"]),
+        "工作区类型过滤应去除首尾点号并按自然顺序返回文件");
 }
 
 static async Task GlobalSearching()
@@ -281,12 +313,34 @@ static async Task GlobalSearching()
 
     var engine = new GlobalSearchEngine();
     var result = await engine.SearchAsync(tmp.Root, "needle", new GlobalSearchOptions(
-        FileNamePattern: "*.*", Search: new SearchOptions()));
+        FileNamePattern: "*.*", Search: new SearchOptions(), ContextLines: 1));
     Check(result.Matches.Count == 3, "跨文件搜索匹配数量不正确");
     var match = result.Matches.Single(item => item.Path.EndsWith("one.md", StringComparison.OrdinalIgnoreCase));
     Check(match.LineNumber == 2 && match.LineText.Contains("needle alpha") &&
         match.BeforeContext.Contains("第一行") && match.AfterContext.Contains("第三行"),
         "搜索上下文或行号不正确");
+    Check(match.SourceStart == 4 && match.SourceLength == 6 &&
+        match.Preview.Contains("needle alpha", StringComparison.Ordinal),
+        "全局搜索必须保存规范化 LF 源文范围和行内预览");
+
+    string unicodePath = tmp.File("unicode.md");
+    File.WriteAllText(unicodePath, "零\r\n中文😀needle尾");
+    var unicode = await engine.SearchAsync(tmp.Root, "needle", new GlobalSearchOptions(
+        FileNameContains: "unicode.md"));
+    var unicodeMatch = unicode.Matches.Single();
+    Check(unicodeMatch.LineNumber == 2 && unicodeMatch.ColumnNumber == 5 &&
+        unicodeMatch.SourceStart == 6 && unicodeMatch.SourceLength == 6 &&
+        unicodeMatch.Preview == "中文😀needle尾",
+        "CRLF、中文和 emoji 必须使用编辑器规范化 LF 的 UTF-16 坐标");
+
+    string boundaryPath = tmp.File("preview-boundary.md");
+    File.WriteAllText(boundaryPath, new string('a', 1023) + "😀needle");
+    var boundary = await engine.SearchAsync(tmp.Root, "needle", new GlobalSearchOptions(
+        FileNameContains: "preview-boundary.md"));
+    string boundedPreview = boundary.Matches.Single().Preview;
+    Check(boundedPreview.EndsWith('…') && boundedPreview.Length == 1024 &&
+        !boundedPreview.Any(char.IsSurrogate),
+        "1024 UTF-16 预览边界不得切断代理对，并在截断后追加省略号");
 
     var regex = await engine.SearchAsync(tmp.Root, "needle (?<word>\\w+)",
         new GlobalSearchOptions(Search: new SearchOptions(Regex: true), Replacement: "$1"));
@@ -296,12 +350,93 @@ static async Task GlobalSearching()
         "替换预览未生成");
 }
 
+static async Task GlobalSearchHardLimit()
+{
+    using var tmp = new TempDirectory();
+    File.WriteAllText(tmp.File("many.txt"), new string('a', 10_001));
+    var engine = new GlobalSearchEngine();
+    var result = await engine.SearchAsync(tmp.Root, "a", new GlobalSearchOptions(
+        FileNamePattern: "*.txt",
+        MaximumMatches: 100_000,
+        BuildReplacementPreview: false));
+    Check(result.Matches.Count == 10_000 &&
+        result.Warnings.Any(warning => warning.Contains("10,000", StringComparison.Ordinal)),
+        "搜索请求上限高于 10,000 时仍按 macOS 硬上限截断");
+
+    var error = await ThrowsAsync<InvalidOperationException>(() =>
+        engine.SearchAsync(tmp.Root, "a", new GlobalSearchOptions(
+            FileNamePattern: "*.txt",
+            Replacement: "b",
+            MaximumMatches: 100_000,
+            BuildReplacementPreview: true)));
+    Check(error.Message.Contains("10,000", StringComparison.Ordinal),
+        "替换预览超过 10,000 处时按 macOS 硬上限拒绝");
+}
+
+static Task GlobalSearchNoExtraFileLimit()
+{
+    Check(typeof(GlobalSearchOptions).GetProperty("MaximumFiles") is null,
+        "全局搜索选项不得保留 macOS 不存在的 MaximumFiles");
+    return Task.CompletedTask;
+}
+
+static async Task<T> ThrowsAsync<T>(Func<Task> action) where T : Exception
+{
+    try { await action(); }
+    catch (T ex) { return ex; }
+    throw new Exception("预期异常未发生：" + typeof(T).Name);
+}
+
+static async Task GlobalReplacementSafety()
+{
+    using var tmp = new TempDirectory();
+    string path = tmp.File("encoded.txt");
+    byte[] original = [0xef, 0xbb, 0xbf, .. Encoding.UTF8.GetBytes("第一行\r\nneedle alpha\r\n第三行\r\n")];
+    File.WriteAllBytes(path, original);
+
+    var engine = new GlobalSearchEngine();
+    var previewResult = await engine.SearchAsync(tmp.Root, "needle", new GlobalSearchOptions(
+        FileNamePattern: "*.txt",
+        Replacement: "stone",
+        BuildReplacementPreview: true));
+    var file = previewResult.Files.Single(item => item.Path == path);
+    Check(file.Preview is not null && file.Preview.MatchCount == 1,
+        "预览必须保留可应用的文档基线和匹配数");
+    var proposal = file.Preview!;
+    proposal.Apply();
+    byte[] expected = [0xef, 0xbb, 0xbf, .. Encoding.UTF8.GetBytes("第一行\r\nstone alpha\r\n第三行\r\n")];
+    EqualBytes(path, expected);
+    Check(proposal.Applied, "成功应用后必须记录已应用状态");
+    Throws<InvalidOperationException>(proposal.Apply);
+
+    var second = await engine.SearchAsync(tmp.Root, "stone", new GlobalSearchOptions(
+        FileNamePattern: "*.txt",
+        Replacement: "needle",
+        BuildReplacementPreview: true));
+    var stale = second.Files.Single(item => item.Path == path).Preview!;
+    byte[] external = [0xef, 0xbb, 0xbf, .. Encoding.UTF8.GetBytes("外部修改\r\nstone beta\r\n")];
+    File.WriteAllBytes(path, external);
+    Throws<FileConflictException>(stale.Apply);
+    EqualBytes(path, external);
+
+    var unchanged = await engine.SearchAsync(tmp.Root, "stone", new GlobalSearchOptions(
+        FileNamePattern: "*.txt",
+        Replacement: "stone",
+        BuildReplacementPreview: true));
+    Check(unchanged.Files.Single(item => item.Path == path).Preview is null,
+        "替换结果未改变文本时不应生成可应用预览");
+}
+
 static async Task ReadingListPersistence()
 {
     using var tmp = new TempDirectory();
     var path = tmp.File("article.md");
     var store = new ReadingListStore(tmp.Root);
-    store.Upsert(path, 42, 128, isRead: false);
+    var added = store.Upsert(path, 42, 128, isRead: false, isPinned: true);
+    Check(added.IsPinned, "新阅读清单记录必须在加入时固定");
+    store.Upsert(path, 100, 128, isRead: true, isPinned: false);
+    Check(!store.Find(path)!.IsPinned && store.Find(path)!.IsRead &&
+        store.Find(path)!.ProgressPercent == 100, "Upsert 必须能同时更新固定和已读状态");
     store.SetPinned(path, true);
     var saved = await store.SaveAsync();
     Check(saved.Errors.Count == 0, string.Join("\n", saved.Errors));
@@ -309,16 +444,84 @@ static async Task ReadingListPersistence()
     var restored = new ReadingListStore(tmp.Root);
     await restored.LoadAsync();
     var item = restored.Find(path);
-    Check(item is not null && item.IsPinned && !item.IsRead &&
-        item.ProgressPercent == 42 && item.SourceAnchor == 128, "阅读清单状态未恢复");
-    restored.MarkRead(path, true);
-    Check(restored.Find(path)!.IsRead, "已读状态未更新");
+    Check(item is not null && item.IsPinned && item.IsRead &&
+        item.ProgressPercent == 100 && item.SourceAnchor == 128, "阅读清单状态未恢复");
+    restored.MarkRead(path, false);
+    Check(!restored.Find(path)!.IsRead, "未读状态未更新");
     File.WriteAllText(tmp.File("ReadingList.json"), "{bad");
     var damaged = new ReadingListStore(tmp.Root);
     await damaged.LoadAsync();
     Check(damaged.Items.Count == 0 && damaged.LastWarning is not null &&
         Directory.GetFiles(tmp.Root, "ReadingList.json.corrupt-*").Length == 1,
         "损坏阅读清单未隔离");
+}
+
+static async Task ReadingListIntegrity()
+{
+    using var tmp = new TempDirectory();
+    string article = tmp.File("article.md");
+
+    string duplicateRoot = Path.Combine(tmp.Root, "duplicate");
+    Directory.CreateDirectory(duplicateRoot);
+    var duplicateNow = DateTimeOffset.UtcNow;
+    var duplicateEntries = new[]
+    {
+        new ReadingListEntry(Guid.NewGuid(), article, false, false, 10, 0, duplicateNow, duplicateNow),
+        new ReadingListEntry(Guid.NewGuid(), article, true, false, 20, 0, duplicateNow, duplicateNow)
+    };
+    File.WriteAllText(Path.Combine(duplicateRoot, "ReadingList.json"),
+        JsonSerializer.Serialize(duplicateEntries));
+    var duplicateStore = new ReadingListStore(duplicateRoot);
+    await duplicateStore.LoadAsync();
+    Check(duplicateStore.Items.Count == 0 && duplicateStore.LastWarning is not null
+        && Directory.GetFiles(duplicateRoot, "ReadingList.json.corrupt-*").Length == 1,
+        "重复路径的阅读清单必须隔离，不能静默挑选其中一条");
+
+    string oversizedRoot = Path.Combine(tmp.Root, "oversized");
+    Directory.CreateDirectory(oversizedRoot);
+    var oversized = Enumerable.Range(0, 501)
+        .Select(index => new ReadingListEntry(
+            Guid.NewGuid(), Path.Combine(tmp.Root, "article-" + index + ".md"),
+            false, false, 0, 0, duplicateNow, duplicateNow))
+        .ToArray();
+    File.WriteAllText(Path.Combine(oversizedRoot, "ReadingList.json"),
+        JsonSerializer.Serialize(oversized));
+    var oversizedStore = new ReadingListStore(oversizedRoot);
+    await oversizedStore.LoadAsync();
+    Check(oversizedStore.Items.Count == 0 && oversizedStore.LastWarning is not null
+        && Directory.GetFiles(oversizedRoot, "ReadingList.json.corrupt-*").Length == 1,
+        "超过 500 条的阅读清单必须隔离，不能截断后继续使用");
+
+    string limitRoot = Path.Combine(tmp.Root, "limit");
+    Directory.CreateDirectory(limitRoot);
+    var limitStore = new ReadingListStore(limitRoot);
+    for (int index = 0; index < 500; index++)
+        limitStore.Upsert(Path.Combine(tmp.Root, "limit-" + index + ".md"), 0, 0);
+    Throws<InvalidOperationException>(() =>
+        limitStore.Upsert(Path.Combine(tmp.Root, "limit-500.md"), 0, 0));
+    Check(limitStore.Items.Count == 500,
+        "达到 500 条后必须拒绝新增并保留现有全部记录");
+    Throws<ArgumentException>(() => limitStore.Upsert(article, 0, -1));
+    Throws<ArgumentException>(() => limitStore.UpdateProgress(article, 0, -1));
+}
+
+static async Task WorkspaceSessionTwoMegabytes()
+{
+    using var tmp = new TempDirectory();
+    var entries = Enumerable.Range(0, 200)
+        .Select(index =>
+        {
+            string directory = new string((char)('a' + index % 26), 6000);
+            string path = Path.GetFullPath(Path.Combine(tmp.Root, directory, "file-" + index + ".txt"));
+            return new WorkspaceEntry(Guid.NewGuid(), path, false, 0, 0, 0);
+        })
+        .ToList();
+    var session = new WorkspaceSession(1, entries, entries[0].Id);
+    var result = await new WorkspaceStore(tmp.Root).SaveAsync(session, []);
+    var sessionInfo = new FileInfo(Path.Combine(tmp.Root, "Session.json"));
+    Check(result.Errors.Count == 0, string.Join("\n", result.Errors));
+    Check(sessionInfo.Exists && sessionInfo.Length > 1024 * 1024 && sessionInfo.Length <= 2 * 1024 * 1024,
+        "超过 1 MiB 但不超过 2 MiB 的会话元数据必须与 macOS 一样允许保存");
 }
 static void SnapshotRoundTrip()
 {
@@ -351,6 +554,67 @@ static void HardLinkSafety()
     Check(File.ReadAllText(path) == "base" && file.IsDirty, "硬链接原位保存改变了原文件");
     file.Save(tmp.File("safe-copy.txt"));
     Check(File.ReadAllText(tmp.File("safe-copy.txt")) == "dirty", "硬链接应允许另存为");
+    var renamedFile = DocumentFile.Open(path);
+    renamedFile.Rename("renamed.txt");
+    Check(!File.Exists(path) && File.ReadAllText(tmp.File("renamed.txt")) == "base"
+        && File.ReadAllText(tmp.File("link.txt")) == "base", "硬链接目录项重命名必须保留共享字节流");
+    renamedFile.Text = "still linked";
+    Throws<IOException>(() => renamedFile.Save());
+    Check(File.ReadAllText(tmp.File("renamed.txt")) == "base" && File.ReadAllText(tmp.File("link.txt")) == "base",
+        "重命名硬链接后原位保存仍必须拒绝");
+}
+static void SymbolicLinkSave()
+{
+    if (!OperatingSystem.IsWindows()) return;
+    using var tmp = new TempDirectory();
+    var target = tmp.File("target.conf");
+    var link = tmp.File("alias.conf");
+    File.WriteAllText(target, "key=old\n");
+    Native.CreateSymbolicLinkOrThrow(link, target);
+    var file = DocumentFile.Open(link);
+    file.Text = "key=new\n";
+    file.Save();
+    Check((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0, "保存不得把符号链接替换成普通文件");
+    Check(File.ReadAllText(target) == "key=new\n", "符号链接保存必须写入物理目标");
+    Check(file.Path == link && !file.IsDirty && !file.DiskChanged(), "保存后链接路径与基线必须保持一致");
+}
+static void SymbolicLinkRetargetConflict()
+{
+    if (!OperatingSystem.IsWindows()) return;
+    using var tmp = new TempDirectory();
+    var original = tmp.File("original.txt");
+    var replacement = tmp.File("replacement.txt");
+    var link = tmp.File("changing-link.txt");
+    File.WriteAllText(original, "same");
+    File.WriteAllText(replacement, "same");
+    Native.CreateSymbolicLinkOrThrow(link, original);
+    var file = DocumentFile.Open(link);
+    file.Text = "edit";
+    File.Delete(link);
+    Native.CreateSymbolicLinkOrThrow(link, replacement);
+    Check(file.DiskChanged(), "即使新旧目标内容相同，链接重定向也必须报告外部变化");
+    Throws<FileConflictException>(() => file.Save());
+    Check(File.ReadAllText(original) == "same" && File.ReadAllText(replacement) == "same",
+        "重定向冲突不得写入任何目标");
+}
+static void SymbolicLinkRename()
+{
+    if (!OperatingSystem.IsWindows()) return;
+    using var tmp = new TempDirectory();
+    var target = tmp.File("rename-target.conf");
+    var link = tmp.File("rename-link.conf");
+    var renamed = tmp.File("rename-link-new.conf");
+    File.WriteAllText(target, "key=before\n");
+    Native.CreateSymbolicLinkOrThrow(link, target);
+    var file = DocumentFile.Open(link);
+    file.Text = "key=after\n";
+    file.Rename(System.IO.Path.GetFileName(renamed));
+    Check(!File.Exists(link) && File.Exists(renamed), "重命名必须移除旧链接目录项");
+    Check((File.GetAttributes(renamed) & FileAttributes.ReparsePoint) != 0, "重命名结果必须仍是符号链接");
+    Check(File.ReadAllText(target) == "key=before\n" && file.IsDirty, "重命名不得保存或移动物理目标");
+    file.Save();
+    Check(File.ReadAllText(target) == "key=after\n", "重命名后保存仍应写穿链接");
+    Check((File.GetAttributes(renamed) & FileAttributes.ReparsePoint) != 0, "保存后必须保留重命名后的链接");
 }
 static async Task SessionAndDraft()
 {
@@ -423,6 +687,84 @@ static async Task OrphansAndDuplicates()
     load = await store.LoadAsync();
     Check(load.Documents.Count == 2, "会话丢失后孤立草稿应可找回");
 }
+static async Task SessionMetadataAndViewState()
+{
+    using var tmp = new TempDirectory();
+    var firstPath = tmp.File("first.txt");
+    var secondPath = tmp.File("second.md");
+    File.WriteAllText(firstPath, "first");
+    File.WriteAllText(secondPath, "# second");
+    var first = DocumentFile.Open(firstPath);
+    var second = DocumentFile.Open(secondPath);
+    var firstEntry = new WorkspaceEntry(first.Id, first.Path, false, 3, 2, 4);
+    var secondEntry = new WorkspaceEntry(second.Id, second.Path, true, 0, 0, 0,
+        AutomaticKind: false, Kind: TextKind.Markdown);
+    var session = new WorkspaceSession(1, [secondEntry, firstEntry], first.Id);
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, session);
+    File.WriteAllText(firstPath, "changed outside");
+    var load = await store.LoadAsync();
+    Check(load.Documents.Select(d => d.Entry.Id).SequenceEqual([second.Id, first.Id]), "会话未保留标签顺序");
+    Check(load.ActiveId == first.Id, "会话未保留活动标签");
+    Check(load.Documents[0].Entry.IsReading && !load.Documents[0].Entry.AutomaticKind
+        && load.Documents[0].Entry.Kind == TextKind.Markdown, "阅读态或明确类型丢失");
+    Check(load.Documents[1].Entry.SourceAnchor == 3 && load.Documents[1].Entry.SelectionStart == 2
+        && load.Documents[1].Entry.SelectionLength == 4, "阅读位置或选择范围丢失");
+    Check(load.Documents[1].File.Text == "changed outside" && !load.Documents[1].File.IsDirty,
+        "干净会话没有重读最新磁盘内容");
+}
+static async Task ClosingTabKeepsOtherDrafts()
+{
+    using var tmp = new TempDirectory();
+    var first = new DocumentFile("a");
+    var second = new DocumentFile("b");
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, Session(first, second), first.CaptureSnapshot(), second.CaptureSnapshot());
+    await Saved(store, Session(second), second.CaptureSnapshot());
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 1 && load.Documents[0].File.Text == "b", "关闭标签的旧草稿被当成孤立草稿恢复");
+    Check(Directory.GetFiles(tmp.File("workspace/Drafts"), "*.json").Length == 1, "关闭一个标签时误删了其他草稿");
+}
+static async Task MissingAndDuplicateReferences()
+{
+    using var tmp = new TempDirectory();
+    var path = tmp.File("duplicate.txt");
+    var missingPath = tmp.File("missing.txt");
+    File.WriteAllText(path, "same file");
+    File.WriteAllText(missingPath, "");
+    var first = DocumentFile.Open(path);
+    var second = DocumentFile.Open(path);
+    var missing = DocumentFile.Open(missingPath);
+    File.Delete(missingPath);
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, new WorkspaceSession(1,
+        [
+            new WorkspaceEntry(first.Id, first.Path, false, 0, 0, 0),
+            new WorkspaceEntry(missing.Id, missing.Path, false, 0, 0, 0),
+            new WorkspaceEntry(second.Id, second.Path, false, 0, 0, 0)
+        ], missing.Id));
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 1 && load.Documents[0].Entry.Id == first.Id,
+        "重复的干净文件引用没有只加载一次");
+    Check(load.Warnings.Count == 2, "缺失路径与重复引用没有分别告警：" + string.Join(" | ", load.Warnings));
+    Check(load.ActiveId == first.Id, "缺失的活动标签没有安全回退");
+}
+static async Task IndividualDraftFailure()
+{
+    using var tmp = new TempDirectory();
+    var first = new DocumentFile("prior a");
+    var second = new DocumentFile("prior b");
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    var session = Session(first, second);
+    await Saved(store, session, first.CaptureSnapshot(), second.CaptureSnapshot());
+    first.Text = new string('z', DocumentFile.MaximumSize + 1);
+    second.Text = "new b";
+    var result = await store.SaveAsync(session, [first.CaptureSnapshot(), second.CaptureSnapshot()]);
+    Check(result.Errors.Count == 1, "单个坏快照应只报告一次失败：" + string.Join(" | ", result.Errors));
+    var load = await store.LoadAsync();
+    Check(load.Documents.Select(d => d.File.Text).SequenceEqual(["prior a", "new b"]),
+        "单个坏快照阻止了其他草稿更新，或覆盖了该文档上一次成功草稿");
+}
 static async Task InvalidWorkspace()
 {
     using var tmp = new TempDirectory();
@@ -439,6 +781,26 @@ static async Task InvalidWorkspace()
     File.WriteAllText(tmp.File("Session.json"), JsonSerializer.Serialize(Session(doc) with { Version = 9 }));
     var load = await store.LoadAsync();
     Check(load.Warnings.Count > 0 && load.Documents.Any(d => d.File.Text == "valid"), "坏版本会话应警告且找回草稿");
+}
+static async Task AggregateDraftBudgetIsolation()
+{
+    using var tmp = new TempDirectory();
+    var first = new DocumentFile("old a");
+    var second = new DocumentFile("old b");
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    var session = Session(first, second);
+    await Saved(store, session, first.CaptureSnapshot(), second.CaptureSnapshot());
+    var firstDraft = tmp.File($"workspace/Drafts/{first.Id}.json");
+    using (var stream = new FileStream(firstDraft, FileMode.Open, FileAccess.Write, FileShare.None))
+        stream.SetLength(150L * 1024 * 1024 - 64);
+    first.Text = "updated a";
+    second.Text = "updated b";
+    var result = await store.SaveAsync(session, [second.CaptureSnapshot(), first.CaptureSnapshot()]);
+    Check(result.Errors.Count == 1 && result.Errors[0].Contains("150 MiB", StringComparison.Ordinal),
+        "总量预算溢出未作为单文档错误报告：" + string.Join(" | ", result.Errors));
+    var load = await store.LoadAsync();
+    Check(load.Documents.Select(d => d.File.Text).SequenceEqual(["updated a", "old b"]),
+        "总量预算失败没有保留失败文档的上一次成功草稿，或阻止了其他文档更新");
 }
 static async Task Limits()
 {
@@ -487,6 +849,134 @@ static async Task ClearQueue()
     Check(load.Documents.Count == 0, "关闭清除后排队草稿重新生成");
     Check(!Directory.Exists(tmp.File("Drafts")) || Directory.GetFiles(tmp.File("Drafts"), "*.json").Length == 0, "草稿未清空");
 }
+static async Task ClearQuarantineDrafts()
+{
+    using var tmp = new TempDirectory();
+    var file = new DocumentFile("private damaged text");
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, Session(file), file.CaptureSnapshot());
+    File.WriteAllText(tmp.File($"workspace/Drafts/{file.Id}.json"), "bad text snapshot");
+    var damaged = await store.LoadAsync();
+    Check(damaged.Warnings.Count > 0, "损坏草稿没有告警");
+    var quarantine = tmp.File("workspace/Quarantine");
+    Directory.CreateDirectory(quarantine);
+    File.WriteAllText(Path.Combine(quarantine, "session-evidence.json"), "metadata only");
+    await store.ClearDraftsAsync();
+    var remaining = Directory.GetFiles(quarantine).Select(Path.GetFileName).ToArray();
+    Check(remaining.SequenceEqual(["session-evidence.json"]),
+        "清空草稿未删除隔离区明文，或误删了会话证据：" + string.Join(",", remaining));
+    Check(File.Exists(tmp.File("workspace/Session.json")), "清空草稿误删了会话元数据");
+}
+static async Task LegacyRecoveryMigration()
+{
+    using var tmp = new TempDirectory();
+    var legacyRoot = tmp.File("legacy");
+    var legacyFile = new DocumentFile("legacy draft");
+    Directory.CreateDirectory(legacyRoot);
+    File.WriteAllText(Path.Combine(legacyRoot, "Recovery.json"),
+        JsonSerializer.Serialize(new { Version = 1, Documents = new[] { legacyFile.CaptureSnapshot() } }));
+    var store = new WorkspaceStore(legacyRoot);
+    var loaded = await store.LoadAsync();
+    Check(loaded.Documents.Count == 1 && loaded.Documents[0].File.Text == "legacy draft", "旧版恢复草稿未载入");
+    Check(File.Exists(Path.Combine(legacyRoot, "Recovery.json")), "旧版恢复文件在新记录提交前被提前删除");
+    var restored = loaded.Documents[0].File;
+    var result = await store.SaveAsync(new WorkspaceSession(1,
+        [new WorkspaceEntry(restored.Id, restored.Path, false, 0, 0, 0)], restored.Id),
+        [restored.CaptureSnapshot()]);
+    Check(result.Errors.Count == 0, string.Join("\n", result.Errors));
+    Check(!File.Exists(Path.Combine(legacyRoot, "Recovery.json")), "新记录成功后旧版恢复文件未归档");
+    Check(Directory.GetFiles(Path.Combine(legacyRoot, "Quarantine")).Length == 1, "旧版恢复字节没有保留在隔离区");
+    var reloaded = await new WorkspaceStore(legacyRoot).LoadAsync();
+    Check(reloaded.Documents.Single().File.Text == "legacy draft", "迁移后的新格式无法独立恢复");
+
+    var emptyRoot = tmp.File("legacy-empty");
+    Directory.CreateDirectory(emptyRoot);
+    File.WriteAllText(Path.Combine(emptyRoot, "Recovery.json"),
+        JsonSerializer.Serialize(new { Version = 1, Documents = new[] { new DocumentFile("old dismissed").CaptureSnapshot() } }));
+    var emptyStore = new WorkspaceStore(emptyRoot);
+    await Saved(emptyStore, new WorkspaceSession(1, [], null));
+    Check((await emptyStore.LoadAsync()).Documents.Count == 0, "显式空会话重新复活了旧版草稿");
+}
+static async Task OrphanDirtyDraftSupersedesClean()
+{
+    using var tmp = new TempDirectory();
+    var path = tmp.File("crash-path.txt");
+    File.WriteAllText(path, "DISK");
+    var clean = DocumentFile.Open(path);
+    var newer = DocumentFile.Open(path);
+    newer.Text = "NEWER UNSAVED";
+    var oldEntry = new WorkspaceEntry(clean.Id, clean.Path, true, 2, 1, 3);
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, new WorkspaceSession(1, [oldEntry], clean.Id));
+    Directory.CreateDirectory(tmp.File("workspace/Drafts"));
+    File.WriteAllText(tmp.File($"workspace/Drafts/{newer.Id}.json"), JsonSerializer.Serialize(newer.CaptureSnapshot()));
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 1 && load.Documents[0].File.Text == "NEWER UNSAVED",
+        "崩溃窗口中的孤立脏稿没有覆盖同路径干净会话");
+    Check(load.Documents[0].Entry.Id == newer.Id && load.ActiveId == newer.Id, "孤立脏稿的文档与活动标签标识未重新映射");
+    Check(load.Documents[0].Entry.IsReading && load.Documents[0].Entry.SourceAnchor == 2
+        && load.Documents[0].Entry.SelectionStart == 1 && load.Documents[0].Entry.SelectionLength == 3,
+        "孤立脏稿替换后丢失旧会话阅读位置");
+    Check(load.Documents[0].File.IsDirty && load.Documents[0].File.Path == path, "孤立脏稿没有保留真实路径和冲突基线");
+    Check(File.ReadAllText(path) == "DISK", "恢复孤立脏稿时改写了磁盘");
+}
+static async Task TwoDirtyDraftsAtSamePath()
+{
+    using var tmp = new TempDirectory();
+    var path = tmp.File("two-dirty.txt");
+    File.WriteAllText(path, "baseline");
+    var first = DocumentFile.Open(path);
+    var second = DocumentFile.Open(path);
+    first.Text = "FIRST UNSAVED";
+    second.Text = "SECOND UNSAVED";
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    await Saved(store, new WorkspaceSession(1,
+        [
+            new WorkspaceEntry(first.Id, first.Path, false, 0, 0, 0),
+            new WorkspaceEntry(second.Id, second.Path, false, 0, 0, 0)
+        ], second.Id), first.CaptureSnapshot(), second.CaptureSnapshot());
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 2, "同路径两份脏稿没有全部恢复");
+    Check(load.Documents.Select(d => d.File.Text).SequenceEqual(["FIRST UNSAVED", "SECOND UNSAVED"]),
+        "同路径脏稿正文被隐藏或覆盖");
+    Check(load.Documents[0].File.Path == path && load.Documents[1].File.Path is null,
+        "第二份同路径脏稿没有转为无路径副本");
+    Check(load.Documents[1].File.IsDirty && load.Documents[1].Entry.Path is null,
+        "无路径副本没有明确要求另存");
+    Check(load.Documents[1].Entry.Id == load.Documents[1].File.Id && load.ActiveId == load.Documents[1].Entry.Id,
+        "无路径副本的活动标签或稳定标识不正确");
+    Throws<IOException>(() => load.Documents[1].File.Save());
+    Throws<FileConflictException>(() => load.Documents[1].File.Save(path));
+    var next = new WorkspaceSession(1,
+        load.Documents.Select(d => new WorkspaceEntry(d.File.Id, d.File.Path, false, 0, 0, 0)).ToList(),
+        load.ActiveId);
+    await Saved(store, next, load.Documents.Select(d => d.File.CaptureSnapshot()).ToArray());
+    var reloaded = await store.LoadAsync();
+    Check(reloaded.Documents.Select(d => d.File.Text).SequenceEqual(["FIRST UNSAVED", "SECOND UNSAVED"]),
+        "两份独立恢复副本无法在下次启动继续保留");
+}
+static async Task DamagedLargeDraftBudget()
+{
+    using var tmp = new TempDirectory();
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    var badId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    var good = new DocumentFile(new string('g', 2 * 1024 * 1024));
+    var session = new WorkspaceSession(1,
+        [
+            new WorkspaceEntry(badId, null, false, 0, 0, 0),
+            new WorkspaceEntry(good.Id, null, false, 0, 0, 0)
+        ], good.Id);
+    await Saved(store, session, good.CaptureSnapshot());
+    Directory.CreateDirectory(tmp.File("workspace/Drafts"));
+    var bad = tmp.File($"workspace/Drafts/{badId}.json");
+    using (var stream = new FileStream(bad, FileMode.Create, FileAccess.Write, FileShare.None))
+        stream.SetLength(150L * 1024 * 1024 - 1024 * 1024);
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 1 && load.Documents[0].File.Text.Length == 2 * 1024 * 1024,
+        "损坏大草稿消耗了后续有效草稿的恢复预算");
+    Check(load.ActiveId == good.Id && load.Warnings.Count > 0, "损坏大草稿没有独立告警或活动标签错误");
+    Check(Directory.GetFiles(tmp.File("workspace/Quarantine")).Length == 1, "损坏大草稿没有隔离保留");
+}
 static async Task CleanEncodingSession()
 {
     using var tmp = new TempDirectory();
@@ -498,6 +988,23 @@ static async Task CleanEncodingSession()
     await Saved(store, Session(doc), doc.CaptureSnapshot());
     var load = await store.LoadAsync();
     Check(load.Documents.Count == 1 && load.Documents[0].File.Codec == TextCodec.Utf16BE, "无 BOM 编码提示丢失");
+    load.Documents[0].File.Save();
+    EqualBytes(path, bytes);
+}
+static async Task CleanEncodingSurvivesMinimalSave()
+{
+    using var tmp = new TempDirectory();
+    var path = tmp.File("no-bom.txt");
+    var bytes = new UnicodeEncoding(true, false, true).GetBytes("正文\r\ne\u0301");
+    File.WriteAllBytes(path, bytes);
+    var doc = DocumentFile.Open(path, TextCodec.Utf16BE);
+    var store = new WorkspaceStore(tmp.File("workspace"));
+    var session = Session(doc);
+    await Saved(store, session, doc.CaptureSnapshot());
+    await Saved(store, session);
+    var load = await store.LoadAsync();
+    Check(load.Documents.Count == 1 && load.Documents[0].File.Codec == TextCodec.Utf16BE,
+        "后续不含快照的会话保存丢失了干净文件编码提示");
     load.Documents[0].File.Save();
     EqualBytes(path, bytes);
 }
@@ -605,4 +1112,17 @@ static class Native
     [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool CreateHardLink(string fileName, string existing, IntPtr security);
+    internal static void CreateSymbolicLinkOrThrow(string link, string target)
+    {
+        try { File.CreateSymbolicLink(link, target); }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new TestSkippedException("当前 Windows 未启用开发者模式或未提升权限，无法创建符号链接。", ex);
+        }
+        catch (IOException ex) when ((ex.HResult & 0xffff) == 1314)
+        {
+            throw new TestSkippedException("当前 Windows 令牌缺少 SeCreateSymbolicLinkPrivilege。", ex);
+        }
+    }
 }
+sealed class TestSkippedException(string message, Exception inner) : Exception(message, inner);

@@ -7,6 +7,24 @@ using Qingyue.Windows;
 
 internal static class ThemeChecks
 {
+    private static readonly Dictionary<(ReaderThemeKind Theme, bool Dark), SyntaxTokens> ExpectedSyntax = new()
+    {
+        [(ReaderThemeKind.Classic, false)] = new("#A64A0A", "#087563", "#175BB5", "#5C6D59"),
+        [(ReaderThemeKind.Classic, true)] = new("#FFD39A", "#82DFC9", "#8DC5FF", "#C3C9BF"),
+        [(ReaderThemeKind.Coffee, false)] = new("#A64A0A", "#087563", "#A75832", "#5C6D59"),
+        [(ReaderThemeKind.Coffee, true)] = new("#9FCB9B", "#D9A05B", "#85B9EF", "#8C7667"),
+        [(ReaderThemeKind.Celadon, false)] = new("#5B8C43", "#A96A1E", "#3E7C86", "#8A968B"),
+        [(ReaderThemeKind.Celadon, true)] = new("#9FCB9B", "#D9B26A", "#85B9EF", "#8C9E92"),
+        [(ReaderThemeKind.SeaSalt, false)] = new("#2F7D64", "#A96A1E", "#1660AB", "#7C929B"),
+        [(ReaderThemeKind.SeaSalt, true)] = new("#9FCB9B", "#D9B26A", "#85B9EF", "#8198A4"),
+        [(ReaderThemeKind.MistPurple, false)] = new("#5E7F6A", "#A96A1E", "#5B6FA8", "#8B8AA0"),
+        [(ReaderThemeKind.MistPurple, true)] = new("#9FCB9B", "#D9B26A", "#9AB3FF", "#8D8CA3"),
+        [(ReaderThemeKind.InkBlue, false)] = new("#5E7F6A", "#A96A1E", "#2A5FA8", "#8A93A6"),
+        [(ReaderThemeKind.InkBlue, true)] = new("#9FCB9B", "#D9B26A", "#85B9EF", "#8D93A0"),
+        [(ReaderThemeKind.Paper, false)] = new("#0F9F8F", "#B45309", "#6D5BD0", "#9CA3AF"),
+        [(ReaderThemeKind.Paper, true)] = new("#4FD1C5", "#E3A15A", "#B3A6FF", "#8A919C")
+    };
+
     public static void Run(MainWindow window, Action<bool, string> check)
     {
         foreach (var theme in ReaderTheme.All)
@@ -32,6 +50,14 @@ internal static class ThemeChecks
                 CheckContrast(check, palette.Text, palette.Hover, 4.5,
                     $"{theme} {mode} 正文/悬停区域对比度");
 
+                var expected = ExpectedSyntax[(theme, dark)];
+                check(palette.String == expected.String
+                    && palette.Number == expected.Number
+                    && palette.Key == expected.Key
+                    && palette.Comment == expected.Comment,
+                    $"{theme} {mode} 四个语法 token 与 macOS 固定 sRGB 完全一致" +
+                    $"（实际 {palette.String}/{palette.Number}/{palette.Key}/{palette.Comment}）");
+
                 var resources = new ResourceDictionary();
                 var applied = ReaderTheme.Apply(resources, theme, dark);
                 check(applied == palette
@@ -43,6 +69,11 @@ internal static class ThemeChecks
                     && ResourceColor(resources, "AccentTextBrush") == palette.AccentText
                     && ResourceColor(resources, "AccentForegroundBrush") == palette.AccentForeground,
                     $"{theme} {mode} 实际资源画刷注册并匹配调色板");
+                check(ResourceColor(resources, "SyntaxStringBrush") == expected.String
+                    && ResourceColor(resources, "SyntaxValueBrush") == expected.Number
+                    && ResourceColor(resources, "SyntaxKeyBrush") == expected.Key
+                    && ResourceColor(resources, "SyntaxCommentBrush") == expected.Comment,
+                    $"{theme} {mode} 语法资源画刷直接使用 macOS 原始 token");
             }
         }
 
@@ -95,4 +126,6 @@ internal static class ThemeChecks
 
     private static T? Property<T>(object value, string name) =>
         (T?)value.GetType().GetProperty(name)?.GetValue(value);
+
+    private sealed record SyntaxTokens(string String, string Number, string Key, string Comment);
 }

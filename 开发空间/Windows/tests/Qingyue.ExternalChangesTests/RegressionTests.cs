@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Qingyue.Core;
 using Qingyue.Windows;
@@ -271,9 +272,13 @@ internal static partial class Program
         int sourceTarget = before.IndexOf("目标段落", StringComparison.Ordinal);
         var pointer = tab.Rendered!.PointerAt(tab.Reading!.SourceToDisplay(sourceTarget));
         tab.Preview.Selection.Select(pointer, pointer);
+        var previousReading = tab.Reading;
+        var previousRendered = tab.Rendered;
         File.WriteAllText(path, "前置插入\n\n" + before);
         window.QueueExternalRefresh(tab);
-        await WaitFor(() => tab.File.Text.StartsWith("前置插入", StringComparison.Ordinal),
+        await WaitFor(() => tab.File.Text.StartsWith("前置插入", StringComparison.Ordinal) &&
+                tab.Reading is not null && !ReferenceEquals(tab.Reading, previousReading) &&
+                tab.Rendered is not null && !ReferenceEquals(tab.Rendered, previousRendered),
             "外部前置插入刷新正文");
         int expected = tab.File.Text.IndexOf("目标段落", StringComparison.Ordinal);
         int actual = tab.Reading!.DisplayToSource(tab.Rendered!.OffsetAt(tab.Preview.Selection.Start));
@@ -394,9 +399,27 @@ internal static partial class Program
         File.WriteAllText(path, "disk two");
         window.QueueExternalRefresh(tab);
         await WaitFor(() => panel.Visibility == Visibility.Visible, "磁盘再次变化重新显示外部更新面板");
+        bool confirmed = false;
+        var confirmationTimer = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(20), DispatcherPriority.Background, (_, _) =>
+            {
+                if (confirmed) return;
+                var dialog = Application.Current.Windows.OfType<Window>()
+                    .FirstOrDefault(candidate => candidate.Title == "重新载入磁盘文件？");
+                var button = dialog is null ? null : VisualChildren<Button>(dialog)
+                    .FirstOrDefault(candidate => Equals(candidate.Content, "重新载入"));
+                if (button is null) return;
+                confirmed = true;
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }, window.Dispatcher);
+        confirmationTimer.Start();
         accept.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        await WaitFor(() => tab.File.Text == "disk two" && !tab.File.IsDirty,
+        confirmationTimer.Stop();
+        Check(confirmed, "接纳磁盘版本时必须真实确认放弃本地修改");
+        await WaitFor(() => window.CurrentTab is { } current &&
+                !ReferenceEquals(current, tab) && current.File.Text == "disk two" && !current.File.IsDirty,
             "接纳磁盘版本替换本地未保存编辑");
+        tab = window.CurrentTab!;
         Check(panel.Visibility == Visibility.Collapsed, "接纳磁盘版本后关闭外部更新面板");
 
         File.Delete(path);
@@ -408,6 +431,17 @@ internal static partial class Program
         retry.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await WaitFor(() => tab.File.Text == "disk three" && !tab.File.IsDirty,
             "重新检查成功后接纳最新磁盘正文");
+    }
+
+    private static IEnumerable<T> VisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int index = 0; index < count; index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match) yield return match;
+            foreach (var descendant in VisualChildren<T>(child)) yield return descendant;
+        }
     }
 
     private static async Task ActivationStorm(MainWindow window, string root)

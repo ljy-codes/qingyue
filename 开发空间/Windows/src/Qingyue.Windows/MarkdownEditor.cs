@@ -15,6 +15,7 @@ internal sealed class MarkdownEditor
     private readonly Dictionary<int, int[]> guideColumns = [];
     internal IReadOnlyList<int> GuideColumns(MarkdownListMarker marker) =>
         guideColumns.TryGetValue(marker.Start, out var columns) ? columns : [];
+    internal bool IsComposing => composing;
     internal bool CanEdit => !composing && tab.Kind == TextKind.Markdown && !tab.IsReading &&
         !tab.Editor.IsReadOnly && tab.Editor.Text.Length <= DocumentSyntaxCache.MaxDocumentCharacters;
     public IReadOnlyList<MarkdownListMarker> Markers
@@ -121,43 +122,33 @@ internal sealed class MarkdownEditor
     private void KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Handled || composing || tab.Kind != TextKind.Markdown) return;
-        ModifierKeys modifiers = Keyboard.Modifiers;
-        MarkdownTableAction? tableAction = (e.Key, modifiers) switch
+        if (HandleKey(e.Key, Keyboard.Modifiers)) e.Handled = true;
+    }
+
+    /// <summary>
+    /// Applies only the source-preserving editing gestures that macOS also
+    /// implements. Everything else remains a native TextBox input so app
+    /// shortcuts such as Ctrl+B are never swallowed by a focused Markdown view.
+    /// </summary>
+    internal bool HandleKey(Key key, ModifierKeys modifiers)
+    {
+        if (composing || tab.Kind != TextKind.Markdown) return false;
+        MarkdownTableAction? tableAction = (key, modifiers) switch
         {
             (Key.Tab, ModifierKeys.None) => MarkdownTableAction.NextCell,
             (Key.Tab, ModifierKeys.Shift) => MarkdownTableAction.PreviousCell,
             (Key.Enter, ModifierKeys.None) => MarkdownTableAction.InsertRow,
             _ => null
         };
-        if (tableAction is { } tableCommand && ExecuteTable(tableCommand))
-        {
-            e.Handled = true;
-            return;
-        }
-        MarkdownEditAction? action = (e.Key, modifiers) switch
+        if (tableAction is { } tableCommand && ExecuteTable(tableCommand)) return true;
+        MarkdownEditAction? action = (key, modifiers) switch
         {
             (Key.Enter, ModifierKeys.None) => MarkdownEditAction.Enter,
             (Key.Enter, ModifierKeys.Shift) => MarkdownEditAction.SoftBreak,
             (Key.Tab, ModifierKeys.None) => MarkdownEditAction.Indent,
             (Key.Tab, ModifierKeys.Shift) => MarkdownEditAction.Outdent,
-            (Key.Back, ModifierKeys.None) => MarkdownEditAction.Backspace,
-            (Key.B, ModifierKeys.Control) => MarkdownEditAction.Bold,
-            (Key.I, ModifierKeys.Control) => MarkdownEditAction.Italic,
-            (Key.K, ModifierKeys.Control) => MarkdownEditAction.Link,
-            (Key.Oem3, ModifierKeys.Control) => MarkdownEditAction.InlineCode,
-            (Key.Oem3, ModifierKeys.Control | ModifierKeys.Shift) => MarkdownEditAction.CodeBlock,
-            (Key.D1, ModifierKeys.Control | ModifierKeys.Alt) => MarkdownEditAction.Heading1,
-            (Key.D2, ModifierKeys.Control | ModifierKeys.Alt) => MarkdownEditAction.Heading2,
-            (Key.D3, ModifierKeys.Control | ModifierKeys.Alt) => MarkdownEditAction.Heading3,
-            (Key.Q, ModifierKeys.Control | ModifierKeys.Shift) => MarkdownEditAction.Quote,
-            (Key.Space, ModifierKeys.Control | ModifierKeys.Shift) => MarkdownEditAction.ToggleTask,
             _ => null
         };
-        if (action is { } command && Execute(command)) e.Handled = true;
-        // A list cannot be indented without a preceding sibling. Swallow Tab there,
-        // rather than inserting a literal tab that changes its Markdown meaning.
-        else if (e.Key == Key.Tab && modifiers is ModifierKeys.None or ModifierKeys.Shift &&
-            Markers.Any(m => tab.Editor.CaretIndex >= m.Start && tab.Editor.CaretIndex <= m.ContentStart))
-            e.Handled = true;
+        return action is { } command && Execute(command);
     }
 }

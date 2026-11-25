@@ -43,16 +43,25 @@ internal static class Program
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 IconThemeChecks.Run(Check, window, root);
                 ThemeChecks.Run(window, Check);
+                await NativeParityChecks.Run(Path.Combine(root, "native-parity"), Check);
+                await MenuParityChecks.RunAsync(window, Check);
+                await MacMenuContractChecks.Run(root, Check);
+                await ParityBehaviorChecks.Run(window, root, Check);
+                await ModalSafetyChecks.Run(root, Check);
+                await WorkspaceBrowserChecks.Run(window, root, Check);
+                await QuickOpenChecks.Run(window, Check);
+                await ReadingListChecks.Run(window, root, Check);
+                await GlobalSearchChecks.Run(window, root, Check);
                 var topChrome = (FrameworkElement)window.FindName("TopChrome");
                 var mainMenu = (FrameworkElement)window.FindName("MainMenu");
                 var brandHeader = (Border)window.FindName("BrandHeader");
                 var tabRow = (FrameworkElement)window.FindName("TabRow");
-                var editOnlyTools = (FrameworkElement)window.FindName("EditOnlyTools");
+                var contextToolbar = (FrameworkElement)window.FindName("ContextToolbar");
                 Check(ReferenceEquals(VisualTreeHelper.GetParent(mainMenu), topChrome) &&
                     ReferenceEquals(VisualTreeHelper.GetParent(brandHeader), topChrome) &&
                     Grid.GetRow(mainMenu) == Grid.GetRow(brandHeader),
                     "顶部菜单与品牌区合并为同一行");
-                double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + editOnlyTools.ActualHeight;
+                double topChromeHeight = brandHeader.ActualHeight + tabRow.ActualHeight + contextToolbar.ActualHeight;
                 Check(topChromeHeight <= 120,
                     $"顶部工具区压缩到正文优先高度（实际 {topChromeHeight:0} 像素）");
                 Check(brandHeader.Background is SolidColorBrush headerBrush &&
@@ -63,7 +72,9 @@ internal static class Program
                     window.CurrentTab!.Editor.Background is SolidColorBrush editorBrush &&
                     sidebarBrush.Color != editorBrush.Color,
                     "侧栏与编辑区保持深浅层次");
+                await Build2Checks.CheckLayout(window, root, Check);
                 Build2Checks.CheckEntryPoints(window, Check);
+                await Build2Checks.CheckSearchEscape(window, Check);
                 var first = window.CurrentTab!;
                 Check(!first.IsPreviewCreated, "普通打开标签不预先创建阅读控件");
                 first.Editor.Text = "文档一 😀\n独立撤销";
@@ -88,7 +99,7 @@ internal static class Program
                 window.ToggleReading();
                 await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 Check(progressTab.IsPreviewCreated, "进入阅读模式时才创建阅读控件");
-                Check(((TextBlock)window.FindName("ReadingStatus")).Text.Contains("%"), "阅读态显示百分比进度");
+                Check(((TextBlock)window.FindName("LocationText")).Text.Contains("%"), "阅读态底栏显示百分比进度");
                 window.ToggleBookmark();
                 Check(window.CurrentBookmarks(progressTab).Count == 1, "当前阅读位置可以添加书签");
                 window.ToggleBookmark();
@@ -111,14 +122,17 @@ internal static class Program
                 File.Delete(missing);
                 window.RefreshRecent();
                 var recent = (ListBox)window.FindName("RecentList");
-                Check(recent.Items.Cast<object>().Any(item =>
+                Check(recent.Items.Cast<object>().All(item =>
                 {
                     var type = item.GetType();
-                    return string.Equals(type.GetProperty("Path")?.GetValue(item) as string,
-                        Path.GetFullPath(missing), StringComparison.OrdinalIgnoreCase)
-                        && type.GetProperty("Exists")?.GetValue(item) is false
-                        && (type.GetProperty("StateText")?.GetValue(item) as string)?.Contains("不存在") == true;
-                }), "最近文件显示失效状态");
+                    return !string.Equals(type.GetProperty("Path")?.GetValue(item) as string,
+                        Path.GetFullPath(missing), StringComparison.OrdinalIgnoreCase);
+                }), "最近打开侧栏过滤失效文件并保留有效项");
+                var recentMenu = (MenuItem)window.FindName("RecentMenu");
+                Check(recentMenu.Items.OfType<MenuItem>().Any(item =>
+                    string.Equals(item.ToolTip as string, Path.GetFullPath(missing),
+                        StringComparison.OrdinalIgnoreCase)),
+                    "最近文件菜单保留失效路径，供用户重新打开或检查");
 
                 string filePath = Path.Combine(root, "中文配置.json");
                 Check(window.SaveTabToPath(first, filePath), "窗口保存到中文路径");
@@ -138,20 +152,23 @@ internal static class Program
                 Check(markdown.Preview.Document.Blocks.OfType<System.Windows.Documents.List>()
                     .Any(list => list.MarkerStyle == TextMarkerStyle.Disc),
                     "Markdown预览显示圆点列表");
-                Check(window.FindName("ReadingToolbar") is FrameworkElement { Visibility: Visibility.Visible },
-                    "阅读态显示轻量工具条");
-                Check(((FrameworkElement)window.FindName("FormatButton")).Visibility == Visibility.Collapsed &&
+                Check(window.FindName("ContextToolbar") is FrameworkElement { Visibility: Visibility.Visible },
+                    "阅读态保留统一上下文工具条");
+                Check(((FrameworkElement)window.FindName("FormatButton")).Visibility == Visibility.Visible &&
                     ((FrameworkElement)window.FindName("StructureButton")).Visibility == Visibility.Collapsed &&
-                    ((FrameworkElement)window.FindName("MarkdownButton")).Visibility == Visibility.Collapsed,
-                    "阅读态隐藏编辑专用工具");
+                    ((FrameworkElement)window.FindName("MarkdownButton")).Visibility == Visibility.Visible &&
+                    ((FrameworkElement)window.FindName("CopyReadingButton")).Visibility == Visibility.Visible &&
+                    ((FrameworkElement)window.FindName("CopyOptionsMenu")).Visibility == Visibility.Visible &&
+                    ((FrameworkElement)window.FindName("MarkdownEditOptionsMenu")).Visibility == Visibility.Collapsed,
+                    "Markdown阅读态保留格式化、分屏与复制导出并隐藏编辑专用项");
                 Check(markdown.Rendered!.PointerAt(0).GetCharacterRect(System.Windows.Documents.LogicalDirection.Forward).Left >= 20,
                     "首次阅读排版保留正文边距");
                 window.ToggleReading();
                 Check(!markdown.IsReading && markdown.Editor.Text.Contains("**中文**"), "返回编辑保留原始 Markdown");
-                Check(window.FindName("MarkdownWritingToolbar") is FrameworkElement { Visibility: Visibility.Visible } &&
+                Check(window.FindName("MarkdownEditOptionsMenu") is FrameworkElement { Visibility: Visibility.Visible } &&
                     window.FindName("MarkdownWritingHint") is TextBlock { Visibility: Visibility.Visible, Text: var hint } &&
                     hint.Contains("空格", StringComparison.Ordinal),
-                    "Markdown编辑工具条显示列表快捷提示");
+                    "Markdown编辑态显示统一编辑菜单与列表快捷提示");
                 markdown.Editor.CaretIndex = markdown.Editor.Text.IndexOf("- 一项", StringComparison.Ordinal) + 2;
                 Check(window.FindName("MarkdownWritingState") is TextBlock { Text: var state } &&
                     state.Contains("无序列表", StringComparison.Ordinal) &&
@@ -164,8 +181,10 @@ internal static class Program
                 var expectedBlock = markdown.Reading!.Blocks.FirstOrDefault(block =>
                     expectedSourceAnchor >= block.SourceStart && expectedSourceAnchor <= block.SourceStart + block.SourceLength)
                     ?? markdown.Reading.Blocks.Last();
-                Check(markdown.IsReading && markdown.Rendered!.OffsetAt(markdown.Preview.Selection.Start) == expectedBlock.DisplayStart,
-                    "从段落中间进入阅读时吸附到内容块开头");
+                Check(markdown.IsReading && markdown.SourceAnchor == expectedSourceAnchor,
+                    "从段落中间进入阅读时保留精确源锚点");
+                Check(markdown.Rendered!.OffsetAt(markdown.Preview.Selection.Start) == expectedBlock.DisplayStart,
+                    "阅读渲染位置落在源锚点所属内容块开头");
                 window.ToggleReading();
 
                 window.ToggleSidebar();
@@ -291,7 +310,7 @@ internal static class Program
                         var discard = FindVisualButton(dialog, b => Equals(b.Content, "放弃"))!;
                         discard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                    exitWindow.Close();
+                    Check(await exitWindow.RequestQuitAsync(), "退出流程未完成");
                     await WaitFor(() => !exitWindow.IsVisible);
                     var discarded = await new WorkspaceStore(Path.Combine(root, "exit-profile")).LoadAsync();
                     Check(discarded.Documents.Count == 0, "退出放弃当前标签可关闭且不复活草稿");
@@ -342,9 +361,13 @@ internal static class Program
             ? (Brush)window.FindResource("TextBrush") : tab.Editor.Foreground;
         check(Contrast(displayedForeground, tab.Editor.Background) >= 4.5,
             $"{theme} 可见编辑正文对比度至少 4.5:1");
-        check(new[] { "SyntaxKeyBrush", "SyntaxStringBrush", "SyntaxValueBrush", "SyntaxCommentBrush" }
-            .All(key => Contrast((Brush)window.FindResource(key), tab.Editor.Background) >= 4.5),
-            $"{theme} 语法分色对比度至少 4.5:1");
+        var expected = ReaderTheme.GetPalette(ReaderTheme.Parse(windowSettingsTheme(window), true),
+            windowSettingsDark(window));
+        check(ResourceColor(window, "SyntaxStringBrush") == expected.String
+            && ResourceColor(window, "SyntaxValueBrush") == expected.Number
+            && ResourceColor(window, "SyntaxKeyBrush") == expected.Key
+            && ResourceColor(window, "SyntaxCommentBrush") == expected.Comment,
+            $"{theme} 语法资源画刷严格匹配当前主题固定 token");
         check(Contrast(tab.LineNumbers.Foreground, BackgroundAt(tab.LineNumbers)) >= 4.5,
             $"{theme} 行号对比度至少 4.5:1");
         if (wasReading)
@@ -428,6 +451,28 @@ internal static class Program
         return (Math.Max(first, second) + 0.05) / (Math.Min(first, second) + 0.05);
     }
 
+    private static string windowSettingsTheme(MainWindow window)
+    {
+        var settings = window.GetType().GetField("settings",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(window)!;
+        return (string)settings.GetType().GetProperty("Theme")!.GetValue(settings)!;
+    }
+
+    private static bool windowSettingsDark(MainWindow window)
+    {
+        var settings = window.GetType().GetField("settings",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(window)!;
+        return (bool)settings.GetType().GetProperty("Dark")!.GetValue(settings)!;
+    }
+
+    private static string ResourceColor(MainWindow window, string key) =>
+        window.FindResource(key) is SolidColorBrush brush
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"#{brush.Color.R:X2}{brush.Color.G:X2}{brush.Color.B:X2}")
+            : string.Empty;
+
     internal static void ClickAction(MainWindow window, string action)
     {
         MenuItem? Find(ItemsControl parent)
@@ -440,8 +485,12 @@ internal static class Program
             }
             return null;
         }
-        var menu = Find((Menu)window.FindName("MainMenu"));
-        if (menu is not null) { menu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); return; }
+        var menuItem = Find((Menu)window.FindName("MainMenu"));
+        if (menuItem is not null)
+        {
+            menuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            return;
+        }
         var target = FindVisualButton(window, b => Equals(b.Tag, action)) ?? throw new Exception("操作不存在：" + action);
         target.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
     }

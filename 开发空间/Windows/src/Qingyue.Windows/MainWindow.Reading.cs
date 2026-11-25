@@ -9,12 +9,13 @@ namespace Qingyue.Windows;
 
 public partial class MainWindow
 {
+    private readonly Dictionary<EditorTab, Task> restoringReadingTabs = [];
+
     public void ToggleReading()
     {
         if (CurrentTab is not { } tab) return;
         if (tab.IsReading)
         {
-            if (markdownTab == tab) markdownTab = null;
             CaptureReadingViewport(tab);
             tab.ViewportGeneration++;
             int offset = tab.ViewportAnchor ?? CurrentSourceAnchor(tab);
@@ -32,10 +33,52 @@ public partial class MainWindow
             int anchor = EditingViewportAnchor(tab);
             tab.ViewportAnchor = anchor;
             tab.ViewportDelta = 0;
-            EnterReading(tab, anchor);
+            EnterReading(tab, anchor, snapToBlockStart: false);
             RestoreReadingViewport(tab, anchor, tab.ViewportDelta);
         }
         RefreshCurrent();
+    }
+
+    private Task EnsureRestoredReadingAsync(EditorTab? tab)
+    {
+        if (restoringWorkspace || tab is null || !tabs.Contains(tab) || !tab.IsReading
+            || tab.Rendered is not null || approvedShutdown || exitInProgress)
+            return Task.CompletedTask;
+        if (restoringReadingTabs.TryGetValue(tab, out var existing)) return existing;
+        var task = RestoreReadingModeAsync(tab);
+        restoringReadingTabs[tab] = task;
+        if (task.IsCompleted) restoringReadingTabs.Remove(tab);
+        return task;
+    }
+
+    private void EnsureRestoredReading(EditorTab? tab) => _ = EnsureRestoredReadingAsync(tab);
+
+    private async Task RestoreReadingModeAsync(EditorTab tab)
+    {
+        int sourceAnchor = Math.Clamp(tab.SourceAnchor, 0, tab.File.Text.Length);
+        try
+        {
+            if (!await EnterReadingAsync(tab, sourceAnchor, focus: false, snapToBlockStart: false)
+                || !tabs.Contains(tab) || !tab.IsReading)
+                return;
+            if (CurrentTab != tab)
+            {
+                tab.ReleaseReadingResources();
+                return;
+            }
+            // EnterReadingAsync preserves the exact source anchor. The viewport
+            // anchor remains the block-level position persisted by the session.
+            RestoreReadingViewport(tab, tab.ViewportAnchor ?? sourceAnchor, tab.ViewportDelta);
+            if (CurrentTab == tab) RefreshCurrent();
+        }
+        catch (Exception ex)
+        {
+            if (CurrentTab == tab) StatusText.Text = "恢复阅读视图失败：" + ex.Message;
+        }
+        finally
+        {
+            restoringReadingTabs.Remove(tab);
+        }
     }
 
     private static int CurrentSourceAnchor(EditorTab tab) =>
@@ -94,6 +137,7 @@ public partial class MainWindow
             var preview = tab.EnsurePreview(settings.FontSize + 1);
             tab.Editor.IsReadOnly = false;
             preview.Document = rendered.Document;
+            ReadingClipboard.RefreshContextMenus(preview);
             UpdateReadingWidth(tab);
             var pointer = rendered.PointerAt(model.SourceToDisplay(tab.SourceAnchor));
             preview.Selection.Select(pointer, pointer);
@@ -123,7 +167,8 @@ public partial class MainWindow
         var expectedFocus = Keyboard.FocusedElement;
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            if (CurrentTab == tab && tab.IsReading && ReferenceEquals(DocumentHost.Content, tab.Preview)
+            if (CurrentTab == tab && tab.IsReading && modalDepth == 0 && !SearchPanel.IsKeyboardFocusWithin
+                && ReferenceEquals(DocumentHost.Content, tab.Preview)
                 && (Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, expectedFocus)))
                 tab.Preview.Focus();
         });
@@ -217,14 +262,20 @@ public partial class MainWindow
     public void ToggleFocus()
     {
         focusMode = !focusMode;
-        MainMenu.Visibility = focusMode ? Visibility.Collapsed : Visibility.Visible;
-        TabRow.Visibility = focusMode ? Visibility.Collapsed : Visibility.Visible;
         FocusButton.Content = focusMode ? "退出专注" : "专注";
         ApplySidebar();
+        if (CurrentTab is { } tab) RefreshPresentation(tab);
     }
 
     public void ApplyTheme(bool dark) =>
         ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark), dark);
+
+    public void ToggleTheme()
+    {
+        bool dark = !settings.EffectiveDark;
+        settings.FollowSystem = false;
+        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark), dark);
+    }
 
     public void ApplyTheme(ReaderThemeKind theme)
     {
@@ -260,12 +311,23 @@ public partial class MainWindow
 
     private void ShowReadingAppearance()
     {
-        var selection = Modal(() => ReadingAppearanceDialog.Show(this, settings));
-        if (selection is null) return;
-        selection.ApplyTo(settings);
-        ApplyAppIconTheme();
-        ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
-        ApplyEditorSettings();
+        if (readingAppearanceWindow is { Window.IsLoaded: true } existing)
+        {
+            existing.SyncFromSettings(settings);
+            existing.Window.Activate();
+            return;
+        }
+
+        readingAppearanceWindow = ReadingAppearanceDialog.Create(this, settings, selection =>
+        {
+            selection.ApplyTo(settings);
+            ApplyAppIconTheme();
+            ApplyTheme(ReaderTheme.Parse(settings.Theme, settings.Dark));
+            ApplyEditorSettings();
+        });
+        readingAppearanceWindow.Window.Closed += (_, _) => readingAppearanceWindow = null;
+        readingAppearanceWindow.Window.Show();
+        readingAppearanceWindow.Window.Activate();
     }
 }
 

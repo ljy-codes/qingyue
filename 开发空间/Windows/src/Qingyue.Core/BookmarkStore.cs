@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Unicode;
@@ -51,8 +52,9 @@ public sealed class BookmarkStore
         {
             return items.Where(item => currentPath is not null
                     ? string.Equals(NormalizePath(item.Path), currentPath, StringComparison.OrdinalIgnoreCase)
-                    : item.DocumentId == file.Id && item.Path is null)
-                .OrderByDescending(item => item.UpdatedAt)
+                    : item.DocumentId == file.Id)
+                .OrderBy(item => item.SourceAnchor)
+                .ThenBy(item => item.CreatedAt)
                 .ToArray();
         }
     }
@@ -60,18 +62,21 @@ public sealed class BookmarkStore
     public DocumentBookmark Add(DocumentFile file, int sourceAnchor, string? label = null)
     {
         ArgumentNullException.ThrowIfNull(file);
+        var now = DateTimeOffset.UtcNow;
+        int anchor = Math.Clamp(sourceAnchor, 0, file.Text.Length);
         var item = new DocumentBookmark(
             Guid.NewGuid(),
             file.Id,
             NormalizePath(file.Path),
-            Math.Clamp(sourceAnchor, 0, file.Text.Length),
-            NormalizeLabel(label, file.Text, sourceAnchor),
-            DateTimeOffset.UtcNow);
+            anchor,
+            NormalizeLabel(label, file.Text, anchor),
+            now,
+            now);
         lock (gate)
         {
-            items.RemoveAll(existing => SameDocument(existing, file) && existing.SourceAnchor == item.SourceAnchor);
-            items.Insert(0, item);
-            if (items.Count > MaximumItems) items.RemoveRange(MaximumItems, items.Count - MaximumItems);
+            if (items.Count >= MaximumItems)
+                throw new InvalidOperationException("书签数量已达到 500 条上限。");
+            items.Add(item);
         }
         return item;
     }
@@ -92,12 +97,43 @@ public sealed class BookmarkStore
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                bool matches = item.DocumentId == documentId
-                    && (source is null
-                        ? item.Path is null
-                        : string.Equals(NormalizePath(item.Path), source, StringComparison.OrdinalIgnoreCase));
+                // A saved document gets a new ID when reopened. Its path is the
+                // durable identity, so an old-path match must migrate even when
+                // the tab's in-memory document ID changed.
+                bool matches = source is null
+                    ? item.DocumentId == documentId && item.Path is null
+                    : string.Equals(NormalizePath(item.Path), source, StringComparison.OrdinalIgnoreCase);
                 if (!matches) continue;
-                items[i] = item with { Path = target, UpdatedAt = DateTimeOffset.UtcNow };
+                items[i] = item with
+                {
+                    DocumentId = documentId,
+                    Path = target,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    public int Repair(Guid documentId, string? path, string oldText, string newText)
+    {
+        ArgumentNullException.ThrowIfNull(oldText);
+        ArgumentNullException.ThrowIfNull(newText);
+        string? normalized = NormalizePath(path);
+        int changed = 0;
+        lock (gate)
+        {
+            for (int index = 0; index < items.Count; index++)
+            {
+                var item = items[index];
+                bool matches = normalized is not null
+                    ? string.Equals(NormalizePath(item.Path), normalized, StringComparison.OrdinalIgnoreCase)
+                    : item.DocumentId == documentId;
+                if (!matches) continue;
+                int anchor = TextAnchorMapper.Map(oldText, newText, item.SourceAnchor);
+                if (anchor == item.SourceAnchor) continue;
+                items[index] = item with { SourceAnchor = anchor, UpdatedAt = DateTimeOffset.UtcNow };
                 changed++;
             }
         }
@@ -148,9 +184,16 @@ public sealed class BookmarkStore
                 throw new InvalidDataException("书签文件超过 1 MiB 上限。");
             var loaded = JsonSerializer.Deserialize<List<DocumentBookmark>>(File.ReadAllBytes(path), JsonOptions)
                 ?? throw new InvalidDataException("书签文件为空。");
-            if (loaded.Count > MaximumItems) loaded = loaded.Take(MaximumItems).ToList();
+            if (loaded.Count > MaximumItems)
+                throw new InvalidDataException("书签数量超过 500 条上限。");
+            if (loaded.Select(item => item.Id).Distinct().Count() != loaded.Count)
+                throw new InvalidDataException("书签包含重复标识。");
+            loaded = loaded.Select(item => item.CreatedAt == default
+                    ? item with { CreatedAt = item.UpdatedAt }
+                    : item)
+                .ToList();
             foreach (var item in loaded) Validate(item);
-            return (loaded.DistinctBy(item => item.Id).ToList(), null);
+            return (loaded, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
@@ -169,7 +212,8 @@ public sealed class BookmarkStore
     {
         if (item.Id == Guid.Empty || item.DocumentId == Guid.Empty
             || item.SourceAnchor < 0 || item.Label is null || item.Label.Length > MaximumLabelLength
-            || item.Path is not null && !System.IO.Path.IsPathFullyQualified(item.Path))
+            || item.CreatedAt == default || item.UpdatedAt == default
+            || item.Path is not null && !IsValidPath(item.Path))
             throw new InvalidDataException("书签字段无效。");
     }
 
@@ -181,16 +225,44 @@ public sealed class BookmarkStore
             : item.DocumentId == file.Id && item.Path is null;
     }
 
-    private static string? NormalizePath(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : System.IO.Path.GetFullPath(value);
+    private static string? NormalizePath(string? value)
+    {
+        if (value is null) return null;
+        if (!IsValidPath(value))
+            throw new ArgumentException("书签需要有效的本机绝对路径。", nameof(value));
+        return System.IO.Path.GetFullPath(value);
+    }
 
     private static string NormalizeLabel(string? label, string text, int sourceAnchor)
     {
-        if (!string.IsNullOrWhiteSpace(label)) return label.Trim()[..Math.Min(label.Trim().Length, MaximumLabelLength)];
+        if (!string.IsNullOrWhiteSpace(label)) return BoundedLabel(label.Trim());
         int anchor = Math.Clamp(sourceAnchor, 0, text.Length);
+        if (text.Length == 0) return "位置 " + anchor;
         int start = text.LastIndexOf('\n', Math.Max(0, anchor - 1));
         int end = text.IndexOf('\n', anchor);
         string line = text[(start + 1)..(end < 0 ? text.Length : end)].Trim();
-        return string.IsNullOrWhiteSpace(line) ? "阅读位置" : line[..Math.Min(line.Length, MaximumLabelLength)];
+        return string.IsNullOrWhiteSpace(line) ? "位置 " + anchor : BoundedLabel(line);
     }
+
+    private static string BoundedLabel(string value)
+    {
+        int units = 0;
+        int end = 0;
+        while (end < value.Length)
+        {
+            int length = char.IsHighSurrogate(value[end])
+                && end + 1 < value.Length
+                && char.IsLowSurrogate(value[end + 1]) ? 2 : 1;
+            if (units + length > MaximumLabelLength) break;
+            units += length;
+            end += length;
+        }
+        return value[..end];
+    }
+
+    private static bool IsValidPath(string value) =>
+        value.Length > 0
+        && !value.Contains('\0')
+        && Encoding.UTF8.GetByteCount(value) <= 4096
+        && System.IO.Path.IsPathFullyQualified(value);
 }

@@ -16,12 +16,7 @@ public static class AnnotationEditorDialog
     {
         if (string.IsNullOrWhiteSpace(value)) return [];
         return value
-            .Replace('，', ',')
-            .Replace('；', ';')
-            .Split([',', ';', '\r', '\n', '\t', ' '],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(tag => tag.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
             .ToArray();
     }
 
@@ -59,7 +54,7 @@ public static class AnnotationEditorDialog
         var tagsInput = new TextBox
         {
             Text = string.Join(", ", tags ?? []),
-            ToolTip = "用逗号、分号或空格分隔，最多 10 个",
+            ToolTip = "用半角逗号分隔，最多 10 个",
             MaxLength = 4000
         };
         panel.Children.Add(tagsInput);

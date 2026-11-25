@@ -58,22 +58,25 @@ public sealed class AnnotationHighlightAdorner : Adorner
             || string.IsNullOrEmpty(annotation.Quote))
             return false;
 
+        var block = model.DisplayRangeForSource(annotation.SourceStart);
+        if (block.Length <= 0) return false;
+
         string visible = model.VisibleText;
-        int hint = model.SourceToDisplay(annotation.SourceStart);
-        hint = Math.Clamp(hint, 0, visible.Length);
-        if (hint + annotation.Quote.Length <= visible.Length
-            && visible.AsSpan(hint, annotation.Quote.Length).SequenceEqual(annotation.Quote))
+        int blockStart = Math.Clamp(block.Start, 0, visible.Length);
+        int blockLength = Math.Clamp(block.Length, 0, visible.Length - blockStart);
+        int found = visible.IndexOf(annotation.Quote, blockStart, blockLength, StringComparison.Ordinal);
+        if (found >= 0)
         {
-            displayStart = hint;
+            displayStart = found;
             displayLength = annotation.Quote.Length;
             return true;
         }
 
-        int found = visible.IndexOf(annotation.Quote, hint, StringComparison.Ordinal);
-        if (found < 0) found = visible.IndexOf(annotation.Quote, StringComparison.Ordinal);
-        if (found < 0) return false;
-        displayStart = found;
-        displayLength = annotation.Quote.Length;
+        // A reading annotation stores the Markdown source quote, so emphasis,
+        // link destinations and other hidden syntax can prevent an exact text
+        // match. Match macOS by highlighting the whole rendered source block.
+        displayStart = blockStart;
+        displayLength = blockLength;
         return true;
     }
 

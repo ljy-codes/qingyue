@@ -49,14 +49,15 @@ internal sealed class ReaderTableWindow : Window
     internal static void Attach(Table table)
     {
         var item = new MenuItem { Header = "展开表格（横向滚动）" };
-        item.Click += (_, _) =>
-        {
-            var owner = FindHost(table) is { } host ? Window.GetWindow(host) : null;
-            var window = new ReaderTableWindow(table, owner);
-            window.Show();
-        };
+        item.Click += (_, _) => Show(table, FindHost(table) is { } host ? Window.GetWindow(host) : null);
         table.ContextMenu = new ContextMenu { Items = { item } };
         table.ToolTip = "右键展开表格，可横向滚动查看";
+    }
+
+    internal static void Show(Table table, Window? owner)
+    {
+        var window = new ReaderTableWindow(table, owner);
+        window.Show();
     }
 
     private static RichTextBox? FindHost(DependencyObject source)

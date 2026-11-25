@@ -27,18 +27,22 @@ public sealed class EditorTab : INotifyPropertyChanged
     public ReadingModel? Reading { get; set; }
     public RenderedReading? Rendered { get; set; }
     public bool IsReading { get; set; }
+    public bool SplitPreview { get; set; }
     public bool RecoverDraft { get; set; } = true;
     public bool AutomaticKind { get; set; } = true;
     public TextKind Kind { get; set; }
     public int SourceAnchor { get; set; }
     internal int? ViewportAnchor { get; set; }
     internal double ViewportDelta { get; set; }
+    internal int? EditorViewportAnchor { get; set; }
+    internal double EditorHorizontalOffset { get; set; }
     internal long ViewportGeneration { get; set; }
     internal string? RenderedText { get; set; }
     internal string? RenderedPath { get; set; }
     internal TextKind RenderedKind { get; set; }
-    internal int? ReturnAnchor { get; set; }
-    internal double ReturnDelta { get; set; }
+    internal List<(int Anchor, double Delta)> Navigation { get; } = [];
+    internal int? ReturnAnchor => Navigation.Count == 0 ? null : Navigation[^1].Anchor;
+    internal double ReturnDelta => Navigation.Count == 0 ? 0 : Navigation[^1].Delta;
     public string DisplayTitle => File.Title + (File.IsDirty && !IsEmpty ? "  •" : "");
     public bool IsEmpty => File.Path is null && File.Text.Length == 0
         && (File.SuggestedName is null || automaticallyNamed && File.SuggestedName == automaticName);
@@ -52,6 +56,7 @@ public sealed class EditorTab : INotifyPropertyChanged
     private long changeGeneration;
     private bool automaticallyNamed;
     private string? automaticName;
+    private bool lineNumberRefreshQueued;
 
     public EditorTab(DocumentFile file)
     {
@@ -67,13 +72,14 @@ public sealed class EditorTab : INotifyPropertyChanged
             TextWrapping = TextWrapping.Wrap, BorderThickness = new Thickness(0),
             Padding = new Thickness(18, 20, 24, 24),
             FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI"),
-            FontSize = 15, UndoLimit = 200, IsUndoEnabled = true,
+            FontSize = 15, UndoLimit = 100, IsUndoEnabled = true,
             IsInactiveSelectionHighlightEnabled = true,
             VerticalContentAlignment = VerticalAlignment.Top
         };
         Editor.IsUndoEnabled = false;
         Editor.IsUndoEnabled = true;
         MarkdownWriter = new MarkdownEditor(this);
+        Editor.PreviewKeyDown += HandleTextIndentation;
         System.Windows.Automation.AutomationProperties.SetName(Editor, "文档编辑器");
         Editor.SetResourceReference(TextBox.SelectionBrushProperty, "AccentBrush");
         EditorSurface = new Grid();
@@ -198,6 +204,28 @@ public sealed class EditorTab : INotifyPropertyChanged
     }
     public void RebuildPositions() => Positions = new TextPositionIndex(Editor.Text);
 
+    private void HandleTextIndentation(object sender, KeyEventArgs e)
+    {
+        if (e.Handled || MarkdownWriter.IsComposing || e.Key != Key.Tab || Editor.IsReadOnly) return;
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers is not ModifierKeys.None and not ModifierKeys.Shift) return;
+        var edit = TextEditing.Indent(Editor.Text, Editor.SelectionStart, Editor.SelectionLength,
+            modifiers == ModifierKeys.Shift);
+        if (edit is not null)
+        {
+            Editor.BeginChange();
+            try
+            {
+                Editor.Select(edit.Start, edit.Length);
+                Editor.SelectedText = edit.Replacement;
+                Editor.Select(edit.SelectionStart, edit.SelectionLength);
+            }
+            finally { Editor.EndChange(); }
+        }
+        e.Handled = true;
+        Editor.Focus();
+    }
+
     /// <summary>Call only after DocumentFile.Save succeeds, never after a draft/session save.</summary>
     public void TrackSavedBaseline()
     {
@@ -256,48 +284,95 @@ public sealed class EditorTab : INotifyPropertyChanged
         updatingLines = true;
         try
         {
-        int count = Editor.LineCount;
-        if (count == 0) return;
-        int first = Editor.GetFirstVisibleLineIndex(), last = Editor.GetLastVisibleLineIndex();
-        if (first < 0 || last < 0) return;
-        // Use logical source line numbers even when word wrapping creates visual rows.
-        var source = Editor.Text;
-        var output = new List<string>();
-        changeMargin.Children.Clear();
-        double top = double.NaN;
-        for (int row = first; row <= Math.Min(count - 1, Math.Min(last + 1, first + 150)); row++)
-        {
-            int offset = Editor.GetCharacterIndexFromLineIndex(row);
-            if (offset < 0) break;
-            var rect = Editor.GetRectFromCharacterIndex(offset);
-            if (rect.IsEmpty) continue;
-            if (double.IsNaN(top)) top = rect.Top;
-            bool continuation = offset > 0 && source[offset - 1] is not '\n' and not '\r';
-            int line = Positions.LogicalLineAt(offset);
-            output.Add(continuation ? "" : line.ToString());
-            if (!TryGetLineChange(line, out var change) || change.IsDeletion && continuation) continue;
-            var marker = new Rectangle
+            int count = Editor.LineCount;
+            if (count == 0) return;
+            int first = Editor.GetFirstVisibleLineIndex();
+            int last = Editor.GetLastVisibleLineIndex();
+            if (first < 0 || last < 0) return;
+            first = Math.Clamp(first, 0, count - 1);
+            last = Math.Clamp(last, first, count - 1);
+            if (!TryGetCharacterIndexFromLineIndex(first, count, out int firstOffset)) return;
+            if (firstOffset < 0) return;
+
+            // Use logical source line numbers even when word wrapping creates visual rows.
+            var source = Editor.Text;
+            var output = new List<string>();
+            changeMargin.Children.Clear();
+            double top = double.NaN;
+            for (int row = first; row <= Math.Min(count - 1, Math.Min(last + 1, first + 150)); row++)
             {
-                Width = 4,
-                Height = change.IsDeletion ? 3 : Math.Max(3, rect.Height),
-                ToolTip = (change.Kind == LineChangeKind.Unsaved ? "未保存修改" : "本次会话已保存修改")
-                    + (change.IsDeletion ? "（此处删除了行）" : "（修改或新增行）")
-            };
-            marker.SetResourceReference(Shape.FillProperty, change.Kind == LineChangeKind.Unsaved ? "UnsavedBrush" : "SavedBrush");
-            Canvas.SetTop(marker, rect.Top);
-            changeMargin.Children.Add(marker);
-        }
-        LineNumbers.Text = string.Join("\n", output);
-        LineNumbers.LineHeight = Editor.FontSize * Editor.FontFamily.LineSpacing;
-        if (!double.IsNaN(top)) LineNumbers.Margin = new Thickness(8, top, 10, 0);
+                // TextBox line indexes can become temporarily stale while a tab is
+                // selected and its layout is being replaced. Do not trust the
+                // LineCount snapshot alone; retry after the next layout pass.
+                if (!TryGetCharacterIndexFromLineIndex(row, count, out int offset)) return;
+                if (offset < 0) break;
+                var rect = Editor.GetRectFromCharacterIndex(offset);
+                if (rect.IsEmpty) continue;
+                if (double.IsNaN(top)) top = rect.Top;
+                bool continuation = offset > 0 && source[offset - 1] is not '\n' and not '\r';
+                int line = Positions.LogicalLineAt(offset);
+                output.Add(continuation ? "" : line.ToString());
+                if (!TryGetLineChange(line, out var change) || change.IsDeletion && continuation) continue;
+                var marker = new Rectangle
+                {
+                    Width = 4,
+                    Height = change.IsDeletion ? 3 : Math.Max(3, rect.Height),
+                    ToolTip = (change.Kind == LineChangeKind.Unsaved ? "未保存修改" : "本次会话已保存修改")
+                        + (change.IsDeletion ? "（此处删除了行）" : "（修改或新增行）")
+                };
+                marker.SetResourceReference(Shape.FillProperty, change.Kind == LineChangeKind.Unsaved ? "UnsavedBrush" : "SavedBrush");
+                Canvas.SetTop(marker, rect.Top);
+                changeMargin.Children.Add(marker);
+            }
+            LineNumbers.Text = string.Join("\n", output);
+            LineNumbers.LineHeight = Editor.FontSize * Editor.FontFamily.LineSpacing;
+            if (!double.IsNaN(top)) LineNumbers.Margin = new Thickness(8, top, 10, 0);
         }
         finally { updatingLines = false; }
     }
+
+    private bool TryGetCharacterIndexFromLineIndex(int row, int lineCount, out int offset)
+    {
+        offset = -1;
+        if (!Editor.IsLoaded || row < 0 || row >= lineCount || Editor.LineCount != lineCount)
+        {
+            QueueLineNumberRefresh();
+            return false;
+        }
+
+        try
+        {
+            offset = Editor.GetCharacterIndexFromLineIndex(row);
+            return offset >= 0;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // WPF can still reject a row while selection/layout is changing.
+            // Recompute after Loaded instead of leaving the gutter half updated.
+            QueueLineNumberRefresh();
+            return false;
+        }
+    }
+
+    private void QueueLineNumberRefresh()
+    {
+        if (lineNumberRefreshQueued || !Editor.IsLoaded) return;
+        lineNumberRefreshQueued = true;
+        Editor.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            lineNumberRefreshQueued = false;
+            if (Editor.IsLoaded) UpdateLineNumbers();
+        });
+    }
 }
 
-public sealed class ReaderAction(Action execute) : ICommand
+public sealed class ReaderAction(Func<bool> canExecute, Action execute) : ICommand
 {
-    public bool CanExecute(object? parameter) => true;
-    public void Execute(object? parameter) => execute();
-    public event EventHandler? CanExecuteChanged { add { } remove { } }
+    public bool CanExecute(object? parameter) => canExecute();
+    public void Execute(object? parameter)
+    {
+        if (canExecute()) execute();
+    }
+    public event EventHandler? CanExecuteChanged;
+    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }

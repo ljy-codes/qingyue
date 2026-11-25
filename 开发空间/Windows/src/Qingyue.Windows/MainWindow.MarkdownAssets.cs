@@ -1,7 +1,6 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
-using Microsoft.Win32;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
@@ -30,50 +29,47 @@ public partial class MainWindow
             catch (Exception ex) when (SharingFailure(ex))
             { StatusText.Text = "图片粘贴未完成：" + ex.Message; }
         });
-        tab.Editor.PreviewDragOver += (_, e) =>
+        tab.Editor.PreviewDragOver += (sender, e) =>
         {
-            if (!ImageDrop(tab, e.Data, out var ignoredPath)) return;
+            if (!ImageDrop(tab, e.Data, out _)) return;
             e.Effects = DragDropEffects.Copy;
             e.Handled = true;
         };
-        tab.Editor.PreviewDrop += async (_, e) =>
+        tab.Editor.PreviewDrop += async (sender, e) =>
         {
-            if (!ImageDrop(tab, e.Data, out string? path)) return;
+            if (!ImageDrop(tab, e.Data, out string[] paths)) return;
             e.Handled = true;
-            await InsertMarkdownImageFileAsync(path!);
+            await InsertMarkdownImageFilesAsync(paths);
         };
     }
 
-    private bool ImageDrop(EditorTab tab, IDataObject data, out string? path)
+    private bool ImageDrop(EditorTab tab, IDataObject data, out string[] paths)
     {
-        path = null;
+        paths = [];
         if (CurrentTab != tab || !tab.MarkdownWriter.CanEdit ||
-            data.GetData(DataFormats.FileDrop) is not string[] { Length: 1 } paths) return false;
-        if (Path.GetExtension(paths[0]).ToLowerInvariant() is not (".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff"))
-            return false;
-        path = paths[0];
-        return true;
-    }
-
-    private async void MarkdownImageClick(object sender, RoutedEventArgs e)
-    {
-        e.Handled = true;
-        if (exitInProgress || modalDepth > 0 || CurrentTab is not { } tab || !tab.MarkdownWriter.CanEdit) return;
-        var dialog = new OpenFileDialog
-        {
-            Title = "插入本地图片",
-            Filter = "图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff",
-            CheckFileExists = true, Multiselect = false
-        };
-        if (Modal(() => dialog.ShowDialog(this)) == true)
-            await InsertMarkdownImageFileAsync(dialog.FileName);
+            data.GetData(DataFormats.FileDrop) is not string[] dropped) return false;
+        paths = dropped.Where(IsSupportedImage).Take(8).ToArray();
+        return paths.Length > 0;
     }
 
     public Task<bool> InsertMarkdownImageAsync(BitmapSource image, CancellationToken cancellationToken = default) =>
-        TrackMarkdownImageTask(InsertMarkdownImageCoreAsync(_ => Task.FromResult(image), cancellationToken));
+        TrackMarkdownImageTask(InsertMarkdownImagesCoreAsync(
+            _ => Task.FromResult<IReadOnlyList<(BitmapSource Image, string SuggestedName)>>(
+                [(image, "pasted-image")]), cancellationToken));
 
     public Task<bool> InsertMarkdownImageFileAsync(string path, CancellationToken cancellationToken = default) =>
-        TrackMarkdownImageTask(InsertMarkdownImageCoreAsync(token => MarkdownImageInsertion.ReadAsync(path, token), cancellationToken));
+        InsertMarkdownImageFilesAsync([path], cancellationToken);
+
+    private Task<bool> InsertMarkdownImageFilesAsync(
+        IReadOnlyList<string> paths, CancellationToken cancellationToken = default) =>
+        TrackMarkdownImageTask(InsertMarkdownImagesCoreAsync(async token =>
+        {
+            var images = new List<(BitmapSource Image, string SuggestedName)>();
+            foreach (string path in paths.Take(8))
+                images.Add((await MarkdownImageInsertion.ReadAsync(path, token),
+                    Path.GetFileNameWithoutExtension(path)));
+            return images;
+        }, cancellationToken));
 
     private Task<bool> TrackMarkdownImageTask(Task<bool> task)
     {
@@ -87,8 +83,9 @@ public partial class MainWindow
         data.GetDataPresent(DataFormats.Html, false) ||
         data.GetDataPresent(DataFormats.Rtf, false);
 
-    private async Task<bool> InsertMarkdownImageCoreAsync(
-        Func<CancellationToken, Task<BitmapSource>> readImage, CancellationToken cancellationToken)
+    private async Task<bool> InsertMarkdownImagesCoreAsync(
+        Func<CancellationToken, Task<IReadOnlyList<(BitmapSource Image, string SuggestedName)>>> readImages,
+        CancellationToken cancellationToken)
     {
         VerifyAccess();
         if (exitInProgress || modalDepth > 0 || markdownImageCancellation is not null ||
@@ -100,13 +97,19 @@ public partial class MainWindow
         int start = tab.Editor.SelectionStart, length = tab.Editor.SelectionLength;
         using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         markdownImageCancellation = request;
-        MarkdownImageAsset? asset = null;
+        var assets = new List<MarkdownImageAsset>();
         bool applied = false;
         try
         {
             StatusText.Text = "正在保存图片附件…";
-            var image = await readImage(request.Token);
-            asset = await MarkdownImageInsertion.WriteAsync(image, path, request.Token);
+            var images = await readImages(request.Token);
+            if (images.Count == 0) return false;
+            foreach (var (image, suggestedName) in images)
+            {
+                request.Token.ThrowIfCancellationRequested();
+                assets.Add(await MarkdownImageInsertion.WriteAsync(
+                    image, path, suggestedName, request.Token));
+            }
             request.Token.ThrowIfCancellationRequested();
             if (exitInProgress || CurrentTab != tab || !tabs.Contains(tab) || tab.File.Path != path ||
                 tab.Editor.Text != source || tab.Editor.SelectionStart != start ||
@@ -115,8 +118,12 @@ public partial class MainWindow
                 StatusText.Text = "文档或光标位置已变化，本次插图已取消，请重新插入。";
                 return false;
             }
-            applied = tab.MarkdownWriter.InsertImage(asset.Markdown);
-            if (applied) StatusText.Text = "已插入本地图片；请保存文档。撤销会保留附件以便重做。";
+            string markdown = string.Join(Environment.NewLine, assets.Select(asset => asset.Markdown));
+            applied = tab.MarkdownWriter.InsertImage(markdown);
+            if (applied)
+                StatusText.Text = assets.Count == 1
+                    ? "已插入本地图片；请保存文档。撤销会保留附件以便重做。"
+                    : $"已插入 {assets.Count} 张图片；请保存文档。撤销会保留附件以便重做。";
             return applied;
         }
         catch (OperationCanceledException) { StatusText.Text = "已取消插图。"; return false; }
@@ -124,8 +131,13 @@ public partial class MainWindow
         { StatusText.Text = "插图未完成：" + ex.Message; return false; }
         finally
         {
-            if (!applied && asset is not null) MarkdownImageInsertion.DeleteUnapplied(asset.FilePath);
+            if (!applied)
+                foreach (var asset in assets) MarkdownImageInsertion.DeleteUnapplied(asset.FilePath);
             markdownImageCancellation = null;
         }
     }
+
+    internal static bool IsSupportedImage(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".tif" or ".tiff" or ".bmp" or ".heic";
 }

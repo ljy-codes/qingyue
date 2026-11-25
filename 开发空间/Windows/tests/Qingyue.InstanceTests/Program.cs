@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Threading;
 using Qingyue.Core;
 using Qingyue.Windows;
@@ -66,6 +67,7 @@ internal static class Program
             ("并发冷启动不丢失任何进程的文件", ConcurrentStartupAsync),
             ("启动竞态中接管放弃的互斥量", AbandonedOwnerAsync),
             ("资料目录隔离及同目录大小写兼容", ProfileIsolationAsync),
+            ("关闭窗口仅隐藏且再次启动恢复原窗口", HideAndReopenAsync),
             ("正常退出后释放互斥量及管道可重启", RestartAsync),
         };
         tests = tests.Concat(PipeTests.Cases).ToArray();
@@ -208,11 +210,44 @@ internal static class Program
         using var fixture = new AppFixture();
         var primary = fixture.Start(fixture.File("退出前.txt"));
         await WaitForAsync(() => WindowTitle(primary).Contains("退出前.txt"), "主窗口没有就绪");
-        Check(primary.CloseMainWindow(), "无法请求测试窗口正常退出");
+        SendQuitShortcut(primary);
         await WaitForAsync(() => primary.HasExited, "窗口没有正常退出");
         Check(primary.ExitCode == 0, "正常退出返回错误");
         var restarted = fixture.Start(fixture.File("重新启动.txt"));
         await WaitForAsync(() => WindowTitle(restarted).Contains("重新启动.txt"), "退出后无法重新获得资料目录身份");
+    }
+
+    private static async Task HideAndReopenAsync()
+    {
+        using var fixture = new AppFixture();
+        var primary = fixture.Start(fixture.File("后台保留.txt"));
+        await WaitForAsync(() => WindowTitle(primary).Contains("后台保留.txt"), "主窗口没有就绪");
+        Check(primary.CloseMainWindow(), "无法请求关闭主窗口");
+        await WaitForAsync(() => !primary.HasExited && WindowTitle(primary) == "",
+            "关闭主窗口后进程未保持运行或窗口未隐藏");
+        var secondary = fixture.Start();
+        await WaitForAsync(() => secondary.HasExited, "隐藏后再次启动未转发到现有进程");
+        Check(secondary.ExitCode == 0, "隐藏窗口恢复请求失败");
+        await WaitForAsync(() => WindowTitle(primary).Contains("后台保留.txt"),
+            "再次启动后未恢复原窗口及原标签");
+    }
+
+    private static void SendQuitShortcut(Process process)
+    {
+        process.Refresh();
+        IntPtr window = process.MainWindowHandle;
+        Check(window != IntPtr.Zero, "没有可用于操作退出菜单的主窗口");
+        var root = AutomationElement.FromHandle(window);
+        var menuItemType = new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem);
+        var fileMenu = root.FindFirst(TreeScope.Descendants,
+            new AndCondition(menuItemType, new PropertyCondition(AutomationElement.NameProperty, "文件(F)")));
+        Check(fileMenu is not null, "未找到文件菜单");
+        var expand = (ExpandCollapsePattern)fileMenu!.GetCurrentPattern(ExpandCollapsePattern.Pattern);
+        expand.Expand();
+        var quit = root.FindFirst(TreeScope.Descendants,
+            new AndCondition(menuItemType, new PropertyCondition(AutomationElement.NameProperty, "退出")));
+        Check(quit is not null, "文件菜单中没有退出项");
+        ((InvokePattern)quit!.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
     }
 
     internal static void Check(bool valid, string message)
@@ -254,6 +289,7 @@ internal static class Program
 
     [DllImport("user32.dll")]
     private static extern bool IsZoomed(IntPtr window);
+
 }
 
 internal sealed class AppFixture : IDisposable

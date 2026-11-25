@@ -42,7 +42,7 @@ internal static partial class Program
             {
                 Check(window.Tabs.Any(t => t.File.Id == file.Id), "fixture did not restore tab");
                 using var dialogs = new DialogResponses(_ => "放弃");
-                Invoke(window, "CloseTab", window.Tabs.Single(t => t.File.Id == file.Id), true);
+                Invoke(window, "CloseTab", window.Tabs.Single(t => t.File.Id == file.Id), true, false);
                 await window.PersistWorkspaceAsync();
                 Check(!File.Exists(Draft(profile, file.Id)), "closed restored tab was retained as unopened");
             }
@@ -50,7 +50,7 @@ internal static partial class Program
         });
         await Scenario("shutdown_freezes_body_and_metadata", async root => await ClosingFreeze(root, false));
         await Scenario("failed_persistence_restores_body_metadata_and_readonly", async root => await ClosingFreeze(root, true));
-        await Scenario("cancel_exit_restores_original_state", async root =>
+        await Scenario("cancel_quit_restores_original_state", async root =>
         {
             var window = await OpenWindow(Path.Combine(root, "profile"), false);
             try
@@ -60,7 +60,7 @@ internal static partial class Program
                 first.Editor.IsReadOnly = true;
                 ((FrameworkElement)window.Content).IsEnabled = true;
                 using var dialogs = new DialogResponses(index => index == 0 ? "放弃" : "取消");
-                window.Close();
+                Check(!await window.RequestQuitAsync(), "cancel incorrectly quit the application");
                 Check(window.IsVisible && !Get<bool>(window, "exitInProgress"), "cancel did not retain window");
                 Check(first.Editor.IsReadOnly && !second.Editor.IsReadOnly, "cancel changed original read-only flags");
                 Check(((UIElement)window.Content).IsEnabled && Get<HashSet<Guid>>(window, "discardedAtExit").Count == 0,
@@ -97,7 +97,7 @@ internal static partial class Program
                 }
                 finally { window.CloseForShutdown(); }
             });
-        await Scenario("final_close_cancel_restores_editability", async root =>
+        await Scenario("final_quit_cancel_restores_editability", async root =>
         {
             var window = await OpenWindow(Path.Combine(root, "profile"), false);
             var editable = window.NewDocument("KEEP_WINDOW");
@@ -108,7 +108,7 @@ internal static partial class Program
             try
             {
                 using var dialogs = new DialogResponses(_ => "保留草稿");
-                window.Close();
+                _ = window.RequestQuitAsync();
                 await Until(() => !Get<bool>(window, "exitInProgress") || Get<bool>(window, "approvedShutdown"), "final close decision");
                 Check(window.IsVisible && !Get<bool>(window, "approvedShutdown") && !Get<bool>(window, "exitInProgress"),
                     "cancelled final close left approved/in-progress state set");
@@ -116,6 +116,26 @@ internal static partial class Program
                     "cancelled final close did not restore original state");
             }
             finally { window.Closing -= veto; window.CloseForShutdown(); }
+        });
+        await Scenario("window_close_hides_without_terminating_and_reopens_same_tabs", async root =>
+        {
+            string path = Path.Combine(root, "reopen.md");
+            File.WriteAllText(path, "# 保留\n\n关闭窗口后仍应保留。");
+            var window = await OpenWindow(Path.Combine(root, "profile"), false);
+            try
+            {
+                await window.OpenPathsAsync([path]);
+                var tab = window.CurrentTab!;
+                window.Close();
+                await Until(() => window.IsHiddenToBackground && !window.IsVisible, "window hides");
+                Check(window.IsLoaded && window.Tabs.Count == 1 && ReferenceEquals(window.Tabs[0], tab),
+                    "window close disposed the in-memory workspace");
+                window.Show();
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                Check(window.IsVisible && !window.IsHiddenToBackground && ReferenceEquals(window.CurrentTab, tab),
+                    "reopening did not restore the existing active tab");
+            }
+            finally { if (window.IsVisible) window.CloseForShutdown(); }
         });
         await Scenario("rename_migrates_exclusion_only_after_success", async root =>
         {
@@ -158,6 +178,80 @@ internal static partial class Program
                     && File.ReadAllText(Path.Combine(root, "exists.txt")) == "DO_NOT_OVERWRITE", "rename wrote unsaved text to disk");
             }
             finally { window.CloseForShutdown(); }
+        });
+        await Scenario("save_as_after_reopen_migrates_path_owned_metadata", async root =>
+        {
+            string profile = Path.Combine(root, "profile");
+            string oldPath = Path.Combine(root, "before-reopen.txt");
+            string newPath = Path.Combine(root, "after-save-as.txt");
+            File.WriteAllText(oldPath, "alpha beta gamma");
+            MainWindow? window = null;
+            try
+            {
+                window = await OpenWindow(profile, false);
+                await window.OpenPathsAsync([oldPath]);
+                var original = window.CurrentTab!;
+                Guid oldId = original.File.Id;
+                var annotations = Get<AnnotationStore>(window, "annotations");
+                var bookmarks = Get<BookmarkStore>(window, "bookmarks");
+                var readingList = Get<ReadingListStore>(window, "readingList");
+                var annotation = annotations.Add(original.File, new AnnotationDraft(
+                    original.File.Id, original.File.Path, 0, 5, "alpha", "", ""));
+                var bookmark = bookmarks.Add(original.File, 6, "beta");
+                var listed = readingList.Upsert(oldPath, 25, 6, isRead: false, isPinned: true);
+                Check((await annotations.SaveAsync()).Errors.Count == 0, "annotation seed did not save");
+                Check((await bookmarks.SaveAsync()).Errors.Count == 0, "bookmark seed did not save");
+                Check((await readingList.SaveAsync()).Errors.Count == 0, "reading-list seed did not save");
+
+                Check(await (Task<bool>)Invoke(window, "ReloadDocumentAsync", original, (TextCodec?)null)!,
+                    "clean reopened document did not reload");
+                var reopened = window.CurrentTab!;
+                Check(reopened.File.Id != oldId,
+                    "reopen did not produce a new document ID, so migration identity is not exercised");
+                Check(annotations.For(reopened.File).Single().Id == annotation.Id
+                    && bookmarks.For(reopened.File).Single().Id == bookmark.Id,
+                    "reopen lost path-owned annotation or bookmark before save-as");
+
+                Check(window.SaveTabToPath(reopened, newPath), "save-as after reopen failed");
+                var migratedAnnotation = annotations.For(reopened.File).Single();
+                var migratedBookmark = bookmarks.For(reopened.File).Single();
+                Check(migratedAnnotation.Id == annotation.Id
+                    && migratedAnnotation.DocumentId == reopened.File.Id
+                    && string.Equals(migratedAnnotation.Path, newPath, StringComparison.OrdinalIgnoreCase),
+                    "save-as after reopen did not migrate annotation identity and path");
+                Check(migratedBookmark.Id == bookmark.Id
+                    && migratedBookmark.DocumentId == reopened.File.Id
+                    && string.Equals(migratedBookmark.Path, newPath, StringComparison.OrdinalIgnoreCase),
+                    "save-as after reopen did not migrate bookmark identity and path");
+                var migratedReadingList = readingList.Find(newPath);
+                Check(migratedReadingList is not null && migratedReadingList.Id == listed.Id
+                    && migratedReadingList.IsPinned && migratedReadingList.SourceAnchor == 6
+                    && readingList.Find(oldPath) is null,
+                    "save-as after reopen did not migrate reading-list state");
+
+                var saved = await window.PersistWorkspaceAsync();
+                Check(saved.Errors.Count == 0, "migrated metadata did not persist: " + string.Join("; ", saved.Errors));
+                var persistedAnnotations = new AnnotationStore(profile);
+                var persistedBookmarks = new BookmarkStore(profile);
+                var persistedReadingList = new ReadingListStore(profile);
+                await persistedAnnotations.LoadAsync();
+                await persistedBookmarks.LoadAsync();
+                await persistedReadingList.LoadAsync();
+                Check(persistedAnnotations.Items.Single(item => item.Id == annotation.Id) is
+                        { DocumentId: var annotationId, Path: var annotationPath }
+                    && annotationId == reopened.File.Id
+                    && string.Equals(annotationPath, newPath, StringComparison.OrdinalIgnoreCase),
+                    "persisted annotation did not retain migrated document identity");
+                Check(persistedBookmarks.Items.Single(item => item.Id == bookmark.Id) is
+                        { DocumentId: var bookmarkId, Path: var bookmarkPath }
+                    && bookmarkId == reopened.File.Id
+                    && string.Equals(bookmarkPath, newPath, StringComparison.OrdinalIgnoreCase),
+                    "persisted bookmark did not retain migrated document identity");
+                Check(persistedReadingList.Find(newPath)?.Id == listed.Id
+                    && persistedReadingList.Find(oldPath) is null,
+                    "persisted reading-list path migration is incomplete");
+            }
+            finally { window?.CloseForShutdown(); }
         });
         await Scenario("bookmark_and_active_document_survive_restart", async root =>
         {
@@ -231,7 +325,7 @@ internal static partial class Program
         await gate.WaitAsync();
         try
         {
-            window.Close();
+            _ = window.RequestQuitAsync();
             Check(Get<bool>(window, "exitInProgress") && window.IsVisible, "close did not await serialized persistence");
             frozen = editable.Editor.IsReadOnly && originalReadOnly.Editor.IsReadOnly
                 && !((UIElement)window.Content).IsEnabled
@@ -244,7 +338,7 @@ internal static partial class Program
                 new TextComposition(InputManager.Current, editable.Editor, "_LATE_INPUT"))
             { RoutedEvent = TextCompositionManager.TextInputEvent });
             bodyRejected = editable.Editor.Text == "BODY_BEFORE_CLOSE";
-            window.Close(); // A second close cannot start a second persistence sequence.
+            Check(!await window.RequestQuitAsync(), "a second quit started a second persistence sequence.");
         }
         finally { gate.Release(); }
         try
@@ -287,7 +381,7 @@ internal static partial class Program
     private static T Get<T>(object target, string name) =>
         (T)target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target)!;
 
-    private static object? Invoke(object target, string name, params object[] args) =>
+    private static object? Invoke(object target, string name, params object?[] args) =>
         target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
 
     private static async Task Until(Func<bool> predicate, string message)

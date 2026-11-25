@@ -12,12 +12,13 @@ public enum TextKind
 
 public sealed class FileConflictException(string message = "磁盘文件已被其他程序修改，请另存为或明确选择覆盖。") : IOException(message);
 public sealed class MixedLineEndingsException() : IOException("文件含有混合换行，请明确选择 LF 或 CRLF 后保存。");
+public sealed class WorkspaceScanLimitException(string message) : IOException(message);
 
 public sealed record DocumentSnapshot(
     int Version, Guid Id, string? Path, string? SuggestedName, string Text,
     TextCodec Codec, LineEnding LineEnding, string BaselineText,
     TextCodec BaselineCodec, LineEnding BaselineLineEnding, string? BaselineDigest,
-    bool HadBom, bool WasSaved);
+    bool HadBom, bool WasSaved, string? ResolvedPath = null);
 
 public sealed record WorkspaceEntry(
     Guid Id, string? Path, bool IsReading, int SourceAnchor, int SelectionStart,
@@ -34,7 +35,8 @@ public sealed record RestoredDocument(WorkspaceEntry Entry, DocumentFile File);
 public sealed record WorkspaceLoadResult(List<RestoredDocument> Documents, Guid? ActiveId, List<string> Warnings);
 public sealed record WorkspaceSaveResult(DateTimeOffset SavedAt, List<string> Errors);
 public sealed record DocumentBookmark(
-    Guid Id, Guid DocumentId, string? Path, int SourceAnchor, string Label, DateTimeOffset UpdatedAt);
+    Guid Id, Guid DocumentId, string? Path, int SourceAnchor, string Label,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 public sealed record BookmarkSaveResult(DateTimeOffset SavedAt, List<string> Errors);
 
 public sealed record SearchOptions(bool CaseSensitive = false, bool Regex = false, bool WholeWord = false);
@@ -44,7 +46,10 @@ public sealed record WorkspaceScanOptions(
     string FileNamePattern = "*",
     WorkspaceFileFilter FileFilter = WorkspaceFileFilter.All,
     IReadOnlySet<string>? IgnoredDirectories = null,
-    int MaximumEntries = 50_000);
+    int MaximumEntries = 10_000,
+    string ExtensionFilter = "",
+    bool IncludeHidden = false,
+    long MaximumBytes = 512L * 1024 * 1024);
 public sealed record WorkspaceFileEntry(
     string Path, string RelativePath, bool IsDirectory, long Length, DateTimeOffset LastWriteTimeUtc,
     TextKind? Kind);
@@ -52,16 +57,52 @@ public sealed record WorkspaceScanResult(
     string Root, IReadOnlyList<WorkspaceFileEntry> Entries, IReadOnlyList<string> Warnings);
 public sealed record GlobalSearchOptions(
     string FileNamePattern = "*",
+    string FileNameContains = "",
     SearchOptions? Search = null,
     string Replacement = "",
-    int ContextLines = 1,
-    int MaximumFiles = 2_000,
+    int ContextLines = 0,
     int MaximumMatches = 10_000,
-    bool BuildReplacementPreview = true);
+    bool BuildReplacementPreview = true,
+    long MaximumFileBytes = 10L * 1024 * 1024,
+    long MaximumTotalBytes = 128L * 1024 * 1024);
 public sealed record GlobalSearchMatch(
     string Path, int LineNumber, int ColumnNumber, string LineText,
-    string BeforeContext, string AfterContext, string Value, string Replacement);
-public sealed record GlobalSearchFileResult(string Path, int MatchCount, string? ReplacementText);
+    string BeforeContext, string AfterContext, string Value, string Replacement,
+    int SourceStart = -1, int SourceLength = 0, string Preview = "");
+public sealed class GlobalSearchReplacementPreview
+{
+    internal GlobalSearchReplacementPreview(
+        DocumentFile document,
+        int matchCount,
+        string replacementText)
+    {
+        Document = document;
+        MatchCount = matchCount;
+        OriginalText = document.Text;
+        ReplacementText = replacementText;
+    }
+
+    public DocumentFile Document { get; }
+    public string OriginalText { get; }
+    public string ReplacementText { get; }
+    public int MatchCount { get; }
+    public bool Applied { get; private set; }
+
+    public void Apply()
+    {
+        if (Applied) throw new InvalidOperationException("该替换预览已经应用，不能重复应用。");
+        if (Document.DiskChanged()) throw new FileConflictException();
+        Document.Text = ReplacementText;
+        Document.Save();
+        Applied = true;
+    }
+}
+public sealed record GlobalSearchFileResult(
+    string Path,
+    string RelativePath,
+    int MatchCount,
+    string? ReplacementText,
+    GlobalSearchReplacementPreview? Preview = null);
 public sealed record GlobalSearchResult(
     IReadOnlyList<GlobalSearchMatch> Matches,
     IReadOnlyList<GlobalSearchFileResult> Files,
@@ -71,7 +112,7 @@ public sealed record ReadingListEntry(
     Guid Id, string Path, bool IsPinned, bool IsRead, int ProgressPercent, int SourceAnchor,
     DateTimeOffset LastOpenedAt, DateTimeOffset UpdatedAt);
 public sealed record ReadingListSaveResult(DateTimeOffset SavedAt, List<string> Errors);
-public enum ReadingBlockKind { Paragraph, Heading, Code, Quote, ListItem, Separator, Table }
+public enum ReadingBlockKind { Paragraph, Metadata, Heading, Code, Quote, ListItem, Separator, Table }
 public sealed record ReadingBlock(
     ReadingBlockKind Kind, string Text, int SourceStart, int SourceLength,
     int DisplayStart, int Level = 0)

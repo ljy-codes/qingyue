@@ -81,13 +81,48 @@ internal static class Program
                 await Idle(window);
                 Check(Math.Abs(before - tab.Preview.VerticalOffset) < 80, "退出查找回到查找前阅读视口");
                 var outline = (ListBox)window.FindName("OutlineList");
+                object? NavigationStack() => typeof(EditorTab)
+                    .GetProperty("Navigation", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(tab);
+                int StackCount() => (int)NavigationStack()!.GetType().GetProperty("Count")!.GetValue(NavigationStack())!;
+                var returnButton = (Button)window.FindName("ReturnPositionButton");
+                Check(StackCount() == 0 && !returnButton.IsEnabled, "目录跳转前导航栈为空");
                 outline.SelectedIndex = outline.Items.Count - 1;
                 await Idle(window);
                 Check(tab.Preview.VerticalOffset > before + 100, "目录选择跳转到目标章节");
+                Check(StackCount() == 1 && returnButton.IsEnabled, "目录跳转按 macOS 压入导航位置");
                 Invoke(window, "ReturnToReadingPosition");
                 await Idle(window);
                 Check(Math.Abs(before - tab.Preview.VerticalOffset) < 80, "支持返回目录跳转前位置");
-                var other = window.NewDocument("another document");
+                Check(StackCount() == 0 && !returnButton.IsEnabled, "返回后导航栈与按钮状态同步");
+                outline.SelectedIndex = outline.Items.Count - 1;
+                await Idle(window);
+                outline.SelectedIndex = 0;
+                await Idle(window);
+                Check(StackCount() == 2, "连续目录跳转形成后进先出导航栈");
+                Invoke(window, "ReturnToReadingPosition");
+                await Idle(window);
+                Check(StackCount() == 1, "第一次返回只弹出一层导航");
+                Invoke(window, "ReturnToReadingPosition");
+                await Idle(window);
+                Check(StackCount() == 0 && !returnButton.IsEnabled, "第二次返回弹出剩余导航并禁用按钮");
+                for (int i = 0; i < 70; i++)
+                    Invoke(window, "RememberReadingPosition", tab);
+                Check(StackCount() == 64, "导航栈严格限制为 macOS 的 64 项");
+                while (StackCount() > 0)
+                    Invoke(window, "ReturnToReadingPosition");
+                await Idle(window);
+                string otherText = string.Join("\n\n", Enumerable.Range(1, 80)
+                    .Select(index => $"Other paragraph {index} 阅读内容保持位置。"));
+                var other = window.NewDocument(otherText);
+                int otherSourceAnchor = otherText.IndexOf("Other paragraph 55", StringComparison.Ordinal);
+                other.Editor.CaretIndex = otherSourceAnchor;
+                window.ToggleReading();
+                await Idle(window);
+                other.Preview.ScrollToVerticalOffset(other.Preview.ExtentHeight * .6);
+                await Idle(window);
+                double otherViewport = other.Preview.VerticalOffset;
+                Check(other.IsReading && otherViewport > 100, "第二个标签进入阅读并记录独立视口");
                 window.SelectTab(tab);
                 await Idle(window);
                 Check(Math.Abs(before - tab.Preview.VerticalOffset) < 80, "切换标签保留实际阅读位置");
@@ -100,9 +135,13 @@ internal static class Program
                 var interrupted = window.CurrentTab!;
                 window.SelectTab(other);
                 await rendering;
-                Check(!interrupted.IsReading && interrupted.File.Text == pendingText,
-                    "排版期间切换标签取消过期发布且保留已读取原文");
+                Check(interrupted.IsReading && interrupted.File.Text == pendingText && interrupted.Rendered is null,
+                    "排版期间切换标签释放资源且保留原文与阅读意图");
                 Check(ReferenceEquals(window.CurrentTab, other), "后台打开完成不抢回用户已切换标签");
+                window.SelectTab(interrupted);
+                await Until(() => interrupted.Rendered is not null);
+                Check(ReferenceEquals(window.CurrentTab, interrupted) && interrupted.IsReading,
+                    "切回被中断标签后按需重建阅读视图");
                 window.SelectTab(tab);
                 await Idle(window);
                 var saved = await window.PersistWorkspaceAsync();
@@ -113,7 +152,17 @@ internal static class Program
                 await window.InitializeAsync();
                 await Idle(window);
                 var restored = window.Tabs.Single(t => t.File.Path == path);
+                var restoredOther = window.Tabs.Single(t => t.File.Text == otherText);
                 Check(ReferenceEquals(window.CurrentTab, restored) && restored.IsReading, "重启恢复活动Markdown阅读标签");
+                Check(restoredOther.IsReading && restoredOther.Rendered is null,
+                    "重启先保留非活动阅读标签状态并延迟渲染");
+                window.SelectTab(restoredOther);
+                await Until(() => restoredOther.Rendered is not null);
+                await Idle(window);
+                Check(restoredOther.IsReading && restoredOther.SourceAnchor == otherSourceAnchor,
+                    "选择非活动标签后仍恢复阅读态和精确源锚点");
+                Check(Math.Abs(otherViewport - restoredOther.Preview.VerticalOffset) < 100,
+                    "选择非活动标签后恢复其独立阅读视口");
                 Check(Math.Abs(before - restored.Preview.VerticalOffset) < 100, "重启恢复实际屏幕视口而非旧选区");
                 result = 0;
                 Console.WriteLine($"Navigation checks: {checks} passed");

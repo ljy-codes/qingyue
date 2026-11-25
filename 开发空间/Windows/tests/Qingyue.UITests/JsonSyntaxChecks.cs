@@ -65,8 +65,35 @@ internal static class JsonSyntaxChecks
         check(!controlLabel.Contains('\n') && !controlLabel.Contains('\u2028') &&
               controlLabel.Contains("\\n") && controlLabel.Contains("\\u2028"),
             "JSON结构：字段名中的换行与 Unicode 行分隔符转义展示");
+        CheckStructureBudgets(check);
         CheckCache(check);
         CheckReentrantEditing(check);
+    }
+
+    private static void CheckStructureBudgets(Action<bool, string> check)
+    {
+        string acceptedNodes = "[" + string.Join(',', Enumerable.Repeat("0", 9_999)) + "]";
+        check(new JsonStructureView(acceptedNodes, TextKind.Json).Items.Count == 1,
+            "JSON结构：允许 10000 个值节点");
+        Throws<FormatException>(() => new JsonStructureView(
+            "[" + string.Join(',', Enumerable.Repeat("0", 10_000)) + "]", TextKind.Json));
+        check(true, "JSON结构：超过 10000 个值节点时拒绝");
+        string acceptedDepth = new string('[', 128) + "0" + new string(']', 128);
+        check(new JsonStructureView(acceptedDepth, TextKind.Json).Items.Count == 1,
+            "JSON结构：允许 128 层嵌套");
+        Throws<FormatException>(() => new JsonStructureView(
+            new string('[', 129) + "0" + new string(']', 129), TextKind.Json));
+        check(true, "JSON结构：超过 128 层时拒绝");
+        string tooLarge = new string(' ', 2_000_000) + "{}";
+        Throws<FormatException>(() => new JsonStructureView(tooLarge, TextKind.Json));
+        check(true, "JSON结构：超过 200 万字符时拒绝");
+    }
+
+    private static void Throws<T>(Action action) where T : Exception
+    {
+        try { action(); }
+        catch (T) { return; }
+        throw new Exception("预期异常：" + typeof(T).Name);
     }
 
     private static void CheckReentrantEditing(Action<bool, string> check)

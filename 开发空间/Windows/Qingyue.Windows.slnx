@@ -14,6 +14,7 @@
   <Project Path="tests/Qingyue.ImageTests/Qingyue.ImageTests.csproj" />
   <Project Path="tests/Qingyue.ClipboardTests/Qingyue.ClipboardTests.csproj" />
   <Project Path="tests/Qingyue.InstanceTests/Qingyue.InstanceTests.csproj" />
+  <Project Path="tests/Qingyue.InstanceIpcTests/Qingyue.InstanceIpcTests.csproj" />
   <Project Path="tests/Qingyue.ExternalChangesTests/Qingyue.ExternalChangesTests.csproj" />
   <Project Path="tests/Qingyue.NavigationTests/Qingyue.NavigationTests.csproj" />
   <Project Path="tests/Qingyue.RecoveryTests/Qingyue.RecoveryTests.csproj" />

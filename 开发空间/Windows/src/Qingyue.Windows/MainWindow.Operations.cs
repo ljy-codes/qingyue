@@ -117,7 +117,7 @@ public partial class MainWindow
             int anchor = EditingViewportAnchor(tab);
             tab.ViewportAnchor = anchor;
             tab.ViewportDelta = 0;
-            await EnterReadingAsync(tab, anchor);
+            await EnterReadingAsync(tab, anchor, snapToBlockStart: false);
             RefreshCurrent();
             if (tab.IsReading) RestoreReadingViewport(tab, anchor, tab.ViewportDelta);
         }

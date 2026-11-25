@@ -1,84 +1,85 @@
 # 轻阅 · 开发空间
 
-产品版本保持 **0.1.0**，本轮 **Mac 构建 4**。当前目标为 Intel macOS 13+，使用 Swift 5.8、AppKit 与系统文本组件，无第三方运行时。运行时不要求另装 Swift、Node.js 或 Rust。
+当前版本：
 
-本机只维护 Mac 客户端。Windows 的独立实现要求记录在上一级 `docs/Windows后续实现.md`，没有 Windows 工程、客户端或安装包。
+- Mac **0.4.0 · 构建 14**，Swift / AppKit，目标 macOS 13+，universal `x86_64 + arm64`。
+- Windows **0.19.0 · Windows 构建 1**，.NET 10 / WPF，目标 Windows 10 22H2 / Windows 11 x64。
+
+两端分别使用原生实现，共享文件语义、功能契约、测试样例和验收标准。Windows 工程位于 `Windows/`，Mac 工程位于当前目录的 `Sources/`、`Resources/`、`Tests/` 和 `scripts/`。
 
 ## 目录
 
-- `Sources/`：Mac 界面、文件读写、编辑、搜索与阅读模型。
-- `Sources/ReadingDocument.swift`：阅读内容、源文/显示块范围对应和目录。
-- `Sources/WorkspaceStore.swift`：会话元数据、独立恢复草稿与后台串行持久化。
-- `Sources/QuickOpenController.swift`：已打开与最近文件的原生快速定位面板。
-- `Sources/WindowMenuBar.swift`：窗口内紧凑菜单条。
-- `Sources/ReaderMenus.swift`：系统菜单和窗口菜单共用的命令分组。
-- `Resources/Info.plist`：版本、构建编号、应用与文本关联元数据。
-- `Tests/`：文件往返、冲突、Unicode、搜索、编辑操作与阅读映射测试。
-- `Samples/`：Markdown、JSON、YAML 和配置示例。
-- `scripts/build.sh`：优化编译、图标生成、本机签名与应用打包。
-- `scripts/test.sh`：独立测试入口；不等同于全部界面流程或性能验收。
-- `build/`：本地模块缓存和中间产物，不提交到 Git。
+- `Sources/`：Mac 界面、文件读写、编辑、搜索、阅读、主题、工作区与批注。
+- `Resources/`：Mac Info.plist 与图标资源。
+- `Tests/`：Mac 文件、文本、阅读、搜索、编辑、主题、布局、窗口与工作区测试。
+- `scripts/build.sh`：Mac 编译、签名、打包和校验文件生成。
+- `scripts/test.sh`：Mac 完整回归测试入口。
+- `scripts/check-artifact.sh`：复核交付包版本、架构、签名、校验和与 ZIP 内容。
+- `Windows/`：Windows WPF 源码、测试、安装器和构建脚本。
+- `Samples/`：TXT、Markdown、JSON、YAML 和配置示例。
 
-## 构建
+## Mac 构建与测试
 
-需要 Xcode Command Line Tools。终端进入本目录后运行：
+需要 Xcode Command Line Tools。
 
 ```bash
 bash scripts/build.sh
-```
-
-产品为上一级 `交付产品/轻阅.app`。脚本读取 Info.plist 中的 `CFBundleShortVersionString=0.1.0` 和 `CFBundleVersion=4`，以 `x86_64-apple-macosx13.0` 为目标优化编译，模块缓存写入 `build/ModuleCache`。图标由构建时 Swift/AppKit 脚本绘制。
-
-脚本执行 ad-hoc 签名和 `codesign --verify --deep --strict` 验证，不等同于 Developer ID、公证或 Apple Silicon 验收，也不自动替换 `/Applications` 中的已安装副本。文件关联仍使用 `Alternate`，不抢系统默认编辑器。
-
-产品版本与构建编号分别管理。旧 `v0.1.0` 预发布保留，本轮使用 `macos-build-4`；发布包必须对应实际提交与验收结果，不能用相同文件名悄悄替换历史内容。
-
-## 测试
-
-```bash
 bash scripts/test.sh
+bash scripts/check-artifact.sh
 ```
 
-测试脚本分别编译运行文件核心、格式、阅读模型、行索引、搜索、编辑操作、工作区存储、快速打开和 AppKit 窗口流程。阅读模型测试编译 `TextFeatures.swift + ReadingDocument.swift + ReadingDocumentTests.swift`，不需要运行主应用。
+交付输出为 `交付产品/轻阅-macOS-0.4.0/轻阅.app`、`SHA256SUMS.txt` 和 `轻阅-macOS-0.4.0-交付.zip`。构建缓存写入 `build/`，不提交 Git。
 
-源文和显示范围均需明确 UTF-16 单位。Markdown 块级映射不等同于任意字符级精准映射；新增渲染块要有原文范围、显示范围、中文/Emoji、首末位置与降级路径测试。不同字体或排版不能改变原文语义。
+默认构建 universal，使用 macOS 13 SDK 与 ad-hoc 本机签名。Apple Silicon 包已生成，但尚未完成 Apple Silicon 实机、Developer ID 和公证验收。构建不会自动替换 `/Applications` 中的已安装副本。
 
-文件测试至少覆盖编码/BOM、CRLF、混合换行、外部修改、ACL/扩展属性、软硬链接、保存失败及恢复。特别验证：恢复后或原始字节未缓存的 mixed 文件，明确覆盖时也不能静默转为 LF；没有足够原始信息时要求显式转换。
+## Windows 构建与测试
 
-界面流程测试和人工验收应另行记录，尤其包括阅读内查找/目录、Esc、模式切换定位、标签快捷键、红叉与退出分离、窗口位置、自动类型识别、中文输入法候选和键盘焦点。断言数量不代表用户流程覆盖率。
+需要 .NET 10 SDK 和 Windows Desktop targeting pack；自包含发布另需 win-x64 运行时包。安装器构建需要 NSIS 3.11、MSVC x86 Build Tools 和 Windows SDK。
 
-本轮菜单约定：专注 `⌘⇧F`，文档目录 `⌘⇧O`，上下标签 `⌘⇧[` / `⌘⇧]`，`⌘1`–`⌘8` 选择对应标签、`⌘9` 选择最后标签。红叉关闭窗口后进程存活。会话恢复与未保存草稿分别管理，关闭时的保存、保留草稿或放弃选择必须准确反映到后续恢复。`⌘W` 关闭最后标签时也关闭窗口，不自动补空白标签。
+```powershell
+pwsh -File Windows/scripts/build.ps1
+pwsh -File Windows/scripts/test.ps1
+pwsh -File Windows/scripts/publish.ps1
+pwsh -File Windows/scripts/build-installer.ps1
+```
 
-设置提供系统外观跟随、10–30 字号、正文阅读字体与行距，以及紧凑/标准/宽/全宽版心。配置阅读强制等宽；版式变化按源文锚点尝试恢复，而不是依赖固定像素 Y。
+Windows 输出：
 
-## 阅读和资源边界
+- `交付产品/轻阅-Windows-x64/Qingyue.exe`
+- `交付产品/轻阅-0.19.0-Windows构建1-x64.zip`
+- `交付产品/轻阅-0.19.0-Windows构建1-x64-setup.exe`
 
-TXT/Markdown 使用正文阅读布局；JSON/YAML/INI/XML 等保留源文、等宽与适用高亮，阅读视图不自动写回或格式化配置。标准 JSON 可手动格式化，JSONC 只做语法检查，YAML 仍只有缩进 Tab 基础提示。
+Windows 构建和验收细节见[Windows README](Windows/README.md)及[验收记录](../docs/test.md)。
 
-Markdown 使用原生 TextKit，支持基本标题、列表、任务、引用、代码、链接、删除线、分隔线和基础表格。表格限制 32 列/1024 单元格，图片占位；HTML 不执行，无 WebView 或自动联网取图。
+## 共同功能契约
 
-单文件上限 50 MiB；超过 200,000 UTF-16 单元时暂停高亮和 Markdown 排版；搜索上限 5,000,000 单元，复杂正则有时间预算。使用统一指标记录首屏、输入延迟、搜索取消、草稿写入、峰值和关闭后的回收，不能以历史空闲快照当作本轮性能保证。
+- TXT、Markdown、JSON/JSONC、YAML、INI/CONF/CONFIG 和 XML。
+- 多标签、快速打开、工作区、全局搜索、阅读清单、书签、批注和阅读简报。
+- 阅读/编辑、Markdown 分屏、目录、块级位置映射、本地图片、表格编辑和有限 Mermaid。
+- 七套主题、独立设置、四款 1024px 应用图标、系统外观跟随和阅读排版设置。
+- 会话恢复、独立草稿、草稿排除/清理、外部修改检测和三路处理。
+- 安全保存、编码/BOM、换行保持、ACL/权限/占用/链接保护。
+- 选区图文复制、纯文本/Markdown/代码块/表格复制和自包含 HTML 导出。
 
-多窗口、文件夹搜索、完整 Markdown、完整 YAML 和本地图片仍为后续工作。各平台的文件权限、原子替换、输入法、正则和安装行为需独立实现与验收。
+系统菜单、快捷键、文本组件、剪贴板、文件对话框、签名和安装器允许使用平台原生实现。新增共同能力必须同时记录两端实现和测试结果。
 
-## 会话与草稿持久化
+## 文件与恢复约定
 
-会话只保存文档引用、标签顺序、活动标签与显示状态，启动时重新读取干净文件的磁盘内容。草稿使用每文档独立快照，包含正文和保存基线；恢复脏文档后仍能检测外部变更。正文不写入会话元数据。
+文件写回必须由用户明确保存；恢复草稿只用于本机恢复，不自动覆盖原文件。会话只保存文档引用、标签顺序、活动标签和显示状态；草稿使用每文档独立不可变快照。
 
-`WorkspaceStore` 在串行后台队列编码和写入不可变快照，原文件写回仍走明确的保存操作。快照应在主线程从文档取值，不能让后台访问正在编辑的可变 `TextFile`。清理草稿需经过同一队列，防止稍后排队的旧快照再次出现；恢复失败和超限不能无提示地替换唯一有效草稿。
+Mac 与 Windows 的用户数据目录相互独立。Windows 默认位于 `%LOCALAPPDATA%\Qingyue`，可通过 `QINGYUE_SUPPORT_DIRECTORY` 指定隔离目录。清理草稿必须经过持久化串行队列，防止旧快照在清理后重新出现。
 
-快速打开只筛选明确提供的已打开/最近列表，不扫描全盘，也不创建常驻索引。`⌘⇧P` 打开面板；`⌘⌥S` 保存全部。批量保存应保留逐文件结果，取消、冲突或权限失败不能被整体报成成功。
+## 资源边界
 
-## 可选GUI模态诊断
+- 单文件上限 50 MiB。
+- 字面搜索上限 5,000 万 UTF-16 单元，复杂正则有超时和结果数量保护。
+- Markdown 富预览正文上限 50 万 UTF-16 单元；JSON 结构视图另有 200 万单元上限。
+- 单图最多 8 MiB、1600 万像素、单边 32768，解码最长边 4096。
+- 单篇最多 32 张图、32 MiB 图片数据、4800 万解码像素。
+- Mermaid、剪贴板和 HTML 导出各有独立源码、图形和输出载荷预算。
 
-`Tests/ModalSafetyTests.swift`覆盖保存确认与系统保存面板期间的异步打开。它需要正常桌面XPC/辅助界面服务环境，不加入默认沙箱测试。用除main.swift外全部Sources编译该入口后运行；测试所有正文与恢复目录均在临时目录，不能指向用户真实草稿。构建3该诊断22项通过。
+源文与阅读显示范围使用 UTF-16 块级映射，不承诺任意字符或像素级互转。图片、Markdown 和图表错误必须保留源码或明确降级，不能生成空白成功结果。
 
-## 构建 4 的交互约定
+## 验收原则
 
-窗口内菜单条提供“文件、编辑、搜索、视图、标签、帮助”，复用命令、快捷键与状态。点击菜单时应保持正文或输入框原有的焦点，确保剪切、复制、粘贴等响应链命令作用于正确控件。专注布局可以隐藏菜单条，退出后恢复。
-
-顶部侧栏开关必须在侧栏收起后仍可见，且可在新建、阅读、编辑和调整窗口大小后再次展开侧栏。
-
-标签重命名由双击和右键入口触发。磁盘文件重命名不能自动保存未提交正文，不能绕过外部修改检查或覆盖同名目标；新建文档只记录建议名称，首次保存再选择位置。名称恢复需兼容旧版草稿 JSON 缺少新增字段的情况。
-
-本轮菜单、侧栏和重命名的执行结果应补到 `../docs/Mac构建4验收.md`，未执行的检查不能记为通过。
+自动测试通过不能替代目标软件人工粘贴、Apple Silicon 实机、不同 Windows 版本/缩放、输入法候选和真实设备性能验收。平台等价语义必须分别验证，不能把 macOS POSIX ACL/xattr 直接等同于 Windows ACL/重解析点。

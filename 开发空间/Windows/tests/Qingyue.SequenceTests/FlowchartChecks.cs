@@ -40,10 +40,19 @@ internal static class FlowchartChecks
         _ = MermaidFlowchart.TryParse(source, out _, out _);
         Equal(unchanged, source, "parser does not mutate source");
 
-        Reject("flowchart TD\nsubgraph group\nA --> B\nend", "subgraph");
+        const string unsupported = "第 2 行：暂不支持子图、样式、交互或局部方向指令。";
+        foreach (string statement in new[]
+        {
+            "subgraph group", "end", "classDef hot fill:#f00", "class A hot",
+            "style A fill:#fff", "linkStyle 0 stroke:#000", "click A callback",
+            "direction LR", "acctitle 标题", "accdescr 说明"
+        })
+            Reject("flowchart TD\n" + statement, unsupported);
         Reject("flowchart TD\nA[缺少右括号 --> B", "格式");
         Reject("sequenceDiagram\nA->>B: 错误图类型", "flowchart");
         Reject("flowchart TD\nA -->|未闭合 B", "边标签");
+        foreach (string shape in new[] { "[/unsupported/]", "[\\unsupported\\]", "([unsupported])", "{{unsupported}}" })
+            Reject("flowchart TD\nA" + shape, "暂不支持这种节点形状");
         Reject("flowchart TD\n" + string.Join("\n", Enumerable.Range(0, 101).Select(i => $"N{i}[节点]")),
             "100");
     }

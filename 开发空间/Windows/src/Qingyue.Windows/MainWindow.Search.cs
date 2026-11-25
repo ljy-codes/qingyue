@@ -3,12 +3,14 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using Qingyue.Core;
 
 namespace Qingyue.Windows;
 
 public partial class MainWindow
 {
+    private TextBoxBase? textCommandTarget;
     private long searchGeneration;
     private IReadOnlyList<SearchMatch> matches = [];
     private string matchedText = "";
@@ -16,12 +18,30 @@ public partial class MainWindow
     private long completedGeneration = -1;
     private SearchHighlightAdorner? searchHighlightAdorner;
     private FrameworkElement? searchHighlightTarget;
+    private CancellationTokenSource? searchCancellation;
 
     private void TrackTextCommandTarget(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (e.NewFocus is not TextBoxBase input || EditMenu is null) return;
+        textCommandTarget = input;
         foreach (var item in EditMenu.Items.OfType<MenuItem>())
             if (item.Command is not null) item.CommandTarget = input;
+    }
+
+    private TextBoxBase? FocusedTextCommandTarget()
+    {
+        for (DependencyObject? current = Keyboard.FocusedElement as DependencyObject;
+             current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is TextBoxBase input && input.IsEnabled && input.IsVisible)
+                return input;
+        }
+        if (CurrentTab is { IsReading: false } tab && tab.Editor.IsEnabled && tab.Editor.IsVisible)
+            return tab.Editor;
+        if (textCommandTarget is { IsEnabled: true, IsVisible: true } tracked &&
+            (CurrentTab is not { IsReading: true } reading || tracked != reading.Editor))
+            return tracked;
+        return null;
     }
 
     private void SearchCommandCanExecute(object sender, CanExecuteRoutedEventArgs e)
@@ -50,32 +70,76 @@ public partial class MainWindow
     private void SearchKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) { MoveSearch(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -1 : 1); e.Handled = true; }
-        if (e.Key == Key.Escape) { HideSearch(); e.Handled = true; }
+    }
+
+    private void WindowPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || e.Handled) return;
+        if (SearchPanel.Visibility == Visibility.Visible)
+        {
+            HideSearch();
+            e.Handled = true;
+        }
+        else if (focusMode)
+        {
+            ToggleFocus();
+            e.Handled = true;
+        }
     }
 
     private async void QueueSearch()
     {
         long generation = ++searchGeneration;
+        searchCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        searchCancellation = cancellation;
         matches = []; matchIndex = -1; completedGeneration = -1;
         ClearSearchHighlights();
-        if (SearchPanel is null || SearchPanel.Visibility != Visibility.Visible || CurrentTab is not { } tab) return;
-        if (SearchQuery.Text.Length == 0) { SearchCount.Text = "输入查找内容"; return; }
+        void FinishProgress()
+        {
+            if (generation != searchGeneration) return;
+            SearchProgressBar.Visibility = Visibility.Collapsed;
+            SearchCancelButton.Visibility = Visibility.Collapsed;
+        }
+        if (SearchPanel is null || SearchPanel.Visibility != Visibility.Visible || CurrentTab is not { } tab)
+        {
+            FinishProgress();
+            return;
+        }
+        if (SearchQuery.Text.Length == 0)
+        {
+            SearchCount.Text = "输入查找内容";
+            FinishProgress();
+            return;
+        }
         string query = SearchQuery.Text;
         string replacement = ReplacePanel.Visibility == Visibility.Visible ? ReplacementText.Text : "";
         bool reading = tab.IsReading && tab.Rendered is not null;
         if (reading && tab.Reading is null)
         {
             SearchCount.Text = "正在准备阅读…";
+            FinishProgress();
             return;
         }
         string text = reading ? tab.Reading!.VisibleText : tab.File.Text;
         var options = new SearchOptions(CaseOption.IsChecked == true, RegexOption.IsChecked == true, WordOption.IsChecked == true);
         SearchCount.Text = "正在查找…";
+        SearchProgressBar.Value = 0;
+        SearchProgressBar.Visibility = Visibility.Visible;
+        SearchCancelButton.Visibility = Visibility.Visible;
+        var progress = new Progress<SearchProgress>(value =>
+        {
+            if (generation != searchGeneration) return;
+            SearchProgressBar.Value = value.Fraction * 100;
+            SearchCount.Text = $"正在查找… {value.Fraction:P0}";
+        });
+        IProgress<SearchProgress> progressSink = progress;
         try
         {
             await Task.Delay(140);
             if (generation != searchGeneration) return;
-            var result = await Task.Run(() => SearchEngine.Find(text, query, replacement, options));
+            var result = await Task.Run(() => SearchEngine.FindWithProgress(
+                text, query, replacement, options, progressSink.Report, cancellation.Token), cancellation.Token);
             if (generation != searchGeneration || CurrentTab != tab || reading != (tab.IsReading && tab.Rendered is not null)) return;
             matches = result; matchedText = text; completedGeneration = generation;
             SearchCount.Text = result.Count == 0 ? "没有匹配" : $"1 / {result.Count:N0}";
@@ -88,10 +152,32 @@ public partial class MainWindow
             }
             UpdateSearchHighlights(tab, result, reading);
         }
+        catch (OperationCanceledException)
+        {
+            if (generation == searchGeneration) SearchCount.Text = "查找已取消";
+        }
         catch (Exception ex)
         {
             if (generation == searchGeneration) SearchCount.Text = "查找失败：" + ex.Message;
         }
+        finally
+        {
+            if (ReferenceEquals(searchCancellation, cancellation)) searchCancellation = null;
+            cancellation.Dispose();
+            FinishProgress();
+        }
+    }
+
+    private void CancelSearch()
+    {
+        searchGeneration++;
+        searchCancellation?.Cancel();
+        searchCancellation = null;
+        matches = []; matchIndex = -1; completedGeneration = -1;
+        SearchProgressBar.Visibility = Visibility.Collapsed;
+        SearchCancelButton.Visibility = Visibility.Collapsed;
+        SearchCount.Text = "查找已取消";
+        ClearSearchHighlights();
     }
 
     private void MoveSearch(int delta)

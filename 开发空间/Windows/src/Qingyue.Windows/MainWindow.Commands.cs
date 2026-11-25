@@ -9,38 +9,53 @@ namespace Qingyue.Windows;
 
 public partial class MainWindow
 {
+    private readonly List<ReaderAction> shortcutCommands = [];
+    private bool savingAll;
+
     private void InstallShortcuts()
     {
         void Bind(Key key, ModifierKeys modifiers, string action) =>
-            InputBindings.Add(new KeyBinding(new ReaderAction(() => ExecuteAction(action)), key, modifiers));
+            BindAction(new KeyBinding(new ReaderAction(
+                () => CanExecuteAction(action), () => ExecuteAction(action)), key, modifiers));
         Bind(Key.N, ModifierKeys.Control, "new");
         Bind(Key.O, ModifierKeys.Control, "open");
         Bind(Key.S, ModifierKeys.Control, "save");
         Bind(Key.S, ModifierKeys.Control | ModifierKeys.Shift, "saveAs");
         Bind(Key.S, ModifierKeys.Control | ModifierKeys.Alt, "saveAll");
+        Bind(Key.Q, ModifierKeys.Control, "quit");
         Bind(Key.W, ModifierKeys.Control, "close");
+        Bind(Key.W, ModifierKeys.Control | ModifierKeys.Shift, "closeAll");
         Bind(Key.F, ModifierKeys.Control, "find");
-        Bind(Key.H, ModifierKeys.Control, "replace");
+        Bind(Key.H, ModifierKeys.Control | ModifierKeys.Shift, "replace");
+        Bind(Key.Z, ModifierKeys.Control | ModifierKeys.Shift, "redo");
         Bind(Key.R, ModifierKeys.Control, "reading");
-        Bind(Key.A, ModifierKeys.Control | ModifierKeys.Shift, "annotate");
+        Bind(Key.R, ModifierKeys.Control | ModifierKeys.Shift, "reload");
+        Bind(Key.J, ModifierKeys.Control | ModifierKeys.Shift, "formatJson");
+        Bind(Key.T, ModifierKeys.Control | ModifierKeys.Shift, "theme");
+        Bind(Key.OemComma, ModifierKeys.Control, "appearance");
         Bind(Key.D, ModifierKeys.Control, "bookmark");
         Bind(Key.B, ModifierKeys.Control, "sidebar");
-        Bind(Key.G, ModifierKeys.Control, "goto");
+        Bind(Key.L, ModifierKeys.Control, "goto");
         Bind(Key.F, ModifierKeys.Control | ModifierKeys.Shift, "focus");
         Bind(Key.F, ModifierKeys.Control | ModifierKeys.Alt, "format");
         Bind(Key.O, ModifierKeys.Control | ModifierKeys.Shift, "outline");
         Bind(Key.P, ModifierKeys.Control | ModifierKeys.Shift, "quick");
-        Bind(Key.F2, ModifierKeys.None, "rename");
-        Bind(Key.F3, ModifierKeys.None, "next");
-        Bind(Key.F3, ModifierKeys.Shift, "previous");
+        Bind(Key.G, ModifierKeys.Control, "next");
+        Bind(Key.G, ModifierKeys.Control | ModifierKeys.Shift, "previous");
         Bind(Key.Left, ModifierKeys.Alt, "returnPosition");
-        Bind(Key.Tab, ModifierKeys.Control, "nextTab");
-        Bind(Key.Tab, ModifierKeys.Control | ModifierKeys.Shift, "previousTab");
-        Bind(Key.OemPlus, ModifierKeys.Control, "fontUp");
+        Bind(Key.OemCloseBrackets, ModifierKeys.Control | ModifierKeys.Shift, "nextTab");
+        Bind(Key.OemOpenBrackets, ModifierKeys.Control | ModifierKeys.Shift, "previousTab");
+        Bind(Key.OemPlus, ModifierKeys.Control | ModifierKeys.Shift, "fontUp");
         Bind(Key.Add, ModifierKeys.Control, "fontUp");
         Bind(Key.OemMinus, ModifierKeys.Control, "fontDown");
         Bind(Key.Subtract, ModifierKeys.Control, "fontDown");
         for (int i = 1; i <= 9; i++) Bind(Key.D0 + i, ModifierKeys.Control, "tab:" + i);
+    }
+
+    private void BindAction(KeyBinding binding)
+    {
+        shortcutCommands.Add((ReaderAction)binding.Command);
+        InputBindings.Add(binding);
     }
 
     private void MenuAction(object sender, RoutedEventArgs e)
@@ -51,31 +66,37 @@ public partial class MainWindow
 
     private async void ExecuteAction(string action)
     {
-        if (exitInProgress || modalDepth > 0) return;
+        if (!CanExecuteAction(action)) return;
         var tab = CurrentTab;
         try
         {
             switch (action)
             {
+                case "undo":
+                    if (FocusedTextCommandTarget() is { } undoTarget)
+                        ApplicationCommands.Undo.Execute(null, undoTarget);
+                    break;
+                case "redo":
+                    if (FocusedTextCommandTarget() is { } redoTarget)
+                        ApplicationCommands.Redo.Execute(null, redoTarget);
+                    break;
                 case "new": NewDocument().Editor.Focus(); break;
                 case "open": await ChooseOpenAsync(); break;
                 case "openWorkspace": await OpenWorkspaceAsync(); break;
                 case "globalSearch": await ShowGlobalSearchAsync(); break;
+                case "reload": if (tab is not null) await ReloadDocumentAsync(tab); break;
                 case "save": if (tab is not null) SaveDocument(tab); break;
                 case "saveAs": if (tab is not null) SaveDocument(tab, true); break;
-                case "saveAll":
-                    foreach (var item in tabs.ToArray().Where(t => t.File.IsDirty && !t.IsEmpty))
-                        if (!SaveDocument(item)) break;
-                    break;
+                case "saveAll": SaveAllDocuments(); break;
                 case "rename": if (tab is not null) RenamePrompt(tab); break;
-                case "close": if (tab is not null) CloseTab(tab); break;
+                case "close": if (tab is not null) CloseTab(tab, ensureDocument: false, closeWindowIfEmpty: true); break;
                 case "closeAll":
-                case "closeOthers":
-                    foreach (var item in tabs.ToArray().Where(t => action != "closeOthers" || t != tab))
-                        if (!CloseTab(item, false)) break;
-                    if (tabs.Count == 0) NewDocument();
+                    foreach (var item in tabs.ToArray().Reverse())
+                        if (!CloseTab(item, false, closeWindowIfEmpty: false)) break;
+                    if (tabs.Count == 0 && !exitInProgress) Close();
                     break;
-                case "quit": Close(); break;
+                case "closeOthers": CloseOtherTabs(tab); break;
+                case "quit": await RequestQuitAsync(); break;
                 case "reading": await ToggleReadingAsync(); break;
                 case "annotate": CaptureAnnotation(); break;
                 case "bookmark": ToggleBookmark(); break;
@@ -86,12 +107,13 @@ public partial class MainWindow
                 case "focus": ToggleFocus(); break;
                 case "wrap": settings.Wrap = !settings.Wrap; ApplyEditorSettings(); break;
                 case "lines": settings.LineNumbers = !settings.LineNumbers; ApplyEditorSettings(); break;
-                case "theme": ApplyTheme(!settings.Dark); break;
+                case "theme": ToggleTheme(); break;
                 case "appearance": ShowReadingAppearance(); break;
                 case "fontUp": settings.FontSize = Math.Min(30, settings.FontSize + 1); ApplyEditorSettings(); break;
                 case "fontDown": settings.FontSize = Math.Max(10, settings.FontSize - 1); ApplyEditorSettings(); break;
                 case "find": ShowSearch(false); break;
                 case "replace": ShowSearch(true); break;
+                case "cancelSearch": CancelSearch(); break;
                 case "hideFind": HideSearch(); break;
                 case "next": MoveSearch(1); break;
                 case "previous": MoveSearch(-1); break;
@@ -117,7 +139,7 @@ public partial class MainWindow
                         Process.Start(start);
                     }
                     break;
-                case "clearRecent": settings.Recent.Clear(); RefreshRecent(); SchedulePersist(); break;
+                case "clearRecent": ClearRecentHistory(); break;
                 case "quick": await QuickOpenAsync(); break;
                 case "validate":
                     if (tab is not null)
@@ -127,6 +149,34 @@ public partial class MainWindow
                     break;
                 case "format":
                     if (tab is not null) FormatCurrentDocument(tab);
+                    break;
+                case "formatJson":
+                    if (tab is { Kind: TextKind.Json or TextKind.Jsonc, IsReading: false })
+                        FormatCurrentDocument(tab);
+                    break;
+                case "insertMarkdownImage":
+                    await ChooseMarkdownImagesAsync();
+                    break;
+                case "showAnnotations":
+                    if (tab is not null) ShowAnnotationPanel();
+                    break;
+                case "currentBookmarks":
+                    ShowCurrentBookmarks();
+                    break;
+                case "readingList":
+                    ShowReadingList();
+                    break;
+                case "addReadingList":
+                    await AddCurrentToReadingListAsync();
+                    break;
+                case "markRead":
+                    await MarkCurrentReadAsync();
+                    break;
+                case "toggleCurrentDraft":
+                    await ToggleCurrentDraftAsync();
+                    break;
+                case "recoveryDetails":
+                    ShowRecoveryDetails();
                     break;
                 case "structure": ToggleStructure(); break;
                 case "markdownPreview": ToggleMarkdownPreview(); break;
@@ -149,15 +199,60 @@ public partial class MainWindow
                 case "update": await CheckForUpdatesAsync(manual: true); break;
                 default:
                     if (action.StartsWith("width:") && double.TryParse(action[6..], out double width))
-                    { settings.ReadingWidth = width; UpdateReadingWidths(); SchedulePersist(); }
+                    {
+                        settings.ReadingWidth = ReaderSettings.NormalizeMenuReadingWidth(width);
+                        UpdateReadingWidths();
+                        SchedulePersist();
+                    }
                     else if (action.StartsWith("tab:") && int.TryParse(action[4..], out int number) && tabs.Count > 0)
                         SelectTab(tabs[number == 9 ? tabs.Count - 1 : Math.Min(tabs.Count - 1, number - 1)]);
                     else if (action.StartsWith("reopen:") && tab is not null &&
-                        Enum.TryParse<TextCodec>(action[7..], out var codec)) ReopenWithCodec(tab, codec);
+                        Enum.TryParse<TextCodec>(action[7..], out var codec))
+                        await ReopenWithCodecAsync(tab, codec);
+                    else if (action.StartsWith("bookmark:", StringComparison.Ordinal) &&
+                        Guid.TryParse(action[9..], out var bookmarkId) &&
+                        bookmarks.Items.FirstOrDefault(item => item.Id == bookmarkId) is { } bookmark)
+                        NavigateToBookmark(bookmark);
                     break;
             }
         }
         catch (Exception ex) { Notify(ex.Message, "操作未完成"); }
+    }
+
+    private bool CanExecuteAction(string action)
+    {
+        if (exitInProgress) return false;
+        if (modalDepth > 0)
+        {
+            return action is "clearRecent" or "help" or "recoveryDetails";
+        }
+        if (restoringWorkspace) return false;
+        if (action is "clearRecent" or "help" or "recoveryDetails") return true;
+
+        var tab = CurrentTab;
+        if (action is "undo" or "redo")
+        {
+            if (tab is { IsReading: true } && FocusedTextCommandTarget() is null) return false;
+            if (FocusedTextCommandTarget() is not { } target) return false;
+            return action == "undo"
+                ? ApplicationCommands.Undo.CanExecute(null, target)
+                : ApplicationCommands.Redo.CanExecute(null, target);
+        }
+
+        if (action == "formatJson")
+            return tab is { Kind: TextKind.Json, IsReading: false };
+        if (action is "copyPath" or "reveal" or "reload" ||
+            action.StartsWith("reopen:", StringComparison.Ordinal))
+            return tab?.File.Path is not null;
+        if (action.StartsWith("tab:", StringComparison.Ordinal) &&
+            int.TryParse(action[4..], out int number))
+            return tabs.Count > 0 && (number == 9 || number - 1 < tabs.Count);
+        if (action == "moveLeft")
+            return tab is not null && tabs.IndexOf(tab) > 0;
+        if (action == "moveRight")
+            return tab is not null && tabs.IndexOf(tab) >= 0 &&
+                tabs.IndexOf(tab) < tabs.Count - 1;
+        return tab is not null;
     }
 
     private void ApplyEditorSettings()
@@ -183,6 +278,51 @@ public partial class MainWindow
         FocusDocument();
     }
 
+    private void SaveAllDocuments()
+    {
+        if (savingAll || restoringWorkspace) return;
+        var selected = CurrentTab;
+        savingAll = true;
+        int saved = 0;
+        try
+        {
+            var ids = tabs.Where(item => item.File.IsDirty && !item.IsEmpty)
+                .Select(item => item.File.Id).ToArray();
+            foreach (var id in ids)
+            {
+                var item = tabs.FirstOrDefault(candidate => candidate.File.Id == id);
+                if (item is null) continue;
+                // macOS activates each document so save/cancel feedback and
+                // Save As panels always refer to the document being handled.
+                SelectTab(item);
+                if (!SaveDocument(item))
+                {
+                    StatusText.Text = $"保存全部已停止 · 已保存 {saved} 份，其余内容仍保留";
+                    return;
+                }
+                saved++;
+            }
+            StatusText.Text = $"保存全部完成 · {saved} 份";
+        }
+        finally
+        {
+            savingAll = false;
+            if (selected is not null && tabs.Contains(selected)) SelectTab(selected);
+        }
+    }
+
+    private void CloseOtherTabs(EditorTab? keep)
+    {
+        if (keep is null || !tabs.Contains(keep)) return;
+        var candidates = tabs.Where(item => item != keep).Select(item => item.File.Id).Reverse().ToArray();
+        foreach (var id in candidates)
+        {
+            var item = tabs.FirstOrDefault(candidate => candidate.File.Id == id);
+            if (item is not null && !CloseTab(item, false)) break;
+        }
+        if (tabs.Contains(keep)) SelectTab(keep);
+    }
+
     private void MoveTab(int delta)
     {
         if (CurrentTab is not { } tab) return;
@@ -203,20 +343,10 @@ public partial class MainWindow
         ScrollToCaret(tab); tab.Editor.Focus();
     }
 
-    private void ReopenWithCodec(EditorTab tab, TextCodec codec)
+    private async Task ReopenWithCodecAsync(EditorTab tab, TextCodec codec)
     {
         if (tab.File.Path is null) { Notify("未命名文档没有可重新读取的磁盘文件。"); return; }
-        if (tab.File.IsDirty && Modal(() => MessageBox.Show(this,
-            "重新读取会放弃此标签未保存的修改，是否继续？", "按编码重新打开",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning)) != MessageBoxResult.Yes) return;
-        var file = DocumentFile.Open(tab.File.Path, codec);
-        int index = tabs.IndexOf(tab);
-        var replacement = AddDocument(file);
-        tab.ReleaseReadingResources();
-        replacement.RecoverDraft = tab.RecoverDraft;
-        tabs.Remove(tab);
-        tabs.Move(tabs.IndexOf(replacement), index);
-        SelectTab(replacement);
+        await ReloadDocumentAsync(tab, codec);
     }
 
     private async void KindChanged(object sender, SelectionChangedEventArgs e)
@@ -288,17 +418,38 @@ public partial class MainWindow
     {
         settings.Recent.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
         settings.Recent.Insert(0, path);
-        if (settings.Recent.Count > 30) settings.Recent.RemoveRange(30, settings.Recent.Count - 30);
+        if (settings.Recent.Count > 15) settings.Recent.RemoveRange(15, settings.Recent.Count - 15);
         RefreshRecent();
+    }
+
+    private void ClearRecentHistory()
+    {
+        settings.ClearRecentHistory();
+        RefreshRecent();
+        SchedulePersist();
     }
 
     public void RefreshRecent()
     {
-        RecentList.ItemsSource = settings.Recent.Select(p => new RecentItem(p)).ToArray();
+        // The sidebar mirrors macOS refreshRecent(): stale entries remain in
+        // the File → Recent menu, but the visible sidebar only lists existing files.
+        var existing = settings.Recent.Where(File.Exists).Select(p => new RecentItem(p)).ToArray();
+        RecentList.ItemsSource = existing;
+        RecentEmptyHint.Visibility = existing.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RefreshRecentMenu();
+    }
+
+    private void RecentMenuOpened(object sender, RoutedEventArgs e) => RefreshRecentMenu();
+
+    private void RefreshRecentMenu()
+    {
         RecentMenu.Items.Clear();
         foreach (var path in settings.Recent)
         {
-            var item = new MenuItem { Header = Path.GetFileName(path).Replace("_", "__"), ToolTip = path };
+            string folder = Path.GetFileName(Path.GetDirectoryName(path) ?? "");
+            string label = Path.GetFileName(path).Replace("_", "__");
+            if (!string.IsNullOrWhiteSpace(folder)) label += " — " + folder.Replace("_", "__");
+            var item = new MenuItem { Header = label, ToolTip = path };
             item.Click += async (_, _) =>
             {
                 if (!File.Exists(path)) { Notify("最近文件当前不存在或无法访问：\n" + path); return; }
@@ -307,6 +458,10 @@ public partial class MainWindow
             RecentMenu.Items.Add(item);
         }
         if (RecentMenu.Items.Count == 0) RecentMenu.Items.Add(new MenuItem { Header = "暂无最近文件", IsEnabled = false });
+        RecentMenu.Items.Add(new Separator());
+        var clear = new MenuItem { Header = "清除最近文件与位置", Tag = "clearRecent" };
+        clear.Click += (_, _) => ClearRecentHistory();
+        RecentMenu.Items.Add(clear);
     }
 
     private async void RecentDoubleClick(object sender, MouseButtonEventArgs e)
@@ -406,7 +561,7 @@ public partial class MainWindow
         e.Handled = true;
     }
 
-    private void TabContextAction(object sender, RoutedEventArgs e)
+    private async void TabContextAction(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem item || item.Parent is not ContextMenu menu
             || menu.PlacementTarget is not FrameworkElement target
@@ -415,26 +570,30 @@ public partial class MainWindow
         e.Handled = true;
         switch (action)
         {
+            case "rename":
+                SelectTab(tab);
+                RenamePrompt(tab);
+                break;
             case "closeTab":
-                CloseTab(tab);
+                CloseTab(tab, ensureDocument: false, closeWindowIfEmpty: true);
                 break;
             case "closeOthers":
-                SelectTab(tab);
-                foreach (var other in tabs.ToArray().Where(candidate => candidate != tab))
-                    if (!CloseTab(other, false)) break;
-                if (tabs.Count == 0) NewDocument();
+                CloseOtherTabs(tab);
                 break;
-            case "closeRight":
-                SelectTab(tab);
-                int index = tabs.IndexOf(tab);
-                foreach (var other in tabs.Skip(index + 1).Reverse().ToArray())
-                    if (!CloseTab(other, false)) break;
+            case "closeAll":
+                foreach (var other in tabs.ToArray().Reverse())
+                    if (!CloseTab(other, ensureDocument: false, closeWindowIfEmpty: false)) break;
+                if (tabs.Count == 0 && !exitInProgress) Close();
                 break;
             case "moveLeft":
                 SelectTab(tab); MoveTab(-1);
                 break;
             case "moveRight":
                 SelectTab(tab); MoveTab(1);
+                break;
+            case "toggleCurrentDraft":
+                SelectTab(tab);
+                await ToggleCurrentDraftAsync();
                 break;
             case "copyPath":
                 if (tab.File.Path is { } path) Clipboard.SetText(path);
@@ -449,9 +608,23 @@ public partial class MainWindow
     {
         if (sender is not ContextMenu menu || menu.PlacementTarget is not FrameworkElement target
             || target.DataContext is not EditorTab tab) return;
+        int index = tabs.IndexOf(tab);
         bool hasPath = tab.File.Path is not null;
         foreach (var item in menu.Items.OfType<MenuItem>())
-            if (item.Tag is "copyPath" or "revealPath") item.IsEnabled = hasPath;
+        {
+            switch (item.Tag)
+            {
+                case "moveLeft": item.IsEnabled = index > 0; break;
+                case "moveRight": item.IsEnabled = index >= 0 && index < tabs.Count - 1; break;
+                case "closeOthers": item.IsEnabled = tabs.Count > 1; break;
+                case "copyPath":
+                case "revealPath": item.IsEnabled = hasPath; break;
+                case "toggleCurrentDraft":
+                    item.IsCheckable = true;
+                    item.IsChecked = tab.RecoverDraft;
+                    break;
+            }
+        }
     }
 
     private static void RevealPath(EditorTab tab)
@@ -465,32 +638,28 @@ public partial class MainWindow
 
     private async Task QuickOpenAsync()
     {
-        var dialog = Dialogs.Shell(this, "快速打开", 600);
-        var panel = new StackPanel { Margin = new Thickness(24) };
-        panel.Children.Add(new TextBlock { Text = "搜索已打开标签和最近文件", Margin = new Thickness(0, 0, 0, 12) });
-        var query = new TextBox();
-        var list = new ListBox { Height = 300, Margin = new Thickness(0, 12, 0, 12) };
-        var open = new Button { Content = "打开所选", IsDefault = true, HorizontalAlignment = HorizontalAlignment.Right };
-        var candidates = tabs.Select(t => new QuickItem(t.File.Title, t.File.Path, t))
-            .Concat(settings.Recent.Where(p => !tabs.Any(t => string.Equals(t.File.Path, p, StringComparison.OrdinalIgnoreCase)))
-                .Select(p => new QuickItem(Path.GetFileName(p), p, null))).ToArray();
-        void Filter()
-        {
-            list.ItemsSource = candidates.Where(c => (c.Name + " " + c.Path).Contains(query.Text, StringComparison.OrdinalIgnoreCase)).ToArray();
-            list.DisplayMemberPath = "Name"; list.SelectedIndex = 0;
-        }
-        QuickItem? selected = null;
-        void Choose() { if (list.SelectedItem is QuickItem item) { selected = item; dialog.DialogResult = true; } }
-        query.TextChanged += (_, _) => Filter();
-        query.KeyDown += (_, e) => { if (e.Key == Key.Down) { list.Focus(); e.Handled = true; } };
-        open.Click += (_, _) => Choose();
-        list.MouseDoubleClick += (_, _) => Choose();
-        panel.Children.Add(query); panel.Children.Add(list); panel.Children.Add(open);
-        dialog.Content = panel; Filter();
-        dialog.Loaded += (_, _) => query.Focus();
-        Modal(() => dialog.ShowDialog());
-        if (selected?.Tab is { } tab) SelectTab(tab);
-        else if (selected?.Path is { } path) await OpenPathsAsync([path]);
+        var opened = tabs.Select(tab => new QuickOpenItem(
+            "tab:" + tab.File.Id,
+            tab.File.Title,
+            tab.File.Path ?? "未保存的文本",
+            true)).ToArray();
+        var openedPaths = tabs.Where(tab => tab.File.Path is not null)
+            .Select(tab => tab.File.Path!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var recent = settings.Recent
+            .Where(path => !openedPaths.Contains(path))
+            .Select(path => new QuickOpenItem(
+                "path:" + path,
+                Path.GetFileName(path),
+                path,
+                false));
+        var selected = await QuickOpenDialog.ShowAsync(this, opened.Concat(recent).ToArray());
+        if (selected is null) return;
+        if (selected.Id.StartsWith("tab:", StringComparison.Ordinal)
+            && Guid.TryParse(selected.Id[4..], out var id)
+            && tabs.FirstOrDefault(tab => tab.File.Id == id) is { } tabToSelect)
+            SelectTab(tabToSelect);
+        else if (selected.Id.StartsWith("path:", StringComparison.Ordinal))
+            await OpenPathsAsync([selected.Id[5..]]);
     }
-    private sealed record QuickItem(string Name, string? Path, EditorTab? Tab);
 }

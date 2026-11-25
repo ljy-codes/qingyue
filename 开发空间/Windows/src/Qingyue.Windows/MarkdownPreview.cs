@@ -6,6 +6,7 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Navigation;
 using System.Windows.Threading;
 using Qingyue.Core;
 using DocumentList = System.Windows.Documents.List;
@@ -140,7 +141,7 @@ public sealed class MarkdownPreview : RichTextBox
         Document = document;
         // Do not cache a transient parser fallback: a later identical update can recover.
         renderedText = formatted ? text : null;
-        IsDocumentEnabled = document.Blocks.OfType<BlockUIContainer>().Any() || HasImages(document);
+        IsDocumentEnabled = HasInteractiveContent(document);
         UpdatePadding();
     }
 
@@ -362,7 +363,10 @@ public sealed class MarkdownPreview : RichTextBox
 
     [Flags]
     private enum InlineFormat { None = 0, Code = 1, Strong = 2, Emphasis = 4, Strike = 8, Link = 16, Image = 32 }
-    private readonly record struct Fragment(string Text, InlineFormat Format, string? ImageKey = null);
+    private readonly record struct Fragment(string Text, InlineFormat Format, string? ImageKey = null,
+        string? Destination = null, string? Title = null);
+    private readonly record struct InlineEvent(int Start, int Length, Match? Match,
+        MarkdownLinkOccurrence? Link);
 
     private void DecorateInline(Paragraph paragraph, string source, string expected, MarkdownImages images,
         IReadOnlyDictionary<string, string> references)
@@ -380,36 +384,109 @@ public sealed class MarkdownPreview : RichTextBox
                 AppendImage(paragraph, reference, images);
                 continue;
             }
-            var run = new Run(fragment.Text);
-            var format = fragment.Format;
-            if (format.HasFlag(InlineFormat.Strong)) run.FontWeight = FontWeights.Bold;
-            if (format.HasFlag(InlineFormat.Emphasis)) run.FontStyle = FontStyles.Italic;
-            var decorations = new TextDecorationCollection();
-            if (format.HasFlag(InlineFormat.Strike)) decorations.Add(TextDecorations.Strikethrough);
-            if (format.HasFlag(InlineFormat.Link)) decorations.Add(TextDecorations.Underline);
-            if (decorations.Count > 0) run.TextDecorations = decorations;
-            if (format.HasFlag(InlineFormat.Image)) run.SetResourceReference(TextElement.ForegroundProperty, "MutedBrush");
-            if (format.HasFlag(InlineFormat.Link)) run.SetResourceReference(TextElement.ForegroundProperty, "SyntaxKeyBrush");
-            if (format.HasFlag(InlineFormat.Code))
+            var run = CreateRun(fragment);
+            if (fragment.Destination is not null &&
+                MarkdownLinks.TryCreateNavigationUri(fragment.Destination, out var uri) && uri is not null)
             {
-                run.FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI");
-                run.SetResourceReference(TextElement.BackgroundProperty, "PanelBrush");
-                run.SetResourceReference(TextElement.ForegroundProperty, "SyntaxStringBrush");
+                var hyperlink = new Hyperlink(run) { NavigateUri = uri, ToolTip = fragment.Title };
+                hyperlink.SetResourceReference(TextElement.ForegroundProperty, "SyntaxKeyBrush");
+                hyperlink.RequestNavigate += OpenExternalLink;
+                paragraph.Inlines.Add(hyperlink);
             }
-            paragraph.Inlines.Add(run);
+            else paragraph.Inlines.Add(run);
         }
+    }
+
+    private static Run CreateRun(Fragment fragment)
+    {
+        var run = new Run(fragment.Text);
+        var format = fragment.Format;
+        if (format.HasFlag(InlineFormat.Strong)) run.FontWeight = FontWeights.Bold;
+        if (format.HasFlag(InlineFormat.Emphasis)) run.FontStyle = FontStyles.Italic;
+        var decorations = new TextDecorationCollection();
+        if (format.HasFlag(InlineFormat.Strike)) decorations.Add(TextDecorations.Strikethrough);
+        if (format.HasFlag(InlineFormat.Link)) decorations.Add(TextDecorations.Underline);
+        if (decorations.Count > 0) run.TextDecorations = decorations;
+        if (format.HasFlag(InlineFormat.Image)) run.SetResourceReference(TextElement.ForegroundProperty, "MutedBrush");
+        if (format.HasFlag(InlineFormat.Link)) run.SetResourceReference(TextElement.ForegroundProperty, "SyntaxKeyBrush");
+        if (format.HasFlag(InlineFormat.Code))
+        {
+            run.FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei UI");
+            run.SetResourceReference(TextElement.BackgroundProperty, "PanelBrush");
+            run.SetResourceReference(TextElement.ForegroundProperty, "SyntaxStringBrush");
+        }
+        return run;
+    }
+
+    private static void OpenExternalLink(object sender, RequestNavigateEventArgs e)
+    {
+        // Never let WPF hand arbitrary schemes to the shell. The parser rejects them,
+        // and the click path checks again in case a caller supplied a Hyperlink itself.
+        e.Handled = true;
+        if (e.Uri is not { } requested ||
+            !MarkdownLinks.TryCreateNavigationUri(requested.AbsoluteUri, out var safe) || safe is null) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(safe.AbsoluteUri)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (System.ComponentModel.Win32Exception) { }
+        catch (InvalidOperationException) { }
     }
 
     private static void ParseInline(string text, List<Fragment> output,
         IReadOnlyDictionary<string, string> references,
-        InlineFormat format = InlineFormat.None, int depth = 0)
+        InlineFormat format = InlineFormat.None, int depth = 0, bool allowLinks = true)
     {
         if (depth >= 8) { output.Add(new(text, format)); return; }
-        int cursor = 0;
+        var events = new List<InlineEvent>();
         foreach (Match match in MarkdownSyntax.InlinePattern.Matches(text))
+            events.Add(new(match.Index, match.Length, match, null));
+        if (allowLinks)
+            foreach (var link in MarkdownLinks.Occurrences(text, references))
+                events.Add(new(link.Start, link.Length, null, link));
+        events.Sort((left, right) =>
         {
-            if (match.Index > cursor) output.Add(new(text[cursor..match.Index], format));
-            cursor = match.Index + match.Length;
+            int order = left.Start.CompareTo(right.Start);
+            if (order != 0) return order;
+            return (right.Link is not null).CompareTo(left.Link is not null);
+        });
+
+        int cursor = 0;
+        foreach (var item in events)
+        {
+            if (item.Start < cursor) continue;
+            if (item.Start > cursor) output.Add(new(text[cursor..item.Start], format));
+            cursor = item.Start + item.Length;
+            if (item.Link is { } link)
+            {
+                int first = output.Count;
+                if (link.IsImage)
+                {
+                    var title = new List<Fragment>();
+                    ParseInline(link.Label, title, references, format | InlineFormat.Image, depth + 1,
+                        allowLinks: false);
+                    output.Add(new("[图片：" + string.Concat(title.Select(f => f.Text)) + "]",
+                        format | InlineFormat.Image, link.Label));
+                }
+                else
+                {
+                    ParseInline(link.Label, output, references, format | InlineFormat.Link, depth + 1,
+                        allowLinks: false);
+                    for (int i = first; i < output.Count; i++)
+                        if (output[i].ImageKey is null)
+                            output[i] = output[i] with
+                            {
+                                Format = output[i].Format | InlineFormat.Link,
+                                Destination = link.Destination,
+                                Title = link.Title
+                            };
+                }
+                continue;
+            }
+            var match = item.Match!;
             if (MarkdownCodeSpan.Protects(text, match.Index, match.Length))
                 output.Add(new(match.Value, format));
             else if (match.Value[0] == '\\') output.Add(new(match.Value[1..], format));
@@ -494,14 +571,18 @@ public sealed class MarkdownPreview : RichTextBox
         }
     }
 
-    private static bool HasImages(FlowDocument document) =>
-        document.Blocks.Any(ContainsImages);
+    private static bool HasInteractiveContent(FlowDocument document) =>
+        document.Blocks.Any(ContainsInteractiveContent);
 
-    private static bool ContainsImages(Block block) => block switch
+    private static bool ContainsInteractiveContent(Block block) => block switch
     {
-        Paragraph paragraph => paragraph.Inlines.Any(inline => inline is InlineUIContainer),
-        DocumentList list => list.ListItems.Any(item => item.Blocks.Any(ContainsImages)),
-        Table table => table.RowGroups.Any(group => group.Rows.Any(row => row.Cells.Any(cell => cell.Blocks.Any(ContainsImages)))),
+        BlockUIContainer => true,
+        Paragraph paragraph => paragraph.Inlines.Any(inline =>
+            inline is Hyperlink or InlineUIContainer ||
+            inline is Span span && span.Inlines.Any(nested => nested is Hyperlink or InlineUIContainer)),
+        DocumentList list => list.ListItems.Any(item => item.Blocks.Any(ContainsInteractiveContent)),
+        Table table => table.RowGroups.Any(group => group.Rows.Any(row =>
+            row.Cells.Any(cell => cell.Blocks.Any(ContainsInteractiveContent)))),
         _ => false
     };
 
@@ -512,6 +593,8 @@ public sealed class MarkdownPreview : RichTextBox
         var sourceLines = source.Split('\n');
         var sourceRows = sourceLines.Where((_, index) => index != 1).Select(TableCells).ToArray();
         var separators = sourceLines.Length > 1 ? TableCells(sourceLines[1]) : [];
+        for (int index = 0; index < sourceRows.Length; index++)
+            sourceRows[index] = NormalizeTableRow(sourceRows[index], rows[0].Length);
         var table = new Table { CellSpacing = 0, Margin = new Thickness(0, 8, 0, 18), FontSize = FontSize * .9 };
         table.SetResourceReference(Block.BorderBrushProperty, "BorderBrush");
         table.BorderThickness = new Thickness(1, 1, 0, 0);
@@ -559,33 +642,58 @@ public sealed class MarkdownPreview : RichTextBox
     private static string[] TableCells(string line)
     {
         string value = line.Trim();
-        int start = value.StartsWith('|') ? 1 : 0, end = value.Length;
-        if (end > start && value[end - 1] == '|')
-        {
-            int slashes = 0;
-            for (int j = end - 2; j >= start && value[j] == '\\'; j--) slashes++;
-            if (slashes % 2 == 0) end--;
-        }
         var cells = new List<string>();
-        int cellStart = start, ticks = 0;
-        for (int i = start; i < end; i++)
+        int cellStart = 0, ticks = 0, lastPipe = -1;
+        bool hasPipe = false;
+        for (int i = 0; i < value.Length;)
         {
-            if (value[i] == '\\') { i++; continue; }
+            if (value[i] == '\\')
+            {
+                i += Math.Min(2, value.Length - i);
+                continue;
+            }
             if (value[i] == '`')
             {
-                int run = 1;
-                while (i + run < end && value[i + run] == '`') run++;
-                ticks = ticks == run ? 0 : ticks == 0 ? run : ticks;
-                i += run - 1;
+                int end = i;
+                while (end < value.Length && value[end] == '`') end++;
+                int run = end - i;
+                if (ticks == 0)
+                {
+                    for (int probe = end; probe < value.Length;)
+                    {
+                        if (value[probe] != '`') { probe++; continue; }
+                        int close = probe;
+                        while (close < value.Length && value[close] == '`') close++;
+                        if (close - probe == run) { ticks = run; break; }
+                        probe = close;
+                    }
+                }
+                else if (run == ticks) ticks = 0;
+                i = end;
+                continue;
             }
-            else if (value[i] == '|' && ticks == 0)
+            if (value[i] == '|' && ticks == 0)
             {
-                cells.Add(value[cellStart..i].Trim());
+                cells.Add(value[cellStart..i].Trim().Replace("\\|", "|", StringComparison.Ordinal));
                 cellStart = i + 1;
+                lastPipe = i;
+                hasPipe = true;
             }
+            i++;
         }
-        cells.Add(value[cellStart..end].Trim());
-        return cells.ToArray();
+        if (!hasPipe) return [value];
+        cells.Add(value[cellStart..].Trim().Replace("\\|", "|", StringComparison.Ordinal));
+        if (value[0] == '|') cells.RemoveAt(0);
+        if (lastPipe == value.Length - 1) cells.RemoveAt(cells.Count - 1);
+        return cells.Count == 0 ? [""] : cells.ToArray();
+    }
+
+    private static string[] NormalizeTableRow(string[] row, int columns)
+    {
+        if (row.Length < columns) return [.. row, .. Enumerable.Repeat("", columns - row.Length)];
+        if (row.Length > columns)
+            return [.. row.Take(columns - 1), string.Join(" | ", row.Skip(columns - 1))];
+        return row;
     }
 
     private const double MinTableColumnWeight = 10;

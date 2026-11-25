@@ -1,30 +1,45 @@
+using System.Security.Cryptography;
 using System.Windows.Media.Imaging;
 
 namespace Qingyue.Windows;
 
-internal readonly record struct MarkdownImageCacheKey(
-    string Identity,
-    long SourceLength,
-    long LastWriteUtcTicks,
-    int DecodeWidth,
-    int DecodeHeight);
+internal readonly record struct MarkdownImageCacheKey(string ContentDigest)
+{
+    internal static MarkdownImageCacheKey FromBytes(ReadOnlySpan<byte> bytes) =>
+        new(Convert.ToHexString(SHA256.HashData(bytes)));
+}
 
 internal sealed record MarkdownImageCacheEntry(
     BitmapSource Bitmap,
+    byte[] DecodedPng,
     long SourceBytes,
-    long DecodedPixels);
+    long OriginalPixels,
+    long DecodedPixels,
+    long Cost)
+{
+    internal long DecodedPngBytes => DecodedPng.LongLength;
+}
 
 internal static class MarkdownImageCache
 {
-    internal const long MaximumBytes = 64L * 1024 * 1024;
-    internal const long MaximumPixels = 48_000_000;
+    internal const int MaximumCount = 32;
+    internal const long MaximumCost = 24L * 1024 * 1024;
 
     private static readonly object Gate = new();
     private static readonly Dictionary<MarkdownImageCacheKey, LinkedListNode<(MarkdownImageCacheKey Key,
         MarkdownImageCacheEntry Entry)>> Entries = new();
     private static readonly LinkedList<(MarkdownImageCacheKey Key, MarkdownImageCacheEntry Entry)> Lru = new();
-    private static long bytes;
-    private static long pixels;
+    private static long cost;
+
+    internal static int Count
+    {
+        get { lock (Gate) return Entries.Count; }
+    }
+
+    internal static long Cost
+    {
+        get { lock (Gate) return cost; }
+    }
 
     internal static bool TryGet(MarkdownImageCacheKey key, out MarkdownImageCacheEntry entry)
     {
@@ -49,16 +64,14 @@ internal static class MarkdownImageCache
         {
             if (Entries.TryGetValue(key, out var existing))
             {
-                bytes -= existing.Value.Entry.SourceBytes;
-                pixels -= existing.Value.Entry.DecodedPixels;
+                cost -= existing.Value.Entry.Cost;
                 Lru.Remove(existing);
                 Entries.Remove(key);
             }
 
             var node = Lru.AddFirst((key, entry));
             Entries[key] = node;
-            bytes += entry.SourceBytes;
-            pixels += entry.DecodedPixels;
+            cost += entry.Cost;
             Trim();
         }
     }
@@ -69,19 +82,17 @@ internal static class MarkdownImageCache
         {
             Entries.Clear();
             Lru.Clear();
-            bytes = 0;
-            pixels = 0;
+            cost = 0;
         }
     }
 
     private static void Trim()
     {
-        while ((bytes > MaximumBytes || pixels > MaximumPixels) && Lru.Last is { } last)
+        while ((Entries.Count > MaximumCount || cost > MaximumCost) && Lru.Last is { } last)
         {
             Lru.RemoveLast();
             Entries.Remove(last.Value.Key);
-            bytes -= last.Value.Entry.SourceBytes;
-            pixels -= last.Value.Entry.DecodedPixels;
+            cost -= last.Value.Entry.Cost;
         }
     }
 }

@@ -5,7 +5,7 @@ Rebuild Qingyue's Windows icon using only Windows WPF and System.Drawing.
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\scripts\build-brand-assets.ps1
 .NOTES
 Qingyue.xaml is the vector master. Default output is src/Qingyue.Windows/Assets:
-Qingyue.png (256), Qingyue-512.png, Qingyue.ico and Qingyue-preview.png.
+Qingyue.png (1024), Qingyue-512.png, Qingyue.ico and Qingyue-preview.png.
 ICO uses 32-bit DIB frames at 16/24/32/48/64/128 and a PNG frame at 256.
 No network, external tools, fonts in the icon, or installed packages are needed.
 #>
@@ -113,7 +113,7 @@ foreach ($size in $sizes) {
     $frames[$size] = New-BrandBitmap $size
     $payloads[$size] = if ($size -eq 256) { ConvertTo-PngBytes $frames[$size] } else { ConvertTo-IconDib $frames[$size] }
 }
-[IO.File]::WriteAllBytes((Join-Path $OutputDirectory 'Qingyue.png'), (ConvertTo-PngBytes $frames[256]))
+[IO.File]::WriteAllBytes((Join-Path $OutputDirectory 'Qingyue.png'), (ConvertTo-PngBytes (New-BrandBitmap 1024)))
 [IO.File]::WriteAllBytes((Join-Path $OutputDirectory 'Qingyue-512.png'), (ConvertTo-PngBytes (New-BrandBitmap 512)))
 
 $iconPath = Join-Path $OutputDirectory 'Qingyue.ico'
@@ -160,9 +160,10 @@ try {
     $graphics.FillRectangle([Drawing.Brushes]::White, 24, 104, 320, 512)
     $graphics.FillRectangle([Drawing.Brushes]::White, 364, 104, 668, 236)
     $graphics.FillRectangle($panelBrush, 364, 360, 668, 256)
-    $large = [Drawing.Image]::FromFile((Join-Path $OutputDirectory 'Qingyue.png'))
-    try { $graphics.DrawImageUnscaled($large, 56, 144) } finally { $large.Dispose() }
-    $graphics.DrawString('256 px / transparent PNG', $labelFont, $darkBrush, 56, 422)
+    $largeStream = New-Object IO.MemoryStream (,(ConvertTo-PngBytes $frames[256]))
+    $large = [Drawing.Image]::FromStream($largeStream)
+    try { $graphics.DrawImageUnscaled($large, 56, 144) } finally { $large.Dispose(); $largeStream.Dispose() }
+    $graphics.DrawString('256 px / transparent ICO frame', $labelFont, $darkBrush, 56, 422)
     $decoder = New-Object Windows.Media.Imaging.IconBitmapDecoder $iconInput, ([Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat), ([Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
     # WPF can reorder ICO frames; select by decoded dimensions, never index.
     $decodedFrames = @{}

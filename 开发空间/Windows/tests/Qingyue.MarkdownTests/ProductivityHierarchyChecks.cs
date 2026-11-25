@@ -244,11 +244,11 @@ internal static class ProductivityHierarchyChecks
         Equal("  **literal**", child.Element("pre")!.Element("code")!.Value,
             "exported fenced code retains literal syntax and indentation");
         Equal("父引用", parent.Element("blockquote")!.Value, "exported quote returns to parent li");
-        Equal("父标题", parent.Element("h3")!.Value, "exported ancestor heading keeps its level");
-        Equal("根", parent.Element("table")!.Elements("tr").First().Elements("th").Single().Value,
+        Equal("父标题", parent.Element("h2")!.Value, "exported ancestor heading uses the macOS h2 contract");
+        Equal("根", parent.Element("table")!.Elements("tr").First().Elements("td").Single().Value,
             "exported ancestor table");
         Equal(1, fragment.Elements("table").Count(), "outside table stays outside ul");
-        Equal("外标题", fragment.Element("h1")!.Value, "outside heading stays outside ul");
+        Equal("外标题", fragment.Element("h2")!.Value, "outside heading uses the macOS h2 contract");
     }
 #endif
 

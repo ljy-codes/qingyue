@@ -50,6 +50,9 @@ public partial class App : Application
             instanceChannel = new SingleInstanceChannel(pipeName, OpenForwardedPathsAsync, ReportChannelFailure);
             var window = new MainWindow(root);
             MainWindow = window;
+            // Closing the reader window hides it and keeps the process alive,
+            // matching macOS. Only the explicit Quit command ends the process.
+            window.QuitCompleted += (_, _) => Shutdown();
             window.Show();
             await window.InitializeAsync();
             if (paths.Length > 0) await window.OpenPathsAsync(paths);

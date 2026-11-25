@@ -44,6 +44,8 @@ internal static class Program
             ("preview inline styles and inert content", InlinePreview),
             ("Markdown br tags use in-paragraph breaks like macOS build 9", BrBreaks),
             ("preview GFM autolinks and reference links", GfmPreview),
+            ("Markdown link scanner matches the macOS safety and reference contract", MarkdownLinksScanner),
+            ("preview safe Markdown links are interactive and preserve label styles", MarkdownLinkBehavior),
             ("preview lists and table grid", ListsAndTables),
             ("nested list levels and original CRLF ranges", NestedListChecks.Model),
             ("nested bullet containers and three marker styles", NestedListChecks.Preview),
@@ -175,7 +177,7 @@ internal static class Program
     {
         var preview = new MarkdownPreview(Sample, 16, 680);
         preview.Resources["PanelBrush"] = Brushes.LightGray;
-        Check(preview.IsReadOnly && !preview.IsUndoEnabled && !preview.IsDocumentEnabled, "passive read-only preview");
+        Check(preview.IsReadOnly && !preview.IsUndoEnabled && preview.IsDocumentEnabled, "read-only preview with interactive content");
         var runs = AllParagraphs(preview.Document.Blocks).SelectMany(p => Runs(p.Inlines)).ToArray();
         var code = runs.Single(r => r.Text == "inline_code");
         Check(code.FontFamily.Source.Contains("Consolas") && code.Background is not null, "inline code style");
@@ -185,7 +187,95 @@ internal static class Program
         var literal = new MarkdownPreview("<script>bad()</script>\n\n![远程](https://invalid.test/p.png)\n\n[链接](file:///x)", 16, 680);
         string text = new TextRange(literal.Document.ContentStart, literal.Document.ContentEnd).Text;
         Check(text.Contains("<script>bad()</script>") && text.Contains("[图片：远程]") && !text.Contains("https://"), "inert text/image");
-        Check(!AllParagraphs(literal.Document.Blocks).Any(p => p.Inlines.Any(i => i is Hyperlink or InlineUIContainer)), "no navigation/media");
+        Check(!AllInlines(literal.Document.Blocks).Any(inline => inline is Hyperlink) &&
+            !AllParagraphs(literal.Document.Blocks).Any(p => p.Inlines.Any(i => i is InlineUIContainer)),
+            "unsafe destinations and remote images stay inert");
+    }
+
+    private static void MarkdownLinkBehavior()
+    {
+        const string source = "[guide]: <https://example.com/guide> \"说明\"\n\n" +
+            "# [章节][guide] 😀\n\n" +
+            "正文 [引用][GUIDE]、[guide][] 和 [guide]。访问 https://swift.org/docs, 或 <https://example.com/a>。\n\n" +
+            "- **[重点][guide]**\n\n" +
+            "| 链接 | 内容 |\n| --- | --- |\n| [表格][guide] | `https://code.example` |\n\n" +
+            "```md\n[onlycode]: https://never.example\n[代码][guide] https://fence.example\n```\n\n" +
+            "`[内联][guide] https://inline.example`\n\n" +
+            "[危险](javascript:alert(1)) [文件](file:///tmp/a)\n\n## 后续标题\n";
+        var preview = new MarkdownPreview(source, 16, 680);
+        string visible = new TextRange(preview.Document.ContentStart, preview.Document.ContentEnd).Text;
+        var links = AllInlines(preview.Document.Blocks).OfType<Hyperlink>().ToArray();
+        string Target(string text) => links
+            .Where(link => new TextRange(link.ContentStart, link.ContentEnd).Text.Contains(text, StringComparison.Ordinal))
+            .Select(link => link.NavigateUri?.AbsoluteUri)
+            .FirstOrDefault() ?? throw new InvalidOperationException("missing link: " + text);
+
+        Equal("https://example.com/guide", Target("引用"), "full reference destination");
+        Equal("https://example.com/guide", Target("guide"), "shortcut reference destination");
+        Equal("https://swift.org/docs", Target("https://swift.org/docs"), "raw autolink destination");
+        Equal("https://example.com/a", Target("https://example.com/a"), "angle autolink destination");
+        Equal("https://example.com/guide", Target("重点"), "reference inside bold");
+        Equal("https://example.com/guide", Target("表格"), "reference in table");
+        Check(visible.Contains("章节 😀") && !visible.Contains("[章节][guide]", StringComparison.Ordinal),
+            "reference label is visible in heading");
+        Check(visible.Contains("正文 引用、guide 和 guide。", StringComparison.Ordinal),
+            "full, collapsed and shortcut references show labels");
+        Check(visible.Contains("https://swift.org/docs,", StringComparison.Ordinal),
+            "autolink keeps trailing punctuation outside the target");
+        Check(!visible.Contains("[guide]:", StringComparison.Ordinal) &&
+            visible.Contains("[onlycode]:", StringComparison.Ordinal),
+            "only active body reference definitions are hidden");
+        var bold = AllInlines(preview.Document.Blocks).OfType<Run>().Single(run => run.Text == "重点");
+        Check(bold.FontWeight == FontWeights.Bold, "link label keeps bold style");
+        Check(!links.Any(link => new TextRange(link.ContentStart, link.ContentEnd).Text.Contains(
+            "https://code.example", StringComparison.Ordinal) ||
+            new TextRange(link.ContentStart, link.ContentEnd).Text.Contains("https://fence.example", StringComparison.Ordinal) ||
+            new TextRange(link.ContentStart, link.ContentEnd).Text.Contains("https://inline.example", StringComparison.Ordinal)),
+            "code and fenced content never become links");
+        Check(!links.Any(link => link.NavigateUri?.Scheme is "javascript" or "file"),
+            "unsafe protocols are not navigable");
+        Check(preview.IsDocumentEnabled, "interactive document enables hyperlink input");
+
+        const string referenceImage = "![猫][pic]\n\n[pic]: images/cat.png\n";
+        var extracted = MarkdownImages.Extract(referenceImage);
+        Check(extracted.References.Count == 1 &&
+            extracted.References[0].Alt == "猫" &&
+            extracted.References[0].Target == "images/cat.png",
+            "reference image retains its local loading target");
+        var imagePreview = new MarkdownPreview(referenceImage, 16, 680);
+        string imageText = new TextRange(imagePreview.Document.ContentStart, imagePreview.Document.ContentEnd).Text;
+        Check(imageText.Contains("[图片：猫]", StringComparison.Ordinal) &&
+            !imageText.Contains("[pic]:", StringComparison.Ordinal),
+            "reference image renders its caption and hides the definition");
+    }
+
+    private static void MarkdownLinksScanner()
+    {
+        const string source = "[官网](https://example.com/docs) [参考][guide] https://swift.org\n\n" +
+            "[guide]: <https://example.com/guide>\n\n" +
+            "`https://ignored.example`\n```\n[代码](https://ignored.example)\n[onlycode]: https://never.example\n```";
+        var references = MarkdownLinks.References(source);
+        Equal("https://example.com/guide", references["guide"].Destination, "scanner reference destination");
+        var links = MarkdownLinks.Occurrences(source);
+        Equal(3, links.Count, "scanner finds inline, reference and automatic links");
+        Check(links.Select(link => link.Destination).Contains("https://example.com/guide", StringComparer.Ordinal),
+            "scanner resolves reference links");
+        Check(links.All(link => !link.Destination.Contains("ignored", StringComparison.Ordinal) &&
+            !link.Destination.Contains("never", StringComparison.Ordinal)),
+            "scanner ignores code, fences and fenced definitions");
+        Check(MarkdownLinks.Occurrences("[危险](javascript:alert(1)) <file:///tmp/a>").Count == 0,
+            "scanner rejects script and file protocols");
+        Check(MarkdownLinks.Occurrences(@"\[guide]" + "\n\n[guide]: https://example.com\n").Count == 0,
+            "scanner preserves escaped brackets as literal text");
+        Check(MarkdownLinks.Occurrences("    https://indented.example\n").Count == 0,
+            "scanner ignores indented code");
+        var automatic = MarkdownLinks.Occurrences("访问 https://swift.org/docs, 和 www.example.com。");
+        Equal(2, automatic.Count, "scanner keeps www and raw automatic links");
+        Equal("https://swift.org/docs", automatic[0].Destination, "raw autolink punctuation");
+        Equal("https://www.example.com", automatic[1].Destination, "www autolink scheme");
+        Check(!MarkdownLinks.TryCreateNavigationUri("images/cat.png", out _) &&
+            MarkdownLinks.TryCreateNavigationUri("mailto:reader@example.test", out _),
+            "navigation requires an explicitly allowed scheme");
     }
 
     private static void BrBreaks()
@@ -565,6 +655,33 @@ internal static class Program
             if (inline is Run run) yield return run;
             if (inline is Span span)
                 foreach (var child in Runs(span.Inlines)) yield return child;
+        }
+    }
+
+    private static IEnumerable<Inline> AllInlines(BlockCollection blocks)
+    {
+        foreach (var block in blocks)
+        {
+            if (block is Paragraph paragraph)
+                foreach (var inline in Flatten(paragraph.Inlines)) yield return inline;
+            if (block is System.Windows.Documents.List list)
+                foreach (var item in list.ListItems)
+                    foreach (var inline in AllInlines(item.Blocks)) yield return inline;
+            if (block is Table table)
+                foreach (var group in table.RowGroups)
+                    foreach (var row in group.Rows)
+                        foreach (var cell in row.Cells)
+                            foreach (var inline in AllInlines(cell.Blocks)) yield return inline;
+        }
+    }
+
+    private static IEnumerable<Inline> Flatten(InlineCollection inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            yield return inline;
+            if (inline is Span span)
+                foreach (var nested in Flatten(span.Inlines)) yield return nested;
         }
     }
 

@@ -23,9 +23,9 @@ internal static class SharingChecks
         test("v030 current code copy resolves caret and excludes neighboring blocks", CurrentCode);
         test("v030 current table copy expands a cell and refuses crossing selection", CurrentTable);
         test("v030 HTML export embeds decoded pixels and sanitizes title metadata and resources", Html);
-        test("v070 Mermaid export embeds a self-contained PNG and keeps source text", Mermaid);
+        test("v070 Mermaid export preserves source text without a raster snapshot", Mermaid);
         test("v070 single image selection supplies a Bitmap clipboard flavor", SingleBitmap);
-        test("v070 failed Mermaid export keeps the warning and source without a blank image", MermaidFailure);
+        test("v070 failed Mermaid export keeps source without a blank image", MermaidFailure);
         test("v030 HTML image metadata never exposes drive paths with forward slashes", MetadataPaths);
         test("v030 missing failed unsupported and excessive image reports are distinct", ImageReports);
         test("v030 renderer image-limit notice survives export without an invented omission count", ImageLimitNotice);
@@ -43,7 +43,9 @@ internal static class SharingChecks
         test("v080 CF_HTML fragment is browser-safe and self-contained", BrowserFragment);
         test("v018 Markdown br export preserves table breaks in HTML plain RTF and Xaml", BrExport);
         test("v018 Markdown br copy stays within the selected paragraph", BrSelection);
-        test("v030 block context menu is installed once and uses current selection", ContextMenu);
+        test("v019 reading context menu exposes the exact macOS eight commands once", ContextMenu);
+        test("v019 reading context menu routes code table and diagram commands from their own targets",
+            ReadingContextTargets);
     }
 
     private static MethodInfo Api(string name) =>
@@ -133,7 +135,8 @@ internal static class SharingChecks
         var result = (ReadingClipboardResult?)Clip("CreateCurrentTableData", box);
         Check(result is not null, "cell caret failed to find table");
         string html = (string)result!.Data.GetData(DataFormats.Html, false)!;
-        Check(html.Contains("<th") && html.Contains("<td") && html.Contains("标题") && html.Contains("值😀"), "table copy was partial");
+        Check(html.Contains("<td") && html.Contains("标题") && html.Contains("值😀") &&
+            !html.Contains("<th", StringComparison.Ordinal), "table copy must use body cells like macOS");
         Check(!html.Contains("前文") && !html.Contains("后文"), "table copy included neighbors");
         Check(box.Selection.IsEmpty && box.Selection.Start.CompareTo(caret) == 0, "table copy changed selection");
         box.Selection.Select(caret, box.Document.ContentEnd);
@@ -181,16 +184,14 @@ internal static class SharingChecks
         Check(result is not null, "Mermaid document export returned null");
         string html = (string)result!.Data.GetData(DataFormats.Html, false)!;
         string text = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
-        Check(html.Contains("data:image/png;base64,", StringComparison.Ordinal),
-            "Mermaid HTML did not contain a self-contained PNG: " + HtmlFragment(result.Data));
+        Check(!html.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "Mermaid HTML must not contain a raster snapshot: " + HtmlFragment(result.Data));
+        Check(html.Contains("sequenceDiagram", StringComparison.Ordinal)
+            && html.Contains("A-&gt;&gt;B: 请求😀", StringComparison.Ordinal),
+            "Mermaid source was not retained in HTML");
         Check(text.Contains("sequenceDiagram", StringComparison.Ordinal) &&
             text.Contains("A->>B: 请求😀", StringComparison.Ordinal),
             "Mermaid source text was not retained");
-        var image = HtmlTestParser.ParseDocument("<root>" + HtmlFragment(result.Data) + "</root>").Descendants("img").Single();
-        using var stream = new MemoryStream(Convert.FromBase64String(
-            ((string)image.Attribute("src")!).Split(',', 2)[1]));
-        var bitmap = BitmapFrame.Create(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-        Check(bitmap.PixelWidth > 0 && bitmap.PixelHeight > 0, "Mermaid PNG is empty");
     }
 
     private static void SingleBitmap()
@@ -229,13 +230,14 @@ internal static class SharingChecks
         Check(result is not null, "failed Mermaid export returned null");
         string html = (string)result!.Data.GetData(DataFormats.Html, false)!;
         string text = (string)result.Data.GetData(DataFormats.UnicodeText, false)!;
-        Check(html.Contains("图表暂未显示：语法不受支持", StringComparison.Ordinal),
-            "Mermaid failure warning was dropped from HTML: " + HtmlFragment(result.Data));
+        Check(!html.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "Mermaid failure published a blank image");
         Check(text.Contains("sequenceDiagram", StringComparison.Ordinal) &&
             text.Contains("A->>B: 原文😀", StringComparison.Ordinal),
             "Mermaid failure source was dropped from plain text");
-        Check(!html.Contains("data:image/png;base64,", StringComparison.Ordinal),
-            "Mermaid failure published a blank image");
+        Check(html.Contains("sequenceDiagram", StringComparison.Ordinal)
+            && html.Contains("A-&gt;&gt;B: 原文😀", StringComparison.Ordinal),
+            "Mermaid failure source was dropped from HTML");
     }
 
     private static void ImageReports()
@@ -450,8 +452,10 @@ internal static class SharingChecks
 
     private static void Budgets()
     {
-        Check(Export("CreateDocument", Box(new Paragraph(new Run(new string('x', 500_001)))), "合成") is null,
-            "portable HTML ignored body budget");
+        Check(Export("CreateDocument", Box(new Paragraph(new Run(new string('x', 2_000_000)))), "合成") is not null,
+            "portable HTML rejected the macOS 2,000,000 UTF-16 boundary");
+        Check(Export("CreateDocument", Box(new Paragraph(new Run(new string('x', 2_000_001)))), "合成") is null,
+            "portable HTML ignored the macOS 2,000,000 UTF-16 limit");
         var paragraph = new Paragraph();
         for (int i = 0; i < 33; i++) paragraph.Inlines.Add(new InlineUIContainer(Image()));
         var result = Export("CreateDocument", Box(paragraph), "合成")!;
@@ -478,11 +482,12 @@ internal static class SharingChecks
         Check(start >= 0 && end > start && end <= bytes.Length, "CF_HTML fragment offsets are invalid");
         string fragment = Encoding.UTF8.GetString(bytes, start, end - start);
         var root = HtmlTestParser.ParseDocument("<root>" + fragment + "</root>").Root!;
-        Check(root.Descendants("h1").Any() && root.Descendants("table").Any() &&
-            root.Descendants("pre").Any() && root.Descendants("img").Any(),
-            "browser fragment lost heading, table, code, or Mermaid image");
-        Check(fragment.Contains("data:image/png;base64,", StringComparison.Ordinal),
-            "browser fragment contains a non-self-contained Mermaid image");
+        Check(root.Descendants("h2").Any() && root.Descendants("table").Any() &&
+            root.Descendants("pre").Count() >= 2 && !root.Descendants("img").Any(),
+            "browser fragment lost heading, table, code, or Mermaid source");
+        Check(fragment.Contains("sequenceDiagram", StringComparison.Ordinal)
+            && !fragment.Contains("data:image/png;base64,", StringComparison.Ordinal),
+            "browser fragment must export Mermaid source and no raster image");
         Check(Encoding.UTF8.GetString(bytes, FieldOffset(cfHtml, "StartHTML"), 6) == "<html>",
             "StartHTML does not point to the HTML document");
         Check(Encoding.UTF8.GetString(bytes, FieldOffset(cfHtml, "EndHTML") - 7, 7) == "</html>",
@@ -501,7 +506,11 @@ internal static class SharingChecks
         string html = HtmlFragment(result!.Data);
         var root = HtmlTestParser.ParseDocument("<root>" + html + "</root>").Root!;
         Check(root.Descendants("tr").Count() == 4, "HTML br export changed table row count");
-        Check(root.Descendants("td").Count() == 4, "HTML br export changed table cell count");
+        Check(root.Descendants("td").Count() == 8, "HTML br export changed table cell count");
+        var aligned = root.Descendants("td").ToArray();
+        Check(((string?)aligned[1].Attribute("style"))?.Contains("text-align:center", StringComparison.Ordinal) == true &&
+            ((string?)aligned[2].Attribute("style"))?.Contains("text-align:right", StringComparison.Ordinal) == true,
+            "HTML table cells did not retain center/right alignment");
         Check(html.Contains("A. 报单金额😀<br>B. 出库金额<br>C. 销售数量", StringComparison.Ordinal),
             "HTML table cell did not emit real br elements");
         Check(html.Contains("A&lt;br&gt;B", StringComparison.Ordinal),
@@ -563,14 +572,81 @@ internal static class SharingChecks
 
     private static void ContextMenu()
     {
-        var code = Code("hello();");
-        var box = Box(code, new Paragraph(new Run("正文")));
-        ReadingClipboard.Attach(box, () => true);
-        ReadingClipboard.Attach(box, () => true);
+        var box = MarkdownBox("```text\nhello();\n```\n\n正文");
+        var commands = new List<string>();
+        ReadingClipboard.Attach(box, () => true, command: commands.Add);
+        ReadingClipboard.Attach(box, () => true, command: commands.Add);
+        ReadingClipboard.RefreshContextMenus(box);
         Check(box.ContextMenu is not null, "explicit block copy context menu missing");
         var items = box.ContextMenu!.Items.OfType<MenuItem>().ToArray();
-        Check(items.Count(item => Equals(item.Header, "复制当前代码块")) == 1 &&
-            items.Count(item => Equals(item.Header, "复制当前表格")) == 1, "block commands missing or duplicated");
+        Check(items.Select(item => item.Header?.ToString()).SequenceEqual(
+                ["复制选中图文", "复制全文（含图片）", "复制全文纯文本", "复制 Markdown 源文",
+                    "复制当前代码块", "复制当前表格", "展开表格（横向滚动）", "查看图片 / 图表"]),
+            "reading context menu titles are not in the macOS order");
+        Check(items.Length == 8, "reading context menu contains extra duplicate items");
+        var codeBlock = box.Document.Blocks.OfType<Paragraph>()
+            .First(paragraph => paragraph.Tag is ReadingBlock { Kind: ReadingBlockKind.Code });
+        box.Selection.Select(codeBlock.ContentStart, codeBlock.ContentEnd);
+        box.ContextMenu.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.ContextMenu.OpenedEvent));
+        var copyCode = items.Single(item => Equals(item.Header, "复制当前代码块"));
+        Check(copyCode.IsEnabled, "code command is disabled while the selection is inside code");
+        copyCode.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Check(commands.SequenceEqual(["copyCodeBlock"]),
+            "code context command did not route to the host action");
+    }
+
+    private static void ReadingContextTargets()
+    {
+        string text = """
+            | A | B |
+            |---|---|
+            | 1 | 2 |
+
+            ```mermaid
+            sequenceDiagram
+                Alice->>Bob: hello
+            ```
+            """;
+        var box = MarkdownBox(text);
+        var commands = new List<string>();
+        ReadingClipboard.Attach(box, () => true, command: commands.Add);
+        ReadingClipboard.RefreshContextMenus(box);
+        var table = box.Document.Blocks.OfType<Table>().Single();
+        Check(table.ContextMenu?.Items.OfType<MenuItem>().Count() == 8,
+            "table does not expose the complete reading context menu");
+        table.ContextMenu!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.ContextMenu.OpenedEvent));
+        var expand = table.ContextMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "展开表格（横向滚动）"));
+        Check(expand.IsEnabled, "expand table is disabled for a table target");
+        Check(Equals(expand.Tag, "expandTable"),
+            "table context command is not bound to expand-table action");
+
+        var diagram = box.Document.Blocks.OfType<BlockUIContainer>()
+            .Select(block => block.Child as FrameworkElement)
+            .FirstOrDefault(element => AutomationProperties.GetName(element)
+                .StartsWith("Mermaid ", StringComparison.Ordinal));
+        Check(diagram?.ContextMenu?.Items.OfType<MenuItem>().Count() == 8,
+            "Mermaid panel does not expose the complete reading context menu");
+        diagram!.ContextMenu!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.ContextMenu.OpenedEvent));
+        var view = diagram.ContextMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "查看图片 / 图表"));
+        var expandDiagram = diagram.ContextMenu.Items.OfType<MenuItem>()
+            .Single(item => Equals(item.Header, "展开表格（横向滚动）"));
+        Check(view.IsEnabled && !expandDiagram.IsEnabled,
+            "Mermaid target enables the wrong attachment actions");
+        Check(Equals(view.Tag, "viewAttachment"),
+            "Mermaid context command is not bound to attachment viewer");
+
+        ReadingClipboard.RefreshContextMenus(box);
+        Check(table.ContextMenu?.Items.OfType<MenuItem>().Count() == 8 &&
+            diagram.ContextMenu?.Items.OfType<MenuItem>().Count() == 8,
+            "refreshing context menus duplicated commands");
+    }
+
+    private static MarkdownPreview MarkdownBox(string text)
+    {
+        var box = new MarkdownPreview(text, 16, 680);
+        return box;
     }
 
     private static Image Image()

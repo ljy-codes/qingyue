@@ -106,8 +106,9 @@ internal static class Program
                 ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 await Idle(window);
                 Check(!markdown.IsReading &&
-                    ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.EditorSurface),
-                    "分屏返回预览后仍可继续编辑");
+                    markdown.SplitPreview &&
+                    !ReferenceEquals(((ContentControl)window.FindName("DocumentHost")).Content, markdown.EditorSurface),
+                    "全宽预览退出后仍保留该标签的分屏编辑状态");
                 markdown.Editor.AppendText("\n\n编辑往返验收");
                 ((Button)window.FindName("ReadingButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 await Idle(window);

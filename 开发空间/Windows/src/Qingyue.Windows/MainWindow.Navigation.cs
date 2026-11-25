@@ -30,13 +30,24 @@ public partial class MainWindow
             ? tab.ViewportAnchor ?? CurrentSourceAnchor(tab)
             : EditingViewportAnchor(tab);
         anchor = Math.Clamp(anchor, 0, tab.File.Text.Length);
-        var existing = bookmarks.For(tab.File).FirstOrDefault(item => item.SourceAnchor == anchor);
+        var (lineStart, lineEnd) = SourceLineRange(tab.File.Text, anchor);
+        var existing = bookmarks.For(tab.File).FirstOrDefault(item =>
+            item.SourceAnchor >= lineStart && item.SourceAnchor <= lineEnd);
         if (existing is not null) bookmarks.Remove(existing.Id);
         else bookmarks.Add(tab.File, anchor);
         bookmarksDirty = true;
         ScheduleBookmarkSave();
         RefreshBookmarks();
         RefreshReadingProgress(tab);
+    }
+
+    private static (int Start, int End) SourceLineRange(string text, int sourceOffset)
+    {
+        int offset = Math.Clamp(sourceOffset, 0, text.Length);
+        int start = text.LastIndexOf('\n', Math.Max(0, offset - 1)) + 1;
+        int newline = text.IndexOf('\n', offset);
+        int end = newline < 0 ? text.Length : newline + 1;
+        return (start, end);
     }
 
     public async void NavigateToBookmark(DocumentBookmark bookmark)
@@ -50,6 +61,7 @@ public partial class MainWindow
         }
         if (tab is null) return;
         SelectTab(tab);
+        RememberReadingPosition(tab);
         int anchor = Math.Clamp(bookmark.SourceAnchor, 0, tab.File.Text.Length);
         if (tab.Kind == TextKind.Markdown)
         {
@@ -87,6 +99,80 @@ public partial class MainWindow
             ViewportDelta = tab.ViewportDelta
         };
     }
+
+    private void RememberRecentPosition(EditorTab tab)
+    {
+        if (tab.File.Path is not { } path || !tabs.Contains(tab)) return;
+        if (tab.IsReading) CaptureReadingViewport(tab);
+        int selectionStart = SourceOffset(tab, tab.Editor.SelectionStart);
+        int selectionEnd = SourceOffset(tab, tab.Editor.SelectionStart + tab.Editor.SelectionLength);
+        int sourceAnchor = CurrentSourceAnchor(tab);
+        int editorViewport = tab.IsReading
+            ? tab.EditorViewportAnchor ?? SourceOffset(tab, tab.Editor.SelectionStart)
+            : EditingViewportAnchor(tab);
+        double horizontalOffset = tab.IsReading
+            ? tab.EditorHorizontalOffset
+            : EditorHorizontalOffset(tab);
+        if (!tab.IsReading)
+        {
+            tab.EditorViewportAnchor = editorViewport;
+            tab.EditorHorizontalOffset = horizontalOffset;
+        }
+        int readingViewport = tab.IsReading
+            ? tab.ViewportAnchor ?? sourceAnchor
+            : tab.ViewportAnchor ?? tab.SourceAnchor;
+        double readingDelta = tab.IsReading ? tab.ViewportDelta : 0;
+        settings.RememberRecentPosition(path, new RecentPosition(
+            Math.Max(0, selectionStart),
+            Math.Max(0, selectionEnd - selectionStart),
+            Math.Max(0, sourceAnchor),
+            Math.Max(0, editorViewport),
+            Math.Max(0, horizontalOffset),
+            Math.Max(0, readingViewport),
+            readingDelta,
+            tab.IsReading));
+    }
+
+    private bool RestoreRecentPosition(EditorTab tab)
+    {
+        if (tab.File.Path is not { } path ||
+            !settings.RecentPositions.TryGetValue(path, out var position))
+        {
+            tab.IsReading = tab.Kind == TextKind.Markdown;
+            return false;
+        }
+        int selectionStart = EditorOffset(tab, Math.Clamp(position.SelectionStart, 0, tab.File.Text.Length));
+        int selectionEnd = EditorOffset(tab, Math.Clamp(
+            position.SelectionStart + position.SelectionLength, 0, tab.File.Text.Length));
+        tab.Editor.Select(selectionStart, Math.Max(0, selectionEnd - selectionStart));
+        tab.SourceAnchor = Math.Clamp(position.SourceAnchor, 0, tab.File.Text.Length);
+        tab.ViewportAnchor = Math.Clamp(position.ReadingViewportAnchor, 0, tab.File.Text.Length);
+        tab.ViewportDelta = Math.Clamp(position.ReadingViewportDelta, -2_000, 2_000);
+        tab.EditorViewportAnchor = Math.Clamp(position.EditorViewportAnchor, 0, tab.File.Text.Length);
+        tab.EditorHorizontalOffset = Math.Clamp(position.EditorHorizontalOffset, 0, 100_000_000);
+        tab.IsReading = position.IsReading;
+        return true;
+    }
+
+    private void RestoreEditorViewportWhenReady(EditorTab tab)
+    {
+        if (tab.IsReading || tab.EditorViewportAnchor is not { } anchor) return;
+        double horizontalOffset = tab.EditorHorizontalOffset;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!tabs.Contains(tab) || CurrentTab != tab || tab.IsReading) return;
+            int index = EditorOffset(tab, Math.Clamp(anchor, 0, tab.File.Text.Length));
+            int line = tab.Editor.GetLineIndexFromCharacterIndex(index);
+            if (line >= 0) tab.Editor.ScrollToLine(line);
+            if (tab.Editor.Template?.FindName("PART_ContentHost", tab.Editor) is ScrollViewer scroller)
+                scroller.ScrollToHorizontalOffset(Math.Max(0, horizontalOffset));
+        }, DispatcherPriority.Loaded);
+    }
+
+    private static double EditorHorizontalOffset(EditorTab tab) =>
+        tab.Editor.Template?.FindName("PART_ContentHost", tab.Editor) is ScrollViewer scroller
+            ? Math.Max(0, scroller.HorizontalOffset)
+            : Math.Max(0, tab.EditorHorizontalOffset);
 
     private void AttachReadingNavigation(EditorTab tab, RichTextBox preview)
     {
@@ -163,14 +249,18 @@ public partial class MainWindow
     private void RefreshReadingProgress(EditorTab tab)
     {
         if (CurrentTab != tab) return;
-        ReadingStatus.Text = ReadingProgressText(tab);
-        BookmarkButton.Content = CurrentBookmarks(tab).Any() ? "书签已标记" : "添加书签";
+        RefreshLocation();
     }
 
     private static int EditingViewportAnchor(EditorTab tab)
     {
         int line = tab.Editor.IsLoaded ? tab.Editor.GetFirstVisibleLineIndex() : -1;
-        int index = line >= 0 ? tab.Editor.GetCharacterIndexFromLineIndex(line) : -1;
+        int index = -1;
+        if (line >= 0 && line < tab.Editor.LineCount)
+        {
+            try { index = tab.Editor.GetCharacterIndexFromLineIndex(line); }
+            catch (ArgumentOutOfRangeException) { index = -1; }
+        }
         return index >= 0 ? SourceOffset(tab, index) : CurrentSourceAnchor(tab);
     }
 
@@ -180,6 +270,7 @@ public partial class MainWindow
         if (navigationTab is { } previous)
         {
             CaptureReadingViewport(previous);
+            RememberRecentPosition(previous);
             previous.ViewportGeneration++;
         }
         navigationTab = next;
@@ -187,29 +278,38 @@ public partial class MainWindow
         CancelInactiveLoading();
         if (next.IsReading && next.ViewportAnchor is { } anchor)
             RestoreReadingViewport(next, anchor, next.ViewportDelta);
+        else if (!next.IsReading)
+            RestoreEditorViewportWhenReady(next);
     }
 
     private void RememberReadingPosition(EditorTab tab)
     {
+        if (!tabs.Contains(tab)) return;
         CaptureReadingViewport(tab);
-        tab.ReturnAnchor = tab.ViewportAnchor ?? CurrentSourceAnchor(tab);
-        tab.ReturnDelta = tab.ViewportDelta;
-        ReturnPositionButton.IsEnabled = true;
+        int anchor = Math.Clamp(
+            tab.ViewportAnchor ?? CurrentSourceAnchor(tab), 0, tab.File.Text.Length);
+        double delta = double.IsFinite(tab.ViewportDelta)
+            ? Math.Clamp(tab.ViewportDelta, -2000, 2000)
+            : 0;
+        tab.Navigation.Add((anchor, delta));
+        if (tab.Navigation.Count > 64) tab.Navigation.RemoveAt(0);
+        if (CurrentTab == tab) ReturnPositionButton.IsEnabled = true;
     }
 
     private void ReturnToReadingPosition()
     {
-        if (CurrentTab is not { ReturnAnchor: { } anchor } tab) return;
-        double delta = tab.ReturnDelta;
-        CaptureReadingViewport(tab);
-        tab.ReturnAnchor = tab.ViewportAnchor;
-        tab.ReturnDelta = tab.ViewportDelta;
+        if (CurrentTab is not { } tab || tab.Navigation.Count == 0) return;
+        var target = tab.Navigation[^1];
+        tab.Navigation.RemoveAt(tab.Navigation.Count - 1);
+        int anchor = target.Anchor;
+        double delta = target.Delta;
         if (tab.IsReading) RestoreReadingViewport(tab, anchor, delta);
         else
         {
             tab.Editor.CaretIndex = EditorOffset(tab, anchor);
             ScrollToCaret(tab);
         }
+        ReturnPositionButton.IsEnabled = tab.Navigation.Count > 0;
         FocusDocument();
     }
 
@@ -238,6 +338,10 @@ public partial class MainWindow
     private void HideSearch()
     {
         searchGeneration++;
+        searchCancellation?.Cancel();
+        searchCancellation = null;
+        SearchProgressBar.Visibility = Visibility.Collapsed;
+        SearchCancelButton.Visibility = Visibility.Collapsed;
         ClearSearchHighlights();
         SearchPanel.Visibility = Visibility.Collapsed;
         if (searchOriginTab is { } tab && CurrentTab == tab && tab.IsReading)

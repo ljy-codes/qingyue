@@ -48,13 +48,13 @@ public partial class MainWindow
     {
         RefreshSyntax(tab);
         bool reading = tab.IsReading && tab.Rendered is not null;
-        MainMenu.Visibility = reading || focusMode ? Visibility.Collapsed : Visibility.Visible;
-        BrandHeader.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
-        ReadingToolbar.Visibility = reading ? Visibility.Visible : Visibility.Collapsed;
-        EditOnlyTools.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
-        EditorStatusControls.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
-        ReadingCopyButton.Visibility = reading && tab.Kind == TextKind.Markdown
-            ? Visibility.Visible : Visibility.Collapsed;
+        // macOS keeps the shared header row in focus mode but hides only its
+        // in-window menu bar. The brand, primary actions, context toolbar and
+        // footer remain available.
+        MainMenu.Visibility = focusMode ? Visibility.Collapsed : Visibility.Visible;
+        BrandHeader.Visibility = Visibility.Visible;
+        TabRow.Visibility = focusMode ? Visibility.Collapsed : Visibility.Visible;
+        EditorStatusControls.Visibility = Visibility.Visible;
         if (structureTab == tab && tab.Kind is not TextKind.Json and not TextKind.Jsonc)
         {
             structureTab = null; structureView = null; structureText = null;
@@ -77,23 +77,22 @@ public partial class MainWindow
             _ => LanguageCatalog.Get(tab.Kind).FormattingDescription + " · Ctrl+Alt+F"
         };
         StructureButton.IsEnabled = tab.Kind is TextKind.Json or TextKind.Jsonc;
-        StructureButton.Visibility = !reading && StructureButton.IsEnabled ? Visibility.Visible : Visibility.Collapsed;
+        StructureButton.Visibility = StructureButton.IsEnabled ? Visibility.Visible : Visibility.Collapsed;
         StructureButton.Content = structured ? "返回编辑" : "JSON 结构";
-        FormatButton.Visibility = reading ? Visibility.Collapsed : Visibility.Visible;
-        MarkdownButton.Visibility = !reading && tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
+        FormatButton.Visibility = Visibility.Visible;
+        MarkdownButton.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
         bool markdown = RefreshMarkdownPresentation(tab);
         MarkdownButton.Content = markdown ? "关闭分屏" : "分屏编辑";
         RefreshMarkdownWriting();
         CopyReadingButton.Visibility = tab.Kind == TextKind.Markdown &&
             (tab.IsReading && tab.Rendered is not null || markdown) ? Visibility.Visible : Visibility.Collapsed;
         CopyOptionsMenu.Visibility = tab.Kind == TextKind.Markdown ? Visibility.Visible : Visibility.Collapsed;
-        PresentationHint.Text = structured ? "只读结构 · 点击箭头折叠层级，返回编辑修改原文"
-            : markdown ? "左侧编辑 · 右侧预览 · 橙色未保存 / 绿色已保存"
-            : tab.Kind == TextKind.Markdown ? tab.IsReading
-                ? "Markdown 预览 · Ctrl+C 复制选中内容 · Ctrl+F 查找"
-                : "Markdown 编辑 · 点击“返回预览”阅读 · 可选分屏编辑"
-            : tab.Kind is TextKind.Json or TextKind.Jsonc ? "JSON · 字段 / 字符串 / 数值分色"
-            : "双击选片段 · 三击选整行";
+        ReturnPositionButton.IsEnabled = tab.ReturnAnchor is not null;
+        PresentationHint.Text = tab.Kind == TextKind.Markdown
+            ? tab.IsReading
+                ? "Markdown 预览 · 需要修改时点击编辑原文"
+                : markdown ? "左侧编辑 · 右侧预览" : "Markdown 原文 · 可开启分屏编辑"
+            : "";
     }
 
     private void ToggleStructure()
@@ -105,12 +104,18 @@ public partial class MainWindow
             RefreshCurrent(); tab.Editor.Focus(); return;
         }
         if (tab.Kind is not TextKind.Json and not TextKind.Jsonc) return;
-        if (tab.File.Text.Length > 2_000_000)
+        if (tab.File.Text.Length > JsonStructureView.MaximumCharacters)
         {
             Notify("当前文档较大，请使用编辑视图查看完整原文。结构视图支持 200 万字符以内的 JSON。");
             return;
         }
-        var view = new JsonStructureView(tab.File.Text, tab.Kind);
+        JsonStructureView view;
+        try { view = new JsonStructureView(tab.File.Text, tab.Kind); }
+        catch (FormatException error)
+        {
+            Notify(error.Message);
+            return;
+        }
         if (tab.IsReading) ToggleReading();
         structureTab = tab; structureView = view; structureText = tab.File.Text;
         RefreshCurrent(); view.Focus();

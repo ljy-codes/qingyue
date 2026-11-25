@@ -113,12 +113,7 @@ internal sealed class ReaderImageWindow : Window
     internal static void Attach(FrameworkElement view, Image image, string caption)
     {
         BitmapSource? Decoded() => image.Source as BitmapSource;
-        void Open()
-        {
-            if (Decoded() is not { } bitmap) return;
-            var window = new ReaderImageWindow(bitmap, caption, Window.GetWindow(view));
-            window.Show();
-        }
+        void Open() => Show(image, caption, Window.GetWindow(view));
         var menu = new ContextMenu();
         var open = new MenuItem { Header = "放大图片" };
         var copy = new MenuItem { Header = "复制图片" };
@@ -156,6 +151,13 @@ internal sealed class ReaderImageWindow : Window
             Open();
             e.Handled = true;
         };
+    }
+
+    internal static void Show(Image image, string caption, Window? owner)
+    {
+        if (image.Source is not BitmapSource bitmap) return;
+        var window = new ReaderImageWindow(bitmap, caption, owner);
+        window.Show();
     }
 }
 

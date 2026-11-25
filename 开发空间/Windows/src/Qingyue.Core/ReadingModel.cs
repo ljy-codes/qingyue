@@ -14,6 +14,7 @@ public sealed class ReadingModel
     public IReadOnlyList<ReadingBlock> Blocks { get; }
     public IReadOnlyList<ReadingHeading> Headings { get; }
     public IReadOnlyDictionary<string, string> ReferenceDefinitions { get; }
+    public string SourceText => source;
     // Original block source start -> owning zero-based list depth. Heading Level
     // remains its outline level; paragraph/code Level retains its existing meaning.
     public IReadOnlyDictionary<int, int> ListContainerLevels { get; }
@@ -45,9 +46,10 @@ public sealed class ReadingModel
     private static ReadingModel Raw(string text, List<ReadingHeading> headings) =>
         new(text, true, [new(ReadingBlockKind.Paragraph, text, 0, text.Length, 0)], headings);
 
-    // Block-level UTF-16 mapping, not an arbitrary-character source map.
-    // Hidden syntax and whitespace are interpolated within their owning block.
-    // Both directions clamp, remain monotone and snap to the start of a surrogate pair.
+    // Block-level UTF-16 mapping, matching macOS ReadingDocument. A point inside
+    // a rendered block maps to that block's start, while hidden syntax and gaps
+    // between blocks map to the next visible block. Both directions clamp, remain
+    // monotone and snap to the start of a surrogate pair.
     public int SourceToDisplay(int offset)
     {
         offset = Snap(source, offset);
@@ -55,40 +57,63 @@ public sealed class ReadingModel
         if (offset == 0 || Blocks.Count == 0) return 0;
         if (offset == source.Length) return VisibleText.Length;
         int index = FindBlock(offset, display: false);
-        if (index < 0) return 0;
-        var block = Blocks[index];
-        int within = Math.Clamp(offset - block.SourceStart, 0, block.SourceLength);
-        int mapped = block.DisplayStart + (block.SourceLength == 0 ? 0 :
-            (int)((long)within * block.Text.Length / block.SourceLength));
-        return Snap(VisibleText, mapped);
+        return Snap(VisibleText, Blocks[index].DisplayStart);
     }
 
     public int DisplayToSource(int offset)
     {
         offset = Snap(VisibleText, offset);
         if (identity) return offset;
-        if (offset == 0) return 0;
+        // Match macOS: an empty rendered document belongs to the source end, and
+        // display offset 0 belongs to the first visible block rather than hidden
+        // metadata or an opening fence at source offset 0.
+        if (VisibleText.Length == 0) return source.Length;
         if (offset == VisibleText.Length) return source.Length;
         int index = FindBlock(offset, display: true);
-        if (index < 0) return 0;
-        var block = Blocks[index];
-        int within = Math.Clamp(offset - block.DisplayStart, 0, block.Text.Length);
-        int mapped = block.SourceStart + (block.Text.Length == 0 ? 0 :
-            (int)((long)within * block.SourceLength / block.Text.Length));
-        return Snap(source, mapped);
+        return Snap(source, Blocks[index].SourceStart);
+    }
+
+    /// <summary>
+    /// Returns the whole source block for a rendered point. Markdown punctuation
+    /// may be hidden, so this range must not be treated as an exact replacement.
+    /// </summary>
+    public (int Start, int Length) SourceRangeForDisplay(int offset)
+    {
+        offset = Snap(VisibleText, offset);
+        if (identity) return (offset, 0);
+        if (offset == VisibleText.Length) return (source.Length, 0);
+        if (Blocks.Count == 0) return (0, 0);
+        var block = Blocks[FindBlock(offset, display: true)];
+        return (block.SourceStart, block.SourceLength);
+    }
+
+    /// <summary>
+    /// Returns the whole rendered block for a source point, matching macOS
+    /// displayRange(forSourceOffset:).
+    /// </summary>
+    public (int Start, int Length) DisplayRangeForSource(int offset)
+    {
+        offset = Snap(source, offset);
+        if (identity) return (offset, 0);
+        if (offset == source.Length) return (VisibleText.Length, 0);
+        if (Blocks.Count == 0) return (0, 0);
+        var block = Blocks[FindBlock(offset, display: false)];
+        return (block.DisplayStart, block.Text.Length);
     }
 
     private int FindBlock(int offset, bool display)
     {
-        int low = 0, high = Blocks.Count - 1;
-        while (low <= high)
+        int low = 0, high = Blocks.Count;
+        while (low < high)
         {
             int middle = low + (high - low) / 2;
-            int start = display ? Blocks[middle].DisplayStart : Blocks[middle].SourceStart;
-            if (start <= offset) low = middle + 1;
-            else high = middle - 1;
+            var block = Blocks[middle];
+            int end = display ? block.DisplayStart + block.Text.Length
+                : block.SourceStart + block.SourceLength;
+            if (end <= offset) low = middle + 1;
+            else high = middle;
         }
-        return high;
+        return Math.Min(low, Blocks.Count - 1);
     }
 
     private static int Snap(string text, int offset)
@@ -133,6 +158,7 @@ public sealed class ReadingModel
     private static ReadingModel Markdown(string text)
     {
         var lines = Lines(text);
+        int metadataEnd = FrontmatterEnd(lines);
         var references = CollectReferenceDefinitions(lines);
         var blocks = new List<ReadingBlock>();
         var headings = new List<ReadingHeading>();
@@ -157,6 +183,17 @@ public sealed class ReadingModel
         for (int i = 0; i < lines.Count;)
         {
             string line = lines[i].Text;
+            if (i <= metadataEnd)
+            {
+                // macOS emits frontmatter one line at a time. Keeping line-level
+                // blocks preserves its source/display ranges for navigation.
+                do
+                {
+                    Add(ReadingBlockKind.Metadata, lines[i].Text, i, i);
+                    i++;
+                } while (i <= metadataEnd);
+                continue;
+            }
             if (string.IsNullOrWhiteSpace(line)) { afterBlank = true; i++; continue; }
             bool separated = afterBlank;
             afterBlank = false;
@@ -364,9 +401,7 @@ public sealed class ReadingModel
         if (!match.Success) return false;
         key = NormalizeReferenceKey(match.Groups[1].Value);
         target = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
-        if (key.Length == 0 || target.Length == 0 ||
-            !Uri.TryCreate(target, UriKind.Absolute, out var uri) ||
-            uri.Scheme is not ("http" or "https" or "mailto"))
+        if (key.Length == 0 || !MarkdownLinks.TryNormalizeDestination(target, out target))
         {
             key = "";
             target = "";
@@ -429,10 +464,44 @@ public sealed class ReadingModel
         return count >= 3;
     }
 
-    private static string Inline(string text, IReadOnlyDictionary<string, string> references, int depth = 0)
+    private static string Inline(string text, IReadOnlyDictionary<string, string> references,
+        int depth = 0, bool allowLinks = true)
     {
         if (depth >= 8) return text;
-        return InlineToken.Replace(text, match =>
+        var events = new List<InlineEvent>();
+        foreach (Match match in InlineToken.Matches(text))
+            events.Add(new(match.Index, match.Length, match, null));
+        if (allowLinks)
+            foreach (var link in MarkdownLinks.Occurrences(text, references))
+                events.Add(new(link.Start, link.Length, null, link));
+        events.Sort((left, right) =>
+        {
+            int order = left.Start.CompareTo(right.Start);
+            if (order != 0) return order;
+            return (right.Link is not null).CompareTo(left.Link is not null);
+        });
+
+        var output = new StringBuilder(text.Length);
+        int position = 0;
+        foreach (var item in events)
+        {
+            if (item.Start < position) continue;
+            if (item.Start > position) output.Append(text, position, item.Start - position);
+            if (item.Link is { } link)
+            {
+                string label = Inline(link.Label, references, depth + 1, allowLinks: false);
+                output.Append(link.IsImage ? "[图片：" + label + "]" : label);
+            }
+            else if (item.Match is { } match)
+            {
+                output.Append(Base(match));
+            }
+            position = item.Start + item.Length;
+        }
+        if (position < text.Length) output.Append(text, position, text.Length - position);
+        return output.ToString();
+
+        string Base(Match match)
         {
             if (MarkdownCodeSpan.Protects(text, match.Index, match.Length)) return match.Value;
             if (match.Value[0] == '\\') return match.Value[1..];
@@ -456,49 +525,70 @@ public sealed class ReadingModel
             for (int group = 4; group <= 8; group++)
                 if (match.Groups[group].Success) return Inline(match.Groups[group].Value, references, depth + 1);
             return match.Value;
-        });
+        }
     }
+
+    private readonly record struct InlineEvent(int Start, int Length, Match? Match,
+        MarkdownLinkOccurrence? Link);
 
     private static List<string>? Cells(string line)
     {
         var value = line.Trim();
         if (!value.Contains('|')) return null;
-        int start = value.StartsWith('|') ? 1 : 0;
-        int end = value.Length;
-        if (end > start && value[end - 1] == '|')
-        {
-            int slashes = 0;
-            for (int j = end - 2; j >= start && value[j] == '\\'; j--) slashes++;
-            if (slashes % 2 == 0) end--;
-        }
         var cells = new List<string>();
-        int cellStart = start, ticks = 0;
-        for (int i = start; i < end; i++)
+        int cellStart = 0, ticks = 0, lastPipe = -1;
+        bool hasPipe = false;
+        for (int i = 0; i < value.Length;)
         {
-            if (value[i] == '\\') { i++; continue; }
+            if (value[i] == '\\')
+            {
+                i += Math.Min(2, value.Length - i);
+                continue;
+            }
             if (value[i] == '`')
             {
-                int run = 1;
-                while (i + run < end && value[i + run] == '`') run++;
-                ticks = ticks == run ? 0 : ticks == 0 ? run : ticks;
-                i += run - 1;
+                int end = i;
+                while (end < value.Length && value[end] == '`') end++;
+                int run = end - i;
+                if (ticks == 0)
+                {
+                    // Match macOS: an opening backtick run only suppresses table
+                    // delimiters when a closing run of the same length exists.
+                    for (int probe = end; probe < value.Length;)
+                    {
+                        if (value[probe] != '`') { probe++; continue; }
+                        int close = probe;
+                        while (close < value.Length && value[close] == '`') close++;
+                        if (close - probe == run) { ticks = run; break; }
+                        probe = close;
+                    }
+                }
+                else if (run == ticks) ticks = 0;
+                i = end;
+                continue;
             }
-            else if (value[i] == '|' && ticks == 0)
+            if (value[i] == '|' && ticks == 0)
             {
-                cells.Add(value[cellStart..i].Trim());
-                if (cells.Count >= 32) return null;
+                cells.Add(value[cellStart..i].Trim().Replace("\\|", "|", StringComparison.Ordinal));
                 cellStart = i + 1;
+                lastPipe = i;
+                hasPipe = true;
             }
+            i++;
         }
-        cells.Add(value[cellStart..end].Trim());
-        return cells;
+        if (!hasPipe) return null;
+        cells.Add(value[cellStart..].Trim().Replace("\\|", "|", StringComparison.Ordinal));
+        if (value[0] == '|') cells.RemoveAt(0);
+        if (lastPipe == value.Length - 1) cells.RemoveAt(cells.Count - 1);
+        return cells.Count == 0 ? null : cells;
     }
 
     private static bool LooksLikeTable(string first, string second)
     {
         var header = Cells(first);
         var separator = Cells(second);
-        return header is not null && separator is not null && header.Count == separator.Count &&
+        return header is not null && separator is not null && header.Count <= 32 &&
+            header.Count == separator.Count &&
             separator.All(cell => TableSeparator.IsMatch(cell));
     }
 
@@ -517,14 +607,27 @@ public sealed class ReadingModel
             if (Indentation(lines[next].Text) < contentIndent ||
                 IsSpecial(StripIndent(lines[next].Text, contentIndent))) break;
             var row = Cells(lines[next].Text);
-            if (row is null || row.Count != header.Count) break;
-            if ((rows.Count + 1) * header.Count > 1024) return false;
+            if (row is null) break;
+            if ((rows.Count + 1) * header.Count > 1024) break;
+            if (row.Count < header.Count)
+                row.AddRange(Enumerable.Repeat("", header.Count - row.Count));
+            else if (row.Count > header.Count)
+                row = [.. row.Take(header.Count - 1),
+                    string.Join(" | ", row.Skip(header.Count - 1))];
             rows.Add(row);
             next++;
         }
         last = next - 1;
         text = string.Join("\n", rows.Select(row => string.Join("\t", row.Select(cell => Inline(cell, references)))));
         return true;
+    }
+
+    private static int FrontmatterEnd(List<Line> lines)
+    {
+        if (lines.Count < 2 || lines[0].Text != "---") return -1;
+        for (int index = 1; index < lines.Count; index++)
+            if (lines[index].Text is "---" or "...") return index;
+        return -1;
     }
 
     private static List<ReadingHeading> ExtractHeadings(string text, TextKind kind)
