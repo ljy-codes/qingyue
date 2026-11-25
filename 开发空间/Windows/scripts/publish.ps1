@@ -10,6 +10,7 @@ $output = [IO.Path]::GetFullPath((Join-Path $repositoryRoot '交付产品/轻阅
 $jobRoot = [IO.Path]::GetFullPath((Join-Path $windowsRoot ('artifacts/publish/' + [guid]::NewGuid().ToString('N'))))
 $stage = Join-Path $jobRoot '轻阅-Windows-x64'
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
+New-Item -ItemType Directory -Path (Split-Path -Parent $output) -Force | Out-Null
 $versionSource = Get-Content -LiteralPath (Join-Path $windowsRoot 'installer/version.nsh') -Raw
 $version = [regex]::Match($versionSource,'!define VERSION "([^"]+)"').Groups[1].Value
 $build = [regex]::Match($versionSource,'!define WINDOWS_BUILD "([^"]+)"').Groups[1].Value

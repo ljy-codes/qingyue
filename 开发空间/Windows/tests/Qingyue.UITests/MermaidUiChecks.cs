@@ -89,8 +89,10 @@ internal static class MermaidUiChecks
         check(tab.Preview.Selection.Text == "/api/tasks/approve", "构建3：图形插入不破坏搜索位置");
         Click("hideFind");
         window.ToggleReading();
-        check(tab.File.Text == source.Replace("更新业务状态", "回写业务状态") &&
-            tab.Editor.Text == tab.File.Text, "构建3：返回编辑保留完整围栏与消息");
+        var expectedSource = source.Replace("更新业务状态", "回写业务状态").ReplaceLineEndings("\n");
+        check(tab.File.Text == expectedSource, "构建3：返回编辑保留完整围栏与消息");
+        check(tab.Editor.Text.ReplaceLineEndings("\n") == tab.File.Text,
+            "构建3：返回编辑保留完整围栏与消息（编辑器与内存文本一致）");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         window.SelectTab(previous);
     }
