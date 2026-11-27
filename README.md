@@ -69,6 +69,7 @@ CI 配置保存在 `docs/ci/macos.yml.template`，目前未启用；本地完整
 - [Mac 0.4.0 方案与验收](docs/Mac0.4.0方案与验收.md)
 - [Mac 构建 14 验收](docs/Mac构建14验收.md)
 - [跨平台版本与功能对齐规则](docs/跨平台版本与功能对齐规则.md)
+- [Windows 用户反馈问题记录（2026-11-27）](docs/issues/2026-11-27-windows-feedback.md)
 - [GitHub 与本地整理记录](docs/GitHub与本地整理记录.md)
 - [轻阅配色方案（Palette Atlas 版）](docs/配色方案.md)
 - [使用说明](操作指导/使用说明.md)
